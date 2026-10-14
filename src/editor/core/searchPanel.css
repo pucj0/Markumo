@@ -1,0 +1,21 @@
+.cm-editor .fleet-search { padding: 8px 12px; background: var(--bar); border-bottom: 1px solid var(--line); font-family: var(--font-sans); }
+.fleet-search .search-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.fleet-search .search-row + .search-row { margin-top: 5px; padding-left: 27px; }
+.fleet-search .search-row[hidden] { display: none; }
+.fleet-search .search-field { flex: 1; min-width: 70px; position: relative; }
+.fleet-search .search-input { height: 28px; width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; background: var(--editor); outline: none; font: inherit; font-size: 12px; }
+.fleet-search .search-field .search-input { padding-right: 78px; }
+.fleet-search .search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.fleet-search .search-input[aria-invalid=true] { border-color: var(--pink); }
+.fleet-search .search-count { position: absolute; right: 8px; top: 5px; color: var(--muted); pointer-events: none; font-size: 11px; }
+.fleet-search .search-row > .search-input { flex: 1; }
+.fleet-search button { flex: none; min-width: 22px; height: 26px; padding: 0 7px; border-radius: 5px; font-size: 11px; color: var(--sub); background: transparent; border: 0; }
+.fleet-search button:hover { color: var(--bright); background: var(--hover); }
+.cm-editor .fleet-search button[name=close] { position:static;top:auto;right:auto;font-size:16px;min-width:24px;padding:0; }
+.fleet-search .search-option { position: relative; width: 26px; height: 26px; flex: none; cursor: pointer; margin: 0; }
+.fleet-search .search-option input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.fleet-search .search-option span { display: grid; place-items: center; height: 100%; border-radius: 5px; font-size: 12px; pointer-events: none; color: var(--sub); }
+.fleet-search .search-option input:checked + span { color: var(--accent); background: var(--accentbg); }
+.fleet-search .search-option input:focus-visible + span { outline: 2px solid var(--accent); }
+.fleet-search .search-option input[name=word] + span { text-decoration: underline; text-underline-offset: 3px; }
+@media (max-width: 800px) { .cm-editor .fleet-search { padding: 6px; } .fleet-search .search-row { gap: 2px; } .fleet-search button { padding: 0 4px; } }

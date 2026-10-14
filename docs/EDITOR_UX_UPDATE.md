@@ -1,0 +1,84 @@
+# 编辑体验与多文件夹更新 — 2026-10-14
+
+## 范围与结论
+
+用户授权的既有 Phase 4–6 增量修复：自定义标题栏、菜单、编辑字号、查找替换、多文件夹、Markdown 点击位置与段落留白、文件路径移到底栏。Phase 4/5/6 继续 REVIEW；没有开始 Phase 7/8，没有提交、推送或操作 Git 索引。没有新增依赖。
+
+用户要求的自定义标题栏替代 PRD 的原生标题栏；多文件夹扩展原单根工作区；最新指示将路径从上方 Breadcrumb 移到底栏。这些取舍以用户指示为准。
+
+| 用户要求 | 本轮结果 |
+|---|---|
+| 14px 默认字号，编辑区滚轮缩放 | PASS：新偏好默认14，Ctrl/Command+滚轮调整10–24，普通滚轮滚动，Ctrl+0恢复14。已保存的旧字号保留 |
+| Fleet 风格搜索/替换 | PASS：紧凑两行面板、匹配计数、大小写/全词/正则、上下个/全选、替换与全部替换，使用 CM SearchQuery/Transaction |
+| 合并标题栏、Logo 浮动菜单 | PASS：单条自定义栏，文件/编辑/格式/视图/工作区菜单，实际窗口最小化/最大化/关闭；关闭保留 dirty 确认 |
+| Markdown 格式菜单 | PASS：H1–H6、粗斜体/删除线、行内与围栏代码、引用、列表/任务、链接/图片源码、水平线，共18项；非 Markdown 禁用，事务可撤销 |
+| 工作区多个文件夹 | PASS：真实目录树/快速打开/搜索/增删根/保存配置/冷启动恢复；新增根不丢 dirty 文档，移除根不删除磁盘文件 |
+| 中文快捷键名称 | PASS：设置使用中文显示名，保留稳定内部ID与冲突校验 |
+| 已打开/最近文件转菜单，独立文件隐藏侧栏 | PASS：移除侧栏 OPEN EDITORS/RECENT FILES/RECENT WORKSPACES，菜单保留真实打开与最近条目；单文件默认无文件侧栏 |
+| Markdown 鼠标点第一行却编辑后面 | PASS：复现并修复；40次真实鼠标定位覆盖Live/Source/Split、长文滚动、对应行输入与撤销；Windows原生也执行同一检查 |
+| 类 Typora 段落留白 | PASS：普通顶层段落行增加视觉padding；保持已有源码换行，不生成额外空行，不将代码/列表套用段落样式 |
+| 文件地址从上方移到底栏 | PASS：左下角路径替代模式文字，上方保留编辑工具；长路径省略/悬停显示完整路径，未保存草稿显示名称；原生双根打开/重命名/移动均校验路径 |
+
+## 架构与缺陷修复
+
+编辑仍由同一 CodeMirror EditorState/Transaction 完成，不逐键 IPC，也不将全文绑定 Vue。格式命令隔离历史；搜索面板计数去抖、最多显示1000+，大文档不做无界计数，销毁清理计时器。字体变更重配置 CM 主题，让编辑器重新测量几何尺寸。
+
+Markdown 原缺陷实测：DOM第3行点击落第4行、第5行落第7行、第9行落第11行。标题竖向 margin 未计入 CM 行高度，行内分隔线 Widget 又使用块 div 和竖向 margin，坐标误差累积。改为带足够选择器优先级的行 padding；分隔线使用无外部竖向边距的 inline-block span。修复后同一点击诊断全部落在对应行。新增段落留白也用 padding，不改源码。
+
+多文件夹后端维护最多16个不重叠根，读写/重命名等按实际所属根走既有 canonical/symlink/junction 安全检查。新增根保留独立文件授权；移除后拒绝目录访问，已打开文档自己的授权仍允许保存。配置仅存路径元数据。共享搜索遍历预算为10秒/100000条目；Quick Open最多100条、搜索最多1000条，支持同一个取消令牌。跨根移动明确拒绝，不伪装成功。Vue树按全部根合并虚拟化，最多30行DOM。
+
+## 文件及用途
+
+以下均相对仓库 `E:\code\lightEdit`，包括先前未交付的同一请求改动，保留原有用户更改。
+
+| 文件 | 用途 |
+|---|---|
+| `src/App.vue`、`src/app/useAppShell.ts` | 菜单命令、字体/滚轮、单文件布局、多根模式、移除顶部路径与接入底栏 |
+| `src/components/layout/AppMenu.vue`、`TopBar.vue` | 圆角浮动菜单、键盘导航与命令、自定义窗口控制/拖拽 |
+| `src/components/layout/Sidebar.vue`、`Breadcrumb.vue`、`StatusBar.vue` | 多根虚拟树、移除文件列表、顶部工具条、底栏路径与省略显示 |
+| `src/components/modals/SettingsModal.vue`、`src/features/shell/editorSettings.ts`、`src/styles/variables.css` | 中文快捷键、默认14px、原有主题/字号偏好兼容 |
+| `src/editor/core/searchPanel.ts`、`searchPanel.css`、`extensions.ts`、`DocumentManager.ts`、`src/main.ts` | 真正查找替换面板、格式事务入口、Markdown新建、字体测量更新与样式接入 |
+| `src/editor/markdown/formatCommands.ts` | 18种源码格式操作、多光标、历史隔离、长围栏安全构造 |
+| `src/editor/markdown/livePreview.ts`、`styles.css`、`widgets.ts` | 顶层段落装饰、可测量标题/段落留白、水平线行内Widget，修复点击偏移 |
+| `src/features/workspace/WorkspaceController.ts`、`contracts.ts`、`tauriWorkspace.ts` | 多根模型/所属根定位、增删恢复接口、操作串行及授权同步 |
+| `src-tauri/src/workspace/service.rs`、`search.rs`、`tests.rs` | 多根安全服务、持久化/回滚、共享遍历预算与跨根搜索测试 |
+| `src-tauri/src/commands/workspace.rs`、`settings.rs`、`src-tauri/src/lib.rs` | 多根真实IPC/目录选择、字号默认与命令注册 |
+| `src-tauri/tauri.conf.json`、`capabilities/default.json`、`gen/schemas/capabilities.json` | 移除系统装饰、最小化/最大化/拖拽权限及生成权限表 |
+| `tests/markdown-format.test.ts`、`workspace.test.ts` | 格式源码/撤销/超长围栏、多根授权与文档生命周期单测 |
+| `tests/menu-ui.mjs`、`markdown-click-checks.mjs`、`markdown-click-ui.mjs` | 真实菜单/缩放/搜索/底栏布局、独立DOM坐标点击/编辑/撤销回归 |
+| `tests/editor-native.mjs`、`phase4-native.mjs`、`selection-checks.mjs` | 实际Windows窗口/磁盘/多根/Markdown坐标验证、拖选失败诊断 |
+| `package.json`、`docs/PHASE_PROGRESS.md`、本文 | 测试入口与真实验收记录 |
+
+## 实测结果
+
+在 Windows、已安装 Edge/WebView2、现有 Rust/MSVC 上执行。浏览器独立 Vite 为 `http://localhost:1422`，原生脚本使用独立数据目录/fixture与自己的1420服务；不关闭用户窗口、不修改真实用户文档。原生脚本使用 `--no-watch` 避免 fixture 触发重启，正常开发热更新未改变。
+
+| 命令 | 最终结果 |
+|---|---|
+| `pnpm typecheck` | PASS |
+| `pnpm test` | PASS 96/96 |
+| `pnpm build` | PASS，158 modules；已有Tauri静态/动态import分块提示 |
+| `cargo check --manifest-path src-tauri/Cargo.toml --locked --offline` | PASS |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked --offline` | PASS 34/34 |
+| `pnpm test:ui:menu` | PASS 4组，明暗/680px菜单与搜索、缩放、中文快捷键、路径位置 |
+| `pnpm test:ui:markdown-clicks` | PASS 40次点击/对应行编辑与撤销/长文滚动/三模式/视觉间距 |
+| `pnpm test:ui:selection` | PASS 5组真实拖选/键盘/截图像素 |
+| `pnpm test:ui:phase6`、`pnpm test:ui:theme` | PASS 8组双视图/共享历史/替换等；PASS 3组主题 |
+| `pnpm test:ui`、`pnpm test:ui:files` | PASS 9组；PASS 5组IPC契约（后者不冒充磁盘测试） |
+| `pnpm test:native:editor` | PASS 11组，真实Windows启动、窗口/dirty、40次Markdown点击、原生选择、模式/保存字节、重启设置 |
+| `pnpm test:native:workspace` | PASS 11组，真实冷启动双根恢复、万级目录、搜索/取消、BOM/CRLF保存、双根安全增删 |
+| `git diff --check` | PASS |
+| lint | NOT RUN，项目未配置独立lint命令 |
+
+最终证据：`test-results/editor-native/1791964497582/`、`test-results/phase4-native/1791964554730/`、`test-results/markdown-clicks/`、`test-results/menu/`、`test-results/selection/`、`test-results/phase6-review/`、`test-results/theme/`、`test-results/phase2/`、`test-results/phase3/`。
+
+过程失败如实记录：初次脚本使用127.0.0.1而服务仅监听localhost IPv6，以及未设Edge导致缺Chromium可执行文件，修正环境后复跑通过；原生启动曾检测到用户进程，收到再次关闭确认后才执行。早期原生拖选断言一次失败，追加实际选区诊断后最终完整复跑通过。额外浏览器非编辑区Ctrl+滚轮场景后Ctrl+0未送达页面捕获监听，此驱动场景未计为通过，最终缩放验收限定编辑区；原生编辑区Ctrl+滚轮/Ctrl+0实测通过。
+
+## 人工验收与限制
+
+1. `pnpm tauri dev` 重启后检查只有一条标题栏；拖动/双击空白区域、调整窗口边界，检查125%/150% DPI的定位。最大化/还原/最小化/关闭保护已自动实测，真实OS拖拽/边缘缩放尚未人工操作。
+2. 打开真实Markdown，点击标题和连续正文、滚动后再次点击，中文输入、拖选、撤销；确认留白与图片参考符合预期。真实中文IME候选提交、系统高对比、触控板/DPI仍待人工，不以合成组合事件冒称通过。
+3. 打开文件，确认路径在左下角，重命名后同步；窄窗长路径悬停完整查看。打开菜单添加第二个文件夹，搜索/快速打开后保存，再移除根确认磁盘文件还在。真实系统目录选择框仍待人工；授权路径IPC、最近目录入口及磁盘操作已经实测。
+4. 旧字号偏好不会被静默覆盖；需要14px可按Ctrl+0。仅Markdown显示格式菜单与Live/Source/Split，复杂表格/图片/数学等维持既有安全源码降级。
+
+本轮实现与可执行回归达到当前增量交付门槛。阶段整体仍 REVIEW，不能声称全部PRD人工条款或macOS/Linux已验收；Phase 7文件监听/异常恢复及Phase 8打包不在本次范围。搜索使用既有JS正则查询仍存在极端表达式耗时风险；跨根移动限制明确，不增加假实现。等待用户评审，不进入下一阶段。
