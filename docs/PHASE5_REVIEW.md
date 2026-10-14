@@ -1,0 +1,69 @@
+# Phase 5 复审与修复 — 2026-10-14
+
+状态：**REVIEW**。自动化验证与 Windows 桌面磁盘验证通过；原生中文输入法人工验收尚未完成，不能据此标记 DONE。本轮按用户授权先修复、验证 Phase 5，再审查 Phase 6，没有进入 Phase 7，没有提交、推送或更改 Git 索引。
+
+## 审查结论
+
+审查了 AGENTS.md、PRD、原型、进度台账、工作区真实代码及累计 Git diff。原实现存在任务语法未在活动行展开、双反引号处理错误、长引用装饰超出视口、组合输入时装饰位置未映射、任务 Widget 使用旧位置、链接未真正打开等问题。原 IME 用例只验证模拟回调，不能证明生产编辑器正确；已替换并增加真实 EditorView DOM 回归。
+
+| PRD / 审查项目 | 结论与证据 |
+|---|---|
+| Markdown 默认 Live，Source / Split；其他文本保持普通 CM | PASS：扩展按后缀加载；默认模式可配置；重命名或另存为改变后缀时移除/恢复 Markdown 模式。单元、真实模式按钮和磁盘验证 |
+| 同一个 CodeMirror 编辑区，源码唯一真实数据 | PASS：Lezer + Decoration / StateField / ViewPlugin / WidgetType；没有富文本内核、全文全局 v-model 或逐字符 IPC。30 次三态切换后磁盘字节不变 |
+| H1–H6、强调、删除线、行内代码、引用、列表、任务、水平线、链接 | PASS：AST 测试覆盖全部层级、嵌套强调、多个代码分隔符、列表标记；实际任务点击以事务修改 `[ ]` / `[x]`，支持撤销。安全链接真实打开动作已接入，系统浏览器启动人工 NOT RUN |
+| 活动语法恢复、多选区、选择、复制粘贴 | PASS：多光标恢复标记、Setext 下划线恢复；真实 CM copy/paste 事件保留 Markdown 和中文。系统剪贴板菜单及原生 IME 候选框 NOT RUN |
+| 安全 Split、代码围栏高亮、复杂结构降级 | PASS：只读 markdown-it `html:false`；图片显示源文，不隐式请求远程图片；仅 HTTP/HTTPS 网页链接可打开且不允许账号信息；围栏按需语言高亮，表格/图片/数学/Mermaid 不改写源文。未知围栏保留源码 |
+| 十次撤销/重做、实际保存正确 | PASS：Windows WebView2 真实键盘编辑、10 次撤销/重做、Rust 文件 I/O 与实际 UTF-8 BOM / CRLF / 无末尾换行字节比较 |
+| IME、长文和资源释放 | PARTIAL：真实 EditorView 合成 composition 事件激活生产保护并通过；组合期间映射装饰，结束后刷新，销毁清理定时器；1000 行引用仅装饰视口。Windows 原生中文输入法与长期内存测试 NOT RUN |
+| 既有 UI、架构与之前阶段能力 | PASS（已测范围）：紧凑 CM 容器、明暗/窄屏回归，Phase 2 编辑功能和 Phase 3 文件契约、Phase 4 原生工作区回归通过。高 DPI / 跨平台未验证 |
+
+## 本轮修改文件及用途
+
+| 路径 | 用途 |
+|---|---|
+| `src/editor/markdown/livePreview.ts` | 排序/去重/视口装饰，准确的 AST 标记展开，IME 映射、延后刷新与清理 |
+| `src/editor/markdown/widgets.ts` | 任务 Widget 根据实时 DOM 位置定位，阻止错误焦点/事件，遵守组合输入与只读状态；列表 Widget |
+| `src/editor/markdown/styles.css` | 列表标记与行样式 |
+| `src/editor/markdown/links.ts` | 安全 URL 校验、浏览器/桌面实际打开及可见错误提示 |
+| `src/editor/markdown/splitPreview.vue` | 安全只读渲染、图片源文降级、80ms 去抖、大文档预览暂停、双向滚动 |
+| `src/editor/languages/index.ts` | Markdown 围栏语言的按需高亮 |
+| `src/editor/core/DocumentManager.ts` | 模式默认值、后缀转换与 IME 切换保护；Phase 6 共用文档模型修复另见对应报告 |
+| `src/components/layout/EditorPane.vue` | 每窗格 CM / Split 容器，按 CM Text 身份缓存预览字符串，避免选区变化时重复序列化；大文档不生成预览全文 |
+| `src/components/layout/EditorContainer.vue`、`src/app/useAppShell.ts` | 模式/滚动/提示接入；实际编辑与预览共用 CM 状态 |
+| `src/components/modals/SettingsModal.vue` | 启用 Markdown 默认模式设置；持久化见 Phase 6 |
+| `src-tauri/src/commands/app.rs`、`src-tauri/src/lib.rs` | 校验 HTTP/HTTPS 后交给系统打开，返回失败信息，注册真实命令 |
+| `tests/markdown-live.test.ts` | 10 项真实 AST / 事务单元验证，移除假 IME 回调验收 |
+| `tests/editor-browser.mjs` | 生产组件与真实 CM DOM 的 8 组回归，无 Tauri IPC 替身 |
+| `tests/editor-native.mjs` | Windows / WebView2 / Rust IPC / 实际磁盘与重启回归 |
+| `package.json`、`README.md`、`docs/PHASE_PROGRESS.md` | 测试入口、启动说明与真实进度证据 |
+
+未增加新 npm / Rust 包。复用现有语言包、Tauri 和 CodeMirror；Phase 6 为现有 windows-sys 增加 Shell/COM feature。表格、数学、Mermaid 的完整即时排版不属于本轮最小集合，不宣称支持。
+
+## 实际执行的检查
+
+| 命令 | 真实结果 |
+|---|---|
+| `pnpm typecheck` | PASS，0 错误 |
+| `pnpm test` | PASS，89/89；Markdown 10、Phase 6 8、编辑内核 32、文件 21、工作区 12、启动策略 6 |
+| `pnpm build` | PASS，151 modules；现有 Tauri core/event 静态与动态导入分块提示，不是编译错误 |
+| `cargo check --manifest-path src-tauri/Cargo.toml --locked --offline` | PASS，Windows MSVC |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked --offline` | PASS，29/29；TEMP/TMP 指向 `test-results/native-temp` |
+| `pnpm test:ui:editor` | PASS，8/8：Widget/模式/历史/复制/粘贴/XSS/组合事件/只读；`test-results/editor-review/phase5.json` |
+| `pnpm test:native:editor` | PASS，5/5 总组，其中 2 组 Phase 5、3 组 Phase 6；最终 `test-results/editor-native/1791956357570/results.json`，errors 空、failure null |
+| `pnpm test:ui` | PASS，9/9：既有 8 组编辑/UI 回归，加左侧真实 AST 大纲跳转 |
+| `pnpm test:ui:files` | PASS，5/5；明确是浏览器 IPC 契约替身，不能替代 Rust/磁盘结果 |
+| `pnpm test:native:workspace` | PASS，9/9；`test-results/phase4-native/1791954753953/results.json` |
+| 定向 `rustfmt --edition 2021 --check` | PASS：app.rs、settings.rs、workspace.rs；首次受限沙箱路径访问失败，使用授权执行环境复跑通过 |
+| `git diff --check` | PASS；保留仓库既有 LF/CRLF 提示和用户已有暂存/删除状态 |
+| 独立前端 lint | NOT RUN：项目未配置 lint runner；typecheck 不替代 lint |
+
+Playwright 使用现有运行时与 Edge；开发 DOM 测试服务器为 1422。原生脚本通过 `--no-watch` 启动隔离实例、专用数据目录和 CDP 9227，仅操作自身 fixture。正常 `pnpm tauri dev` 的热更新保持开启。
+
+## 剩余人工验收与风险
+
+1. 在真实桌面 Live 模式，用 Windows 中文 IME 输入/选词/取消组合，测试标题、嵌套列表、勾选、多选区、中文复制粘贴和撤销；光标、候选框、源文应无丢失。合成 composition 事件不等于候选框实测。
+2. Ctrl+点击安全网页链接，确认系统浏览器打开；普通点击只编辑/选择，javascript/file/data 链接应不打开。
+3. 在 150% / 200% DPI 与长时间编辑中检查光标、滚动、Widget 和内存；本轮没有长期内存/崩溃恢复或跨平台验证。
+4. Split 和 Outline 对超过 1,048,576 个 CM 字符（UTF-16 code units）的文本明确暂停；这是字符阈值，不是磁盘字节阈值。Live 的视口装饰已测试，未声称达到未测量的 10MiB 性能或内存目标。
+
+结论：本阶段代码缺陷已经修复并通过已列自动化与磁盘验证；完整 PRD 人工门槛仍缺原生中文 IME 等证据，保持 REVIEW，等待用户验收。

@@ -1,20 +1,7 @@
 <template>
   <div class="toolrow">
-    <div class="crumb">
-      <template v-if="doc">
-        <span v-if="isWorkspace">workspace</span>
-        <span v-if="isWorkspace" class="sep">›</span>
-        <span v-if="dirPath">{{ dirPath }}</span>
-        <span v-if="dirPath" class="sep">/</span>
-        <b>{{ doc.name }}</b>
-      </template>
-      <template v-else>
-        <span class="no-file">未打开任何文件</span>
-      </template>
-    </div>
-
     <div v-if="doc" class="tools">
-      <span class="langchip" title="示例语言；Phase 2 接入语言切换">
+      <span class="langchip" title="可在状态栏切换语言模式">
         {{ doc.language }}
       </span>
 
@@ -22,26 +9,35 @@
       <div v-if="isMarkdown" class="mdswitch">
         <button
           :class="{ on: doc.mode === 'live' }"
-          disabled title="即时排版将在 Phase 5 实现"
+          title="即时排版 (Live Preview)"
           @click="$emit('set-md-mode', 'live')"
         >
           即时排版
         </button>
         <button
           :class="{ on: doc.mode === 'source' }"
-          disabled title="Markdown 视图将在 Phase 5 实现"
+          title="源码编辑 (Source)"
           @click="$emit('set-md-mode', 'source')"
         >
           源码
         </button>
         <button
           :class="{ on: doc.mode === 'split' }"
-          disabled title="双栏预览将在 Phase 5 实现"
+          title="双栏预览 (Split)"
           @click="$emit('set-md-mode', 'split')"
         >
           双栏
         </button>
       </div>
+
+      <button
+        class="ib small"
+        :class="{ on: isSplitPane }"
+        :title="isSplitPane ? '关闭分栏' : '双 Pane 分栏编辑 (Split Pane)'"
+        @click="$emit('toggle-split-pane')"
+      >
+        <Icon name="split" size="small" />
+      </button>
 
       <button
         class="ib small"
@@ -71,15 +67,16 @@ import type { EditorDocument, MarkdownMode } from '../../types'
 
 const props = defineProps<{
   doc: EditorDocument | null
-  isWorkspace: boolean
   wordWrap: boolean
   showOutline: boolean
+  isSplitPane?: boolean
 }>()
 
 defineEmits<{
   (e: 'set-md-mode', mode: MarkdownMode): void
   (e: 'toggle-wrap'): void
   (e: 'toggle-outline'): void
+  (e: 'toggle-split-pane'): void
 }>()
 
 const isMarkdown = computed(() => {
@@ -87,12 +84,6 @@ const isMarkdown = computed(() => {
   return /\.(md|markdown)$/i.test(props.doc.name)
 })
 
-const dirPath = computed(() => {
-  if (!props.doc || !props.doc.path.includes('/')) return ''
-  const parts = props.doc.path.split('/')
-  parts.pop()
-  return parts.join(' / ')
-})
 </script>
 
 <style scoped>
@@ -102,34 +93,11 @@ const dirPath = computed(() => {
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding: 0 12px;
   font-size: 11px;
   color: var(--muted);
   flex: none;
-}
-
-.crumb {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.crumb b {
-  color: var(--bright);
-  font-weight: 600;
-}
-
-.crumb .sep {
-  color: var(--line);
-}
-
-.no-file {
-  font-style: italic;
-  color: var(--muted);
 }
 
 .tools {

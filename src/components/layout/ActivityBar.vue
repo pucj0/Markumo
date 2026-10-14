@@ -12,7 +12,7 @@
     <button
       class="ib"
       :class="{ on: activePanel === 'search' && sidebarVisible }"
-      title="搜索面板占位（Phase 4 接入）"
+      title="工作区全文搜索 (Ctrl+Shift+F)"
       @click="$emit('select-panel', 'search')"
     >
       <Icon name="search" />
@@ -21,7 +21,7 @@
     <button
       class="ib"
       :class="{ on: activePanel === 'outline' && sidebarVisible }"
-      title="大纲面板占位（Phase 6 接入）"
+      title="文档大纲"
       @click="$emit('select-panel', 'outline')"
     >
       <Icon name="outline" />

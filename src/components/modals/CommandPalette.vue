@@ -20,7 +20,7 @@
             type="text"
             placeholder="输入文件名或操作命令…"
             autocomplete="off"
-            aria-label="搜索示例文件或命令"
+            aria-label="搜索文件或命令"
             @keydown.down="selectNext"
             @keydown.up="selectPrev"
             @keydown.enter="executeCurrent"
@@ -33,6 +33,7 @@
             v-for="(item, index) in filteredItems"
             :key="item.id"
             class="palrow"
+            :disabled="item.disabled"
             :class="{ on: index === selectedIndex }"
             @mouseenter="selectedIndex = index"
             @click="executeItem(item)"
@@ -57,7 +58,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useModal } from '../../features/shell/useModal'
 import Icon from '../common/Icon.vue'
 import type { PaletteAction } from '../../types'
@@ -65,6 +66,8 @@ import type { PaletteAction } from '../../types'
 const props = defineProps<{
   items: PaletteAction[]
 }>()
+const emit = defineEmits<{ (e: 'query-change', query: string): void }>()
+let queryTimer: ReturnType<typeof setTimeout> | undefined
 
 const { visible, dialogRef, open: openModal, close, handleKeydown } = useModal()
 const query = ref('')
@@ -78,10 +81,15 @@ const filteredItems = computed(() => {
   if (currentCategory.value !== 'all') {
     pool = pool.filter(x => x.category === currentCategory.value)
   }
-  if (!q) return pool.slice(0, 16)
+  if (!q) return pool.slice(0, 100)
   return pool
-    .filter(x => (x.title + ' ' + x.detail).toLowerCase().includes(q))
-    .slice(0, 16)
+    .filter(x => {
+      const text = (x.title + ' ' + x.detail).toLowerCase()
+      if (x.category !== 'file') return text.includes(q)
+      let offset = 0
+      return [...q].every(c => { const found = text.indexOf(c, offset); offset = found + 1; return found >= 0 })
+    })
+    .slice(0, 100)
 })
 
 function open(initialCategory: 'action' | 'file' | 'all' = 'all') {
@@ -89,9 +97,17 @@ function open(initialCategory: 'action' | 'file' | 'all' = 'all') {
   currentCategory.value = initialCategory
   query.value = ''
   selectedIndex.value = 0
+  if (initialCategory !== 'action') emit('query-change', '')
 }
 
-watch(filteredItems, () => { selectedIndex.value = 0 })
+watch([query, currentCategory], () => { selectedIndex.value = 0 })
+watch(query, value => {
+  if (queryTimer) clearTimeout(queryTimer)
+  if (currentCategory.value !== 'action') queryTimer = setTimeout(() => emit('query-change', value), 180)
+})
+watch(visible, value => { if (!value && queryTimer) clearTimeout(queryTimer) })
+onUnmounted(() => { if (queryTimer) clearTimeout(queryTimer) })
+watch(filteredItems, items => { selectedIndex.value = Math.min(selectedIndex.value, Math.max(0, items.length - 1)) })
 watch(selectedIndex, () => nextTick(() => {
   dialogRef.value?.querySelector('.palrow.on')?.scrollIntoView({ block: 'nearest' })
 }))
@@ -120,6 +136,7 @@ function executeCurrent(event: KeyboardEvent) {
 }
 
 function executeItem(item: PaletteAction) {
+  if (item.disabled) return
   close()
   item.action()
 }

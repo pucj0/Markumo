@@ -1,10 +1,12 @@
 <template>
-  <div class="tabs">
+  <div class="tabs" @dragover.prevent @drop.prevent.stop="dropTab">
     <div class="tablist">
       <div
         v-for="doc in docs"
         :key="doc.id"
         class="tab"
+        draggable="true"
+        @dragstart="dragTab($event, doc.id)"
         role="tab" tabindex="0" :aria-selected="doc.id === activeId"
         @keydown.enter.prevent="$emit('select-tab', doc.id)"
         @keydown.space.prevent="$emit('select-tab', doc.id)"
@@ -47,17 +49,29 @@
 import Icon from '../common/Icon.vue'
 import type { EditorDocument } from '../../types'
 
-defineProps<{
+const props = withDefaults(defineProps<{
   docs: EditorDocument[]
   activeId: string | null
-}>()
+  pane?: 'main' | 'secondary'
+}>(), { pane: 'main' })
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'select-tab', id: string): void
   (e: 'pin-tab', id: string): void
   (e: 'close-tab', id: string): void
   (e: 'new-doc'): void
+  (e: 'move-tab', tab: { id: string; from: 'main' | 'secondary' }): void
 }>()
+function dragTab(event: DragEvent, id: string) {
+  event.dataTransfer?.setData('application/x-lightedit-tab', JSON.stringify({ id, from: props.pane }))
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+}
+function dropTab(event: DragEvent) {
+  try {
+    const tab = JSON.parse(event.dataTransfer?.getData('application/x-lightedit-tab') || '{}')
+    if (typeof tab.id === 'string' && ['main', 'secondary'].includes(tab.from)) emit('move-tab', tab)
+  } catch { /* Ignore foreign drag payloads. */ }
+}
 
 function getExt(filename: string): string {
   const parts = filename.split('.')

@@ -4,19 +4,37 @@
     :style="{ width: `${width}px` }"
   >
     <div class="explorer">
+      <!-- 侧边栏头部 -->
       <div class="panelhead">
         <span class="panel-title">{{ panelTitle }}</span>
         <div class="headbtns">
+          <template v-if="activePanel === 'files' && workspace.rootPath">
+            <button class="ib small" :aria-pressed="workspace.showIgnored" title="显示/隐藏被忽略的文件" @click="workspace.toggleIgnored()">◉</button>
+            <button
+              class="ib small"
+              title="新建文件"
+              @click="handleCreateFile(workspace.rootPath)"
+            >
+              <Icon name="plus" size="small" />
+            </button>
+            <button
+              class="ib small"
+              title="新建文件夹"
+              @click="handleCreateDir(workspace.rootPath)"
+            >
+              <Icon name="open" size="small" />
+            </button>
+            <button
+              class="ib small"
+              title="刷新目录树"
+              @click="workspace.refreshDirectory()"
+            >
+              <span style="font-size: 11px;">↻</span>
+            </button>
+          </template>
           <button
             class="ib small"
-            title="新建文件 (Ctrl+N)"
-            @click="$emit('new-doc')"
-          >
-            <Icon name="plus" size="small" />
-          </button>
-          <button
-            class="ib small"
-            title="隐藏侧边栏"
+            title="隐藏侧边栏 (Ctrl+B)"
             @click="$emit('toggle-side')"
           >
             <Icon name="panel" size="small" />
@@ -24,120 +42,211 @@
         </div>
       </div>
 
+      <!-- 侧边栏内容体 -->
       <div class="panel-body">
-        <!-- 资源管理器面板 -->
+        <!-- 1. 资源管理器面板 -->
         <div v-if="activePanel === 'files'" class="treelist">
-          <div class="treenode folder root-folder">
-            <span class="twisty">▾</span>
-            <Icon name="open" size="small" />
-            <span class="label">示例工作区（内存）</span>
+          <!-- 已打开真实工作区 -->
+          <template v-if="workspace.rootPath">
+            <div class="workspace-tree-container" tabindex="0" aria-label="工作区目录树" :style="{ height: `${Math.min(flatTree.length * 26, 380)}px`, overflow: 'auto' }" @scroll="treeScrollTop = ($event.target as HTMLElement).scrollTop">
+              <div :style="{ height: `${treeStart * 26}px` }"></div>
+              <template v-for="row in visibleTree" :key="row.node.path">
+              <div v-if="row.root" class="treenode folder root-folder" :title="row.root.rootPath">
+                <button class="root-toggle" @click="toggleRoot(row.root.rootPath)"><span class="twisty">{{ collapsedRoots.includes(row.root.rootPath) ? '▸' : '▾' }}</span><Icon name="open" size="small" /><span class="label">{{ row.root.name }}</span></button>
+                <button class="ib small" :aria-label="`在 ${row.root.name} 中新建文件`" title="在此文件夹中新建文件" @click="handleCreateFile(row.root.rootPath)">+</button>
+                <button class="ib small" :aria-label="`在 ${row.root.name} 中新建文件夹`" title="在此文件夹中新建文件夹" @click="handleCreateDir(row.root.rootPath)"><Icon name="open" size="small" /></button>
+                <button class="ib small" :aria-label="`从工作区移除 ${row.root.name}`" title="从工作区移除（不删除文件）" @click="workspace.removeFolder(row.root.rootPath)">×</button>
+              </div>
+              <TreeNodeItem v-else
+                :key="row.node.path"
+                :node="row.node"
+                :depth="row.depth"
+                flat
+                :active-path="activeDocPath"
+                :dirty-paths="dirtyDocPaths"
+                @select-file="workspace.openFile($event)"
+                @pin-file="workspace.openFile($event, false)"
+                @toggle-folder="workspace.toggleFolder($event)"
+                @create-file="handleCreateFile"
+                @rename-node="handleRenameNode"
+                @delete-node="handleDeleteNode"
+                @move-node="handleMoveNode"
+              />
+              </template>
+              <div :style="{ height: `${Math.max(0, flatTree.length - treeStart - visibleTree.length) * 26}px` }"></div>
+            </div>
+          </template>
+
+          <!-- 未打开工作区：提供打开入口和最近历史 -->
+          <template v-else>
+            <div class="empty-workspace-box">
+              <p class="empty-ws-tip">当前尚未打开任何工作区目录</p>
+              <button class="open-folder-btn" :disabled="!desktop" @click="workspace.openWorkspaceDialog()">
+                打开工作区文件夹…
+              </button>
+            </div>
+
+          </template>
+
+        </div>
+
+        <!-- 2. 全文搜索面板 (Phase 4 真实实现) -->
+        <div v-else-if="activePanel === 'search'" class="search-panel">
+          <div class="search-input-wrapper">
+            <div class="search-box">
+              <input
+                ref="searchInputRef"
+                v-model="searchQueryText"
+                type="text"
+                placeholder="搜索整个工作区 (回车或输入检索)…"
+                class="search-input"
+                @input="triggerSearchDebounced"
+                @keydown.enter="triggerSearchNow"
+              />
+              <button
+                v-if="searchQueryText"
+                class="clear-btn"
+                title="清除"
+                @click="clearSearch"
+              >
+                ✕
+              </button>
+            </div>
+
+            <!-- 搜索修饰选项 -->
+            <div class="search-options">
+              <button
+                class="opt-btn"
+                :class="{ on: workspace.isCaseSensitive }"
+                title="区分大小写"
+                @click="workspace.isCaseSensitive = !workspace.isCaseSensitive; triggerSearchNow()"
+              >
+                Aa
+              </button>
+              <button
+                class="opt-btn"
+                :class="{ on: workspace.isWholeWord }"
+                title="全词匹配"
+                @click="workspace.isWholeWord = !workspace.isWholeWord; triggerSearchNow()"
+              >
+                \b
+              </button>
+              <button
+                class="opt-btn"
+                :class="{ on: workspace.isRegex }"
+                title="正则表达式"
+                @click="workspace.isRegex = !workspace.isRegex; triggerSearchNow()"
+              >
+                .*
+              </button>
+
+              <button
+                v-if="workspace.searching"
+                class="cancel-btn"
+                title="取消当前搜索"
+                @click="workspace.cancelSearch()"
+              >
+                取消
+              </button>
+            </div>
           </div>
 
-          <div
-            v-for="item in visibleTree"
-            :key="item.path"
-            class="treenode"
-            role="button"
-            tabindex="0"
-            :aria-label="item.name"
-            :aria-expanded="item.isFolder ? openFolders.has(item.path) : undefined"
-            @keydown.enter.prevent="handleItemClick(item)"
-            @keydown.space.prevent="handleItemClick(item)"
-            :class="[
-              item.isFolder ? 'folder' : 'file',
-              `depth-${item.depth}`,
-              { active: !item.isFolder && activeDocId === item.id }
-            ]"
-            @click="handleItemClick(item)"
-            @dblclick="handleItemDblClick(item)"
-          >
-            <template v-if="item.isFolder">
-              <span class="twisty">{{ openFolders.has(item.path) ? '▾' : '▸' }}</span>
-              <Icon name="open" size="small" />
-              <span class="label">{{ item.name }}</span>
-            </template>
-            <template v-else>
-              <span class="fileext" :class="getExt(item.name)">
-                {{ getExt(item.name).slice(0, 2) }}
-              </span>
-              <span class="label">{{ item.name }}</span>
-              <span v-if="isDocDirty(item.id)" class="dirty-dot">●</span>
-            </template>
-          </div>
-
-          <div class="tree-divider"></div>
-          <div class="sub-header">OPEN EDITORS</div>
-
-          <div
-            v-for="doc in openDocs"
-            :key="`opened-${doc.id}`"
-            class="treenode file depth-0"
-            role="button"
-            tabindex="0"
-            @keydown.enter.prevent="$emit('select-doc', doc.id, true)"
-            :class="{ active: activeDocId === doc.id }"
-            @click="$emit('select-doc', doc.id, true)"
-          >
-            <span class="fileext" :class="getExt(doc.name)">
-              {{ getExt(doc.name).slice(0, 2) }}
+          <!-- 搜索状态与结果数 -->
+          <div class="search-status-bar">
+            <span class="tip" title="搜索 UTF-8 与带 BOM 的 UTF-16 文本；跳过二进制及大于 10 MiB 的文件，最多 1000 处匹配，遍历限 10 秒/10 万条目。">ⓘ</span>
+            <span v-if="workspace.searching" class="searching-spin">
+              正在检索中…
             </span>
-            <span class="label">{{ doc.name }}</span>
-            <span v-if="doc.dirty" class="dirty-dot">●</span>
+            <span v-else-if="workspace.searchQuery">
+              找到 {{ workspace.searchTotal }} 处结果 ({{ workspace.searchResults.length }} 个文件)
+            </span>
+            <span v-else class="tip">
+              {{ workspace.rootPath ? '输入关键词开始工作区全文检索' : '请先打开工作区' }}
+            </span>
+          </div>
+
+          <!-- 搜索结果列表 -->
+          <div class="search-results-list">
+            <div
+              v-for="group in workspace.searchResults"
+              :key="group.path"
+              class="search-file-group"
+            >
+              <div
+                class="group-header"
+                @click="group.isExpanded = !group.isExpanded"
+              >
+                <span class="twisty">{{ group.isExpanded ? '▾' : '▸' }}</span>
+                <span class="group-file-name">{{ group.relativePath }}</span>
+                <span class="group-count">{{ group.matches.length }}</span>
+              </div>
+
+              <div v-if="group.isExpanded" class="group-matches">
+                <div
+                  v-for="(match, mIdx) in group.matches"
+                  :key="`${match.path}-${match.line_number}-${mIdx}`"
+                  class="match-row"
+                  @click="workspace.locateMatch(match)"
+                >
+                  <span class="match-line-num">{{ match.line_number }}</span>
+                  <span class="match-text">{{ match.line_text.trim() }}</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- 搜索面板占位（待 Phase 4 实现） -->
-        <div v-else-if="activePanel === 'search'" class="placeholder-pane">
-          <div class="search-input-box">
-            <input
-              type="text"
-              placeholder="在工作区搜索…"
-              class="search-input"
-              disabled
-            />
-          </div>
-          <p class="placeholder-tip">
-            工作区全文搜索将在 Phase 4 正式接入 Rust 后端分批流式检索。
-          </p>
-        </div>
-
-        <!-- 大纲面板占位（待 Phase 6 实现） -->
-        <div v-else-if="activePanel === 'outline'" class="placeholder-pane">
-          <p class="placeholder-tip">
-            文档大纲将在 Phase 6 基于 CodeMirror 6 语法树解析实现。
-          </p>
+        <!-- 3. 大纲面板 (Phase 6 真实 Lezer AST 接入) -->
+        <div v-else-if="activePanel === 'outline'" class="outline-wrapper">
+          <OutlineView
+            :items="outlineItems"
+            :is-markdown="isMarkdownDoc"
+            @select-item="$emit('select-outline', $event)"
+          />
         </div>
       </div>
 
-      <div class="sidefoot">
-        <b>Fleet 布局提示</b><br />
-        双击固定标签 · Ctrl+P 快速打开<br />
-        <span class="phase-badge">Phase 1 · 示例文件，不读写磁盘</span>
-      </div>
     </div>
 
     <!-- 侧边栏调整拉条 -->
     <div
       class="resize-handle"
-      role="separator" aria-label="调整侧边栏宽度" aria-orientation="vertical"
-      tabindex="0" :aria-valuenow="width" :aria-valuemin="190" :aria-valuemax="420"
+      role="separator"
+      aria-label="调整侧边栏宽度"
+      aria-orientation="vertical"
+      tabindex="0"
+      :aria-valuenow="width"
+      :aria-valuemin="190"
+      :aria-valuemax="420"
       @keydown.left.prevent="$emit('update:width', Math.max(190, width - 10))"
       @keydown.right.prevent="$emit('update:width', Math.min(420, width + 10))"
       @mousedown.prevent="startResize"
     ></div>
+    <WorkspaceOperationDialog ref="operationDialog" />
   </aside>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted, nextTick, watch } from 'vue'
 import Icon from '../common/Icon.vue'
+import TreeNodeItem from './TreeNodeItem.vue'
+import WorkspaceOperationDialog from '../modals/WorkspaceOperationDialog.vue'
+import OutlineView from './OutlineView.vue'
+import { extractOutline, type OutlineItem } from '../../editor/outline/outlineService'
 import type { SidebarPanel, EditorDocument } from '../../types'
+import type { WorkspaceController } from '../../features/workspace/WorkspaceController'
+import type { WorkspaceNode, WorkspaceInfo } from '../../features/workspace/contracts'
+import type { DocumentManager } from '../../editor/core/DocumentManager'
 
 const props = defineProps<{
   width: number
   activePanel: SidebarPanel
   activeDocId: string | null
   openDocs: EditorDocument[]
+  recentFiles: { path: string; name: string }[]
+  workspace: WorkspaceController
+  desktop: boolean
+  manager?: DocumentManager
 }>()
 
 const emit = defineEmits<{
@@ -145,102 +254,169 @@ const emit = defineEmits<{
   (e: 'toggle-side'): void
   (e: 'new-doc'): void
   (e: 'select-doc', id: string, preview?: boolean): void
+  (e: 'open-recent', path: string): void
+  (e: 'select-outline', item: OutlineItem): void
 }>()
 
-const openFolders = ref<Set<string>>(new Set(['src', 'src/editor', 'config']))
+const activeDoc = computed(() => {
+  return props.openDocs.find(d => d.id === props.activeDocId) || null
+})
+
+const isMarkdownDoc = computed(() => {
+  return /\.(md|markdown)$/i.test(activeDoc.value?.name || '')
+})
+
+const outlineItems = computed<OutlineItem[]>(() => {
+  if (!activeDoc.value || !props.manager) return []
+  const state = props.manager.getState(activeDoc.value.id)
+  return extractOutline(activeDoc.value, state)
+})
+
+const searchInputRef = ref<HTMLInputElement | null>(null)
+const operationDialog = ref<InstanceType<typeof WorkspaceOperationDialog> | null>(null)
+const treeScrollTop = ref(0)
+const collapsedRoots = ref<string[]>([])
+function toggleRoot(path: string) { collapsedRoots.value = collapsedRoots.value.includes(path) ? collapsedRoots.value.filter(item => item !== path) : [...collapsedRoots.value, path] }
+const flatTree = computed(() => {
+  const rows: { node: WorkspaceNode; depth: number; root?: WorkspaceInfo }[] = []
+  const visit = (nodes: WorkspaceNode[], depth: number) => {
+    for (const node of nodes) {
+      rows.push({ node, depth })
+      if (node.isDirectory && node.isExpanded && node.children) visit(node.children, depth + 1)
+    }
+  }
+  for (const root of props.workspace.roots) {
+    rows.push({ root, depth: 0, node: { id: root.rootPath, name: root.name, path: root.rootPath, relativePath: '', isDirectory: true, isSymlink: false, isReadOnly: false, size: 0, mtime: null, hasChildren: true } })
+    if (!collapsedRoots.value.includes(root.rootPath)) visit(root.entries, 1)
+  }
+  return rows
+})
+const treeStart = computed(() => Math.max(0, Math.min(Math.floor(treeScrollTop.value / 26) - 5, flatTree.value.length - 30)))
+const visibleTree = computed(() => flatTree.value.slice(treeStart.value, treeStart.value + 30))
+watch(() => props.workspace.openRevision, () => {
+  treeScrollTop.value = 0
+  searchQueryText.value = ''
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+})
+const searchQueryText = ref(props.workspace.searchQuery)
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
 const panelTitle = computed(() => {
   switch (props.activePanel) {
-    case 'files': return 'EXPLORER'
-    case 'search': return 'SEARCH'
-    case 'outline': return 'OUTLINE'
+    case 'files': return '工作区'
+    case 'search': return '全文搜索'
+    case 'outline': return '文档大纲'
   }
 })
 
-interface MockFileNode {
-  id: string
-  name: string
-  path: string
-  isFolder: boolean
-  depth: number
-}
+const activeDocPath = computed(() => {
+  return props.openDocs.find(d => d.id === props.activeDocId)?.path
+})
 
-// Phase 1 骨架结构：展示标准文本文件与代码文件示例
-const fileTree = ref<MockFileNode[]>([
-  { id: 'folder-src', name: 'src', path: 'src', isFolder: true, depth: 0 },
-  { id: 'folder-editor', name: 'editor', path: 'src/editor', isFolder: true, depth: 1 },
-  { id: 'ts-doc', name: 'EditorView.ts', path: 'src/editor/EditorView.ts', isFolder: false, depth: 2 },
-  { id: 'rust-doc', name: 'main.rs', path: 'src/main.rs', isFolder: false, depth: 1 },
-  { id: 'folder-config', name: 'config', path: 'config', isFolder: true, depth: 0 },
-  { id: 'json-doc', name: 'settings.json', path: 'config/settings.json', isFolder: false, depth: 1 },
-  { id: 'txt-doc', name: 'today.txt', path: 'notes/today.txt', isFolder: false, depth: 0 },
-  { id: 'readme-doc', name: 'README.md', path: 'README.md', isFolder: false, depth: 0 }
-])
+const dirtyDocPaths = computed(() => {
+  return props.openDocs.filter(d => d.dirty).map(d => d.path)
+})
 
-const visibleTree = computed(() => fileTree.value.filter(item =>
-  fileTree.value.filter(parent => parent.isFolder && item.path.startsWith(`${parent.path}/`))
-    .every(parent => openFolders.value.has(parent.path))
-))
-
-function getExt(filename: string): string {
-  const parts = filename.split('.')
-  return parts.length > 1 ? (parts.pop()?.toLowerCase() || 'txt') : 'txt'
-}
-
-function isDocDirty(id: string): boolean {
-  return props.openDocs.some(d => d.id === id && d.dirty)
-}
-
-function handleItemClick(item: MockFileNode) {
-  if (item.isFolder) {
-    if (openFolders.value.has(item.path)) {
-      openFolders.value.delete(item.path)
-    } else {
-      openFolders.value.add(item.path)
-    }
-  } else {
-    emit('select-doc', item.id, true)
+async function handleCreateFile(parentDir: string) {
+  const name = await operationDialog.value?.ask({ title: '新建文件', description: parentDir, confirmLabel: '创建', initialValue: '' })
+  if (name && name.trim()) {
+    void props.workspace.createFile(parentDir, name.trim())
   }
 }
 
-function handleItemDblClick(item: MockFileNode) {
-  if (!item.isFolder) {
-    emit('select-doc', item.id, false)
+async function handleCreateDir(parentDir: string) {
+  const name = await operationDialog.value?.ask({ title: '新建文件夹', description: parentDir, confirmLabel: '创建', initialValue: '' })
+  if (name && name.trim()) {
+    void props.workspace.createDirectory(parentDir, name.trim())
   }
 }
 
-let stopResize: (() => void) | null = null
-onUnmounted(() => stopResize?.())
+async function handleDeleteNode(node: WorkspaceNode) {
+  const result = await operationDialog.value?.ask({ title: '删除条目', description: `确定删除 ${node.isDirectory ? '目录及其全部内容' : '文件'} "${node.name}"？此操作无法撤销。`, confirmLabel: '删除' })
+  if (result !== null && result !== undefined) {
+    void props.workspace.deleteNode(node)
+  }
+}
+
+async function handleMoveNode(node: WorkspaceNode) {
+  const destination = await operationDialog.value?.ask({ title: '移动条目', description: `将 "${node.name}" 移动到工作区内目录（绝对路径）：`, confirmLabel: '移动', initialValue: props.workspace.rootPath || '' })
+  if (destination?.trim()) {
+    void props.workspace.moveNode(node, destination.trim())
+  }
+}
+
+async function handleRenameNode(node: WorkspaceNode) {
+  const name = await operationDialog.value?.ask({ title: '重命名条目', description: node.path, confirmLabel: '重命名', initialValue: node.name })
+  if (name?.trim()) void props.workspace.renameNode(node, name.trim())
+}
+
+function triggerSearchDebounced() {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = setTimeout(() => {
+    void props.workspace.search(searchQueryText.value)
+  }, 250)
+}
+
+function triggerSearchNow() {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  void props.workspace.search(searchQueryText.value)
+}
+
+function clearSearch() {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  searchQueryText.value = ''
+  props.workspace.cancelSearch()
+  void props.workspace.search('')
+}
+
+function focusSearchInput() {
+  nextTick(() => {
+    searchInputRef.value?.focus()
+  })
+}
+
+defineExpose({ focusSearchInput })
+watch(() => props.activePanel, panel => { if (panel === 'search') focusSearchInput() }, { immediate: true })
+
+// --- 拖拽调宽 ---
+let resizing = false
+let startX = 0
+let startW = 0
 
 function startResize(e: MouseEvent) {
-  stopResize?.()
-  const startX = e.clientX
-  const startWidth = props.width
-
-  function onMouseMove(ev: MouseEvent) {
-    const delta = ev.clientX - startX
-    const newWidth = Math.max(190, Math.min(420, startWidth + delta))
-    emit('update:width', newWidth)
-  }
-
-  const previousCursor = document.body.style.cursor
-  function onMouseUp() {
-    window.removeEventListener('mousemove', onMouseMove)
-    window.removeEventListener('mouseup', onMouseUp)
-    window.removeEventListener('blur', onMouseUp)
-    document.body.style.cursor = previousCursor
-    stopResize = null
-  }
-
+  resizing = true
+  startX = e.clientX
+  startW = props.width
   document.body.style.cursor = 'col-resize'
   window.addEventListener('mousemove', onMouseMove)
   window.addEventListener('mouseup', onMouseUp)
-  window.addEventListener('blur', onMouseUp)
-  stopResize = onMouseUp
 }
+
+function onMouseMove(e: MouseEvent) {
+  if (!resizing) return
+  const w = Math.max(190, Math.min(420, startW + (e.clientX - startX)))
+  emit('update:width', w)
+}
+
+function onMouseUp() {
+  if (!resizing) return
+  resizing = false
+  document.body.style.cursor = ''
+  window.removeEventListener('mousemove', onMouseMove)
+  window.removeEventListener('mouseup', onMouseUp)
+}
+
+onUnmounted(() => {
+  if (resizing) document.body.style.cursor = ''
+  window.removeEventListener('mousemove', onMouseMove)
+  window.removeEventListener('mouseup', onMouseUp)
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+})
 </script>
 
 <style scoped>
+.root-toggle { display:flex;align-items:center;gap:5px;flex:1;min-width:0;text-align:left;height:26px;color:var(--sub) }
+.root-toggle .label { overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
 .sidebar-wrapper {
   flex: none;
   display: flex;
@@ -277,7 +453,7 @@ function startResize(e: MouseEvent) {
 
 .headbtns {
   display: flex;
-  gap: 4px;
+  gap: 3px;
 }
 
 .ib.small {
@@ -286,7 +462,6 @@ function startResize(e: MouseEvent) {
 }
 
 .panel-body {
-  min-height: 0;
   flex: 1;
   overflow-y: auto;
   padding: 6px 0;
@@ -297,7 +472,7 @@ function startResize(e: MouseEvent) {
 }
 
 .treenode {
-  height: 27px;
+  height: 26px;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -317,13 +492,10 @@ function startResize(e: MouseEvent) {
   font-weight: 500;
 }
 
-.depth-0 { padding-left: 12px; }
-.depth-1 { padding-left: 24px; }
-.depth-2 { padding-left: 36px; }
-
 .root-folder {
   color: var(--muted);
   font-weight: 600;
+  padding-left: 10px;
 }
 
 .twisty {
@@ -345,6 +517,32 @@ function startResize(e: MouseEvent) {
   color: var(--yellow);
 }
 
+.empty-workspace-box {
+  padding: 16px 12px;
+  text-align: center;
+}
+
+.empty-ws-tip {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.open-folder-btn {
+  background: var(--soft);
+  border: 1px solid var(--line);
+  color: var(--bright);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.open-folder-btn:hover {
+  background: var(--hover);
+  border-color: var(--accent);
+}
+
 .tree-divider {
   border-top: 1px solid var(--line);
   margin: 12px 10px 8px;
@@ -356,46 +554,6 @@ function startResize(e: MouseEvent) {
   color: var(--muted);
   padding: 0 12px 6px;
   letter-spacing: 0.8px;
-}
-
-.placeholder-pane {
-  padding: 12px;
-}
-
-.search-input {
-  width: 100%;
-  background: var(--editor);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--ink);
-}
-
-.placeholder-tip {
-  margin-top: 12px;
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.5;
-}
-
-.sidefoot {
-  padding: 10px 12px;
-  border-top: 1px solid var(--line);
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.5;
-  background: var(--bar);
-}
-
-.phase-badge {
-  display: inline-block;
-  margin-top: 4px;
-  font-size: 10px;
-  color: var(--accent);
-  background: var(--accentbg);
-  padding: 1px 6px;
-  border-radius: 4px;
 }
 
 .resize-handle {
@@ -410,5 +568,163 @@ function startResize(e: MouseEvent) {
 
 .resize-handle:hover {
   background: var(--accent);
+}
+
+/* 搜索面板样式 */
+.search-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.search-input-wrapper {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-input {
+  width: 100%;
+  background: var(--editor);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 24px 6px 8px;
+  font-size: 12px;
+  color: var(--bright);
+  outline: none;
+}
+
+.search-input:focus {
+  border-color: var(--accent);
+}
+
+.clear-btn {
+  position: absolute;
+  right: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.search-options {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.opt-btn {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--soft);
+  color: var(--muted);
+  border: 1px solid transparent;
+}
+
+.opt-btn.on {
+  background: var(--accentbg);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.cancel-btn {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--yellow);
+  padding: 2px 6px;
+}
+
+.search-status-bar {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.search-results-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.search-file-group {
+  margin-bottom: 6px;
+}
+
+.group-header {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  cursor: pointer;
+  background: var(--bar);
+  font-size: 11px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.group-header:hover {
+  background: var(--hover);
+}
+
+.group-file-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-count {
+  font-size: 10px;
+  background: var(--soft);
+  padding: 1px 5px;
+  border-radius: 10px;
+  color: var(--muted);
+}
+
+.group-matches {
+  display: flex;
+  flex-direction: column;
+}
+
+.match-row {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 24px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--muted);
+}
+
+.match-row:hover {
+  background: var(--hover);
+  color: var(--bright);
+}
+
+.match-line-num {
+  color: var(--accent);
+  font-weight: 500;
+  width: 24px;
+  text-align: right;
+  flex: none;
+}
+
+.match-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

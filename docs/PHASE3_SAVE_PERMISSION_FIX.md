@@ -1,0 +1,54 @@
+# 保存 os error 5 专项修复 — 2026-10-14
+
+范围：仅修复已有 Phase 3 的保存环境与错误提示，不实施新的 Phase，不提交或推送 Git。
+
+## 真实根因与证据
+
+用户在桌面 `natapp/config.ini` 保存，提示同目录 `.tmp…` 拒绝访问，并出现“只读文件”。实际检查：原配置文件没有只读属性，文件/目录 DACL 允许当前用户 FullControl，Defender ControlledFolderAccess 为 0；PowerShell 的非截断写句柄能打开，Rust 进程的写句柄/临时文件创建返回 os error 5。
+
+进一步通过只输出权限元数据的 Rust 探针确认：不是 restricted token，也不是 AppContainer，而是进程完整性级别 **0x1000 (Low)**。`icacls` 确认本项目生成的 `src-tauri/target/debug/lightedit.exe` 和构建目录继承了 `Mandatory Label\Low Mandatory Level`。
+
+Windows MIC 在 DACL 之外检查权限。Low 程序无法写入 Medium 用户数据；程序启动级别取调用者与可执行文件级别中的较低值，因此只重开普通终端、甚至管理员运行，都不能修复一个仍带 Low 标签的 exe。依据：[Microsoft Mandatory Integrity Control](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control)。
+
+已核验绝对目录后，仅将 **`E:\code\lightEdit\src-tauri\target` 生成构建目录**的完整性标签恢复为普通用户默认 Medium（含继承）。`icacls` 处理 11344 项、失败 0；没有修改桌面目录、配置文件权限/内容，没有提升到 High、关闭 Defender 或变更用户/系统 DACL。
+
+之后重新编译的探针级别为 **0x2000 (Medium)**，打开原配置的非截断写句柄、在相同目录创建/写入/同步自身临时文件及清理全部成功。原配置从未读入测试报告或修改；测试仅使用已知 fixture。
+
+## 代码改动
+
+| 文件 | 用途 |
+|---|---|
+| `src-tauri/src/files/atomic.rs` | 真正只读属性/现有写权限检查先于临时文件创建；权限失败明确指出目标文件或同目录临时保存阶段，占用错误单独分类。仍采用同目录原子保存、版本检查和备份，不加入截断写入回退 |
+| `src-tauri/src/files/tests.rs` | 新增父目录禁止创建临时文件、原文件自身仍可写的真实 ACL 回归；验证 `permission` 与阶段提示、旧内容/无临时残留 |
+| `src/components/layout/EditorContainer.vue` | “只读文件”改为准确的“原路径当前不可写”，覆盖只读属性、进程权限和文件占用等有效写入限制 |
+| `tests/editor-native.mjs` | 支持显式 `LIGHTEDIT_TEST_FIXTURE_DIR`；始终新建专用子目录，不操作现有用户文件。能验证仓库之外的实际目录权限 |
+| `README.md`、`docs/PHASE_PROGRESS.md` | 根因、复现、重新启动步骤及真实验证证据 |
+
+没有新增依赖。诊断探针位于被 Git 忽略的 `test-results/`，不是产品功能；MIC 标签是当前机器生成工件的本地状态，不通过 Git 传播。
+
+## 验证
+
+| 命令 / 检查 | 结果 |
+|---|---|
+| `pnpm typecheck` | PASS |
+| `pnpm test` | PASS，89/89 |
+| `pnpm build` | PASS，151 modules；既有 Tauri 导入分块提示 |
+| `cargo check --manifest-path src-tauri/Cargo.toml --locked --offline` | PASS |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked --offline` | PASS，30/30；包括 readonly、ACL、占用、外部冲突、原子保存、新父目录拒写用例 |
+| `LIGHTEDIT_TEST_FIXTURE_DIR=C:\Users\18089\Desktop\natapp` + `pnpm test:native:editor` | PASS，5/5；真实 Windows WebView2、Rust IPC，桌面独立 fixture，实际 BOM/CRLF 文件字节、模式/撤销/重做/双 pane 保存及退出重启 |
+| `git diff --check` | PASS |
+| 独立 lint | NOT RUN：未配置 |
+
+原生证据：`test-results/editor-native/1791957223819/results.json`，errors 空、failure null；日志同目录。桌面的独立测试文件/空目录在验后清理，工作区日志保留。修复之后的 Cargo 编译/桌面重启仍保持 Medium，可执行文件标签也再次核对。
+
+## 用户操作与边界
+
+旧的 Low 进程不会因文件标签改变而自动升级，必须重新启动。若旧窗口仍有未保存内容，先另存到当前可写的 E 盘目录，避免关闭丢失，然后运行 `pnpm tauri dev`，重开原配置再保存。默认热更新未改动。
+
+当前构建目录已修复。若彻底删除/重建 target，且父工程目录仍是 Low，可能再次继承 Low。可在普通 PowerShell 中只对这个项目的生成目录执行（不用修改桌面文件权限）：
+
+```powershell
+icacls 'E:\code\lightEdit\src-tauri\target' /setintegritylevel '(OI)(CI)M' /T /Q
+```
+
+此命令不是产品启动时的隐式权限修改。真正的文件只读、ACL 拒写、目录拒写或其他进程独占仍应拒绝保存并保留编辑内容；本轮没有绕过这些保护。系统输入法、跨平台与完整阶段人工验收沿用既有 REVIEW 缺项。

@@ -1,5 +1,0 @@
-<!-- Temporary Phase 1 shell icon; final application artwork belongs to Phase 8. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <rect width="256" height="256" rx="48" fill="#7a71dc"/>
-  <path d="M72 54h32v116h82v32H72Z" fill="#ffffff"/>
-</svg>

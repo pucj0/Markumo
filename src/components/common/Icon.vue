@@ -31,9 +31,20 @@
       <circle cx="12" cy="12" r="5" />
       <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
     </template>
+    <template v-else-if="name === 'system'">
+      <rect x="3" y="4" width="18" height="13" rx="2" />
+      <path d="M8 21h8M12 17v4" />
+    </template>
     <template v-else-if="name === 'gear'">
       <circle cx="12" cy="12" r="3" />
-      <path d="m9.5 3-1 2-2 .6-2-1-2 3 1.4 1.6-.2 2.2L2 13l1.8 3 2-.2 1.8 1.2.4 2.2 3.5 1 1-2 2-.6 2 1 2-3-1.4-1.6.2-2.2L20 10l-1.8-3-2 .2-1.8-1.2L14 3.8Z" />
+      <path d="M9.5 3h5l.5 2.4 1.6.9 2.3-.8 2.5 4.3-1.8 1.6v1.9l1.8 1.6-2.5 4.3-2.3-.8-1.6.9-.5 2.4h-5L9 19.3l-1.6-.9-2.3.8-2.5-4.3 1.8-1.6v-1.9L2.6 9.8l2.5-4.3 2.3.8L9 5.4Z" />
+    </template>
+    <template v-else-if="name === 'font'">
+      <path d="M4 20 10 4h4l6 16M7 13h10" />
+    </template>
+    <template v-else-if="name === 'keyboard'">
+      <rect x="2" y="5" width="20" height="14" rx="3" />
+      <path d="M6 9h1m4 0h1m4 0h1M6 12h1m4 0h1m4 0h1M7 16h10" />
     </template>
     <template v-else-if="name === 'outline'">
       <path d="M4 6h16M4 12h10M4 18h14" />
@@ -41,6 +52,9 @@
     <template v-else-if="name === 'open'">
       <path d="M4 19V5h6l2 2h8v12Z" />
       <path d="M12 13h6m-3-3 3 3-3 3" />
+    </template>
+    <template v-else-if="name === 'save'">
+      <path d="M4 3h13l4 4v14H4Z" /><path d="M8 3v6h9V3M8 21v-8h9v8" />
     </template>
     <template v-else-if="name === 'wrap'">
       <path d="M3 6h18M3 11h13a3 3 0 1 1 0 6H9m3-3-3 3 3 3" />

@@ -6,6 +6,7 @@ src-tauri/target/
 coverage/
 playwright-report/
 test-results/
+.lightedit-dev/
 *.log
 *.tsbuildinfo
 .DS_Store
