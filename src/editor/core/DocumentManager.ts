@@ -847,14 +847,21 @@ export class DocumentManager {
   refreshTypography() { this.setTheme(this.theme) }
   setMarkdownTypography(settings:MarkdownTypography){this.markdownTypography={...settings};for(const live of this.liveViews.values())live.editor.typography(settings)}
   command(command: 'undo' | 'redo' | 'find' | 'replace' | 'find-next' | 'find-previous') {
-    if(!['undo','redo'].includes(command)&&this.activeLiveEditor&&this.activeId){this.setMarkdownMode(this.activeId,'source');window.dispatchEvent(new CustomEvent('editor-notice',{detail:'查找与替换已切换到 Markdown 源码模式。'}))}
-    const view = this.paneView(this.activePane)
     if (!this.activeId || this.isComposing) return
-    view?.focus()
-    if (command === 'undo') this.historyCommand(false)
-    else if (command === 'redo') this.historyCommand(true)
-    else if (!view) return
-    else if (command === 'find-next') findNext(view)
+    if (command === 'undo') { this.historyCommand(false); return }
+    if (command === 'redo') { this.historyCommand(true); return }
+    const live = this.activeLiveEditor
+    if (live) {
+      if (command === 'find') live.find(false)
+      else if (command === 'replace') live.find(true)
+      else if (command === 'find-next') live.findNext()
+      else if (command === 'find-previous') live.findPrevious()
+      return
+    }
+    const view = this.paneView(this.activePane)
+    if (!view) return
+    view.focus()
+    if (command === 'find-next') findNext(view)
     else if (command === 'find-previous') findPrevious(view)
     else showEditorSearch(view, command === 'replace')
   }

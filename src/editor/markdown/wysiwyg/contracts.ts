@@ -13,6 +13,10 @@ export interface LiveEditor {
   clipboard(operation:'copy'|'cut'|'paste'|'select-all'):Promise<void>
   refreshResources():void
   destroy():void
+  find(replace?:boolean):void
+  findNext():void
+  findPrevious():void
+  closeSearch():void
 }
 export interface LiveOptions {
   source:string; anchor:number; head:number; resources:MarkdownResources; typography:MarkdownTypography

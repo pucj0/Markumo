@@ -613,7 +613,7 @@ export function useAppShell() {
     }
     const control = event.target instanceof Element ? event.target.closest('input,textarea,select,[contenteditable=true]') : null
     // Ordinary inputs (including search fields) keep native editing shortcuts.
-    if (control && !control.closest('.cm-content, .cm-search') && id && ['undo','redo','find','replace','uppercase','lowercase','bold','italic'].includes(id)) return
+    if (control && !control.closest('.cm-content, .cm-search, .md-prose') && id && ['undo','redo','find','replace','uppercase','lowercase','bold','italic'].includes(id)) return
     let action: (() => void) | undefined
     if (id === 'save') action = () => void saveActive()
     else if (id === 'save-as') action = () => void saveActive(true)

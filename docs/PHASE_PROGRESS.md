@@ -1,5 +1,58 @@
 # LightEdit 阶段进度与验收台账
 
+### 2026-10-16 Typora 编辑体验深度对齐与全面整改专项
+- **任务目标**：以 Typora 为目标参考，保持现有技术栈（Rust + Tauri 2 + Vue 3 + CodeMirror 6 + ProseMirror）不变，彻底对齐 Markdown 所见即所得排版、组件视觉、鼠标交互、键盘操作和写作体验。
+- **基准与规范制定**：
+  1. 研究 Typora 官方文档与参考截图，建立基准规范文档：`docs/TYPORA_BEHAVIOR_SPEC.md` 与 `docs/TYPORA_VISUAL_PARITY.md`。
+  2. 创建统一综合基准验收 Markdown 文档：`tests/fixtures/typora-parity.md`（涵盖 YAML 元数据、项目标题、链接、登录表格、多级列表、JS/Java/SQL 代码块、图片、公式、Mermaid、任务列表与引用）。
+- **核心功能实施与架构升级**：
+  1. **P0：Live 模式内搜索与替换 (LiveSearch & LiveReplace)**：
+     - 彻底删除 `DocumentManager.command()` 将查找/替换强制切换到 Source 模式的旧逻辑；在 `LiveEditor` 契约与 `MarkdownEditorController` 中接入原位搜索。
+     - 新增 `src/editor/markdown/wysiwyg/plugins/LiveSearch.ts` 与 `src/editor/markdown/wysiwyg/LiveSearchController.ts`。
+     - 搜索浮层绝对定位停靠在编辑器右上角，不挤压排版、不引起页面重排或宽度变化；支持区分大小写、全词匹配、正则表达式及中英文跨块搜索。
+     - 匹配范围覆盖标题、普通段落、加粗/斜体、链接文字、表格单元格及代码块；正文通过 ProseMirror Decoration 弱高亮所有匹配、强高亮当前匹配，嵌入式 CodeMirror 同步高亮。
+     - Ctrl+F 唤起查找、Enter/Shift+Enter 前后跳转、Esc 退出；Ctrl+R 展开替换行，支持替换当前及全部原子替换，完整进入 DocumentManager 历史，Undo/Redo 准确无损。
+  2. **P0：图片呈现与浮动工具重构**：
+     - 新增独立 `src/editor/markdown/wysiwyg/LiveImageView.ts`，将图片资源安全加载与视觉呈现彻底解耦；废除旧有卡片边框、路径文字常驻与“图片已加载”状态标签。
+     - 默认状态仅呈现纯净图片自身；单独成段图片居中排版，行内图片流动排布，按正文宽度等比例自适应缩放（无 220px 限制）。
+     - 点击图片进入选中高亮状态（Accent Ring），在图片正下方浮现轻量锚定工具栏（支持修改替代文字、图片路径、删除图片与关闭）；继续保障本地图片授权与远程网络图片安全策略。
+  3. **P0：链接就地编辑 (Link Popover)**：
+     - 废除顶部全局 sticky 工具条；在当前被点击的链接下方精确呼出 `.md-anchored-popover` 浮层。
+     - 浮层支持就地修改“链接文字”与“链接 URL”，提供“应用链接”、“打开链接”、“复制链接”与“移除链接”；Ctrl+点击直接打开，普通单击就地编辑，Enter 应用，Esc 关闭。
+  4. **P0：代码块视觉与交互对齐 Typora**：
+     - 彻底去除突兀的整行工具栏；代码块采用简洁背景、无粗边框，内部左侧显示从 1 开始的行号，与正文协调。
+     - 右下角常驻轻量语言徽标输入控件（`.md-code-lang`），失焦时极简，点击聚焦时支持搜索与切换语言，切换立即刷新 Lezer 语法高亮并安全更新围栏，光标不丢失且可撤销。
+     - 右上角悬浮显示“复制代码”按钮（复制代码纯文本，不包含围栏和行号）；内嵌 CodeMirror 原位编辑，绝不暴露三反引号。
+     - Mermaid 代码块默认渲染为 SVG 流程图，提供“编辑图表源码”与“渲染 Mermaid”局部切换入口；普通代码块不显示无关 Mermaid 按钮。
+  5. **P0：表格跟随式工具栏与排版**：
+     - 废除顶部 sticky 表格工具条；通过 ProseMirror 节点解析精确定位当前激活的 `<table>` DOM 元素，将轻量工具栏（`.md-table-floating-bar`）锚定浮动在表格正上方。
+     - 细线边框、表头浅底加粗、单元格舒适内边距，支持自适应宽度与水平无损滚动。
+     - 支持单元格直接输入、Tab/Shift+Tab 导航、末尾 Tab 增行、后插行/列、删除行/列、文本对齐与删除表格，全部支持精确 Undo。
+  6. **P1：整体 Markdown 排版与浮动格式条**：
+     - 默认文档居中宽度 860px，自适应左右舒适留白，中西文无衬线字体栈混排自然，无代码行号与行高亮干扰。
+     - 新增选区浮动迷你格式条（`.md-selection-bubble`）：文本选中时在光标上方轻量显现粗体 (B)、斜体 (I)、删除线 (S)、行内代码 (`</>`)、链接 (🔗) 快捷操作。
+     - 重构目录 (TOC) 显示为可点击跳转的标题树；YAML Front Matter 优化为紧凑元数据展示；KaTeX 公式与引用块优雅排版。
+- **全链路命令与测试证据**：
+  - `pnpm typecheck`：PASS，Vue/TS 全项目零错误。
+  - `pnpm test`：PASS，**26 个测试套件、265/265 全量通过**（包含新增 `tests/markdown-live-search.test.ts` 的 6 项专项测试）。
+  - `pnpm build`：PASS，2293 个模块正常打包输出。
+  - `node tests/markdown-wysiwyg-ui.mjs`：PASS，**9/9 项**浏览器端到端交互验收通过。
+  - `node tests/typora-parity-ui.mjs`：PASS，**10/10 项**连续 Typora 对齐交互专项通过（Ctrl+F、Ctrl+R、链接浮层、图片浮层、代码块原位编辑、块内行号、表格原位编辑、跟随式工具栏、Mermaid 图表、正文输入与撤销）。
+  - `node tests/markdown-wysiwyg-performance.mjs`：PASS（大文档加载 116ms、中位事务 2.39ms、表格连续事务 0.70ms、内存回收完全）。
+  - `cargo check --manifest-path src-tauri/Cargo.toml`：PASS。
+  - `cargo test --manifest-path src-tauri/Cargo.toml`：PASS，**84/84 全量通过**。
+  - 真实截图产物保存在 `test-results/typora-parity/`（涵盖暗黑/明亮文档全貌、Live 搜索/替换、链接与图片悬浮栏、代码块与行号、表格跟随工具栏、Mermaid 图表等 12 张完整截图）。
+  - 源码保真安全：未修改块保持逐字节与换行一致，BOM/CRLF/编码保持原样。
+
+
+### 2026-10-15 BAT/CMD 双击弹出“选择应用”专项修复
+- 范围：用户要求恢复 `E:\code\lightEdit\build.bat` 的双击执行，仅修复 Windows 文件关联，不推进通用 Phase 7/8。先检查规则/PRD/进度、Git 状态、实际脚本及用户注册表；保留本轮之前的未提交清理改动。
+- 证据：`assoc .bat` / `ftype batfile` 表面正常，但 `AssocQueryString` 的实际结果为 `OpenWith.exe`、ProgID `Unknown`；当前用户 `.bat/.cmd\OpenWithProgids` 存在安装器注册的 `Source Code File`，其命令和描述指向 LightEdit。移除本应用候选后，新进程 ShellExecute 恢复；用户反馈资源管理器仍弹框，不能据此宣称双击已修复。随后明确恢复当前用户 `.bat=batfile` / `.cmd=cmdfile` 映射、同步通知 Shell；用户确认无复制/移动任务并明确授权重启 Explorer。重启后资源管理器默认打开测试 BAT 成功，随后启动实际 `build.bat`，用户确认已出现构建命令行窗口。
+- 改动文件：`src-tauri/tauri.conf.json` 将 BAT/CMD 从默认应用候选中移除（27 类文档关联，仍可在编辑器中打开批处理）；`src-tauri/windows/installerHooks.nsh` 为 BAT/CMD 仅注册右键编辑动作，升级时校验旧 `Source Code File` 属于 LightEdit 后移除候选，并仅清理空扩展名键，保留系统默认与其他应用；`tests/windows-associations.test.ts` 更新配置约束并增加脚本保护回归；本进度文件记录依据和结果。
+- 当前用户注册表修复前已导出受影响键，备份和无害 BAT/CMD 测试、Explorer 测试及重启脚本位于 `test-results/bat-association-repair/`（忽略的本机诊断产物）。不修改 Windows 的 `UserChoice`，不重置其他文件类型。Explorer 重启脚本当次枚举到 0 个可恢复文件夹窗口，后续确认项目文件夹窗口存在；未关闭编辑器应用。
+- PASS：`cmd.exe /d /c "build.bat --check"`；BAT/CMD 实际 `ShellExecute` 写标记；Explorer 默认 BAT 动作写标记；用户确认实际构建窗口出现；`pnpm test` **25 套件、259/259**；`pnpm typecheck`；`pnpm build`（保留既有动态导入/大 chunk 警告）；NSIS 编译测试覆盖修改后的安装/卸载宏（只编译，未执行测试安装器）。NSIS 首次沙箱执行遇到系统 DLL 重定位错误，沙箱外同一编译器运行成功。
+- 验收：关闭旧选择应用弹窗，在资源管理器双击 `build.bat`，应进入构建命令行；右键“使用 LightEdit 打开”仍用于编辑。用户已确认执行入口恢复。完整新安装/升级/卸载、构建最终产物验收和 Rust 测试本轮 NOT RUN（未改 Rust，构建窗口由用户查看），不声称完整 Phase 8 达标；安装配置变更待后续安装验收，不自行安装/发布或开始下一 Phase。本轮未执行提交或推送；最终检查发现 HEAD 已由外部更新为 `df118a2`，上述配置与测试修复仍在，未改写该提交。`git diff --check` PASS。
+
 ### 2026-10-15 WYSIWYG 后续无用文件清理
 - 用户要求删除多余无用文件；本轮仅清理，不推进 Phase，不修改生产编辑行为。先检查规则/PRD/进度、Git 状态与引用，再校验每个删除目标的绝对路径位于仓库且不是重解析点，使用 PowerShell 原生 LiteralPath 删除。
 - 删除 `tests/legacy/` 两份已被当前产品测试替换的浏览器驱动备份；删除本专项过期生成的 TS fixture、失败/重复截图、两轮旧原生测试目录、最新原生隔离 profile 缓存和空 `test-results/rust-temp/`。合计 **1095 个文件、63,471,720 字节（60.53 MiB）**。同步移除当前架构/差距/验收文档与测试入口注释中的旧备份保留说明。
