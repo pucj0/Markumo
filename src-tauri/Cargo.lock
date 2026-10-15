@@ -2134,6 +2134,7 @@ dependencies = [
  "encoding_rs",
  "ignore",
  "regex",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

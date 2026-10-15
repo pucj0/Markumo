@@ -24,7 +24,7 @@ class ImageWidget extends WidgetType {
   destroy(dom: HTMLElement) { mounts.get(dom)?.destroy(); mounts.delete(dom) }
   ignoreEvent() { return true }
 }
-function build(state: EditorState): DecorationSet {
+function build(state: EditorState, revision = 0): DecorationSet {
   if (state.doc.length > 1024 * 1024) return Decoration.none
   const ranges: ReturnType<Decoration['range']>[] = []; let count = 0
   syntaxTree(state).iterate({ enter(node) {
@@ -38,19 +38,21 @@ function build(state: EditorState): DecorationSet {
     if (state.doc.lineAt(node.to).number !== line.number) return false
     const source = state.sliceDoc(url.from, url.to), alt = state.sliceDoc(marks[0].to, marks[1].from)
     const block = line.text.trim() === state.sliceDoc(node.from, node.to)
-    ranges.push(Decoration.replace({ block, widget: new ImageWidget(source, alt, block, block ? node.from-line.from : 0,state.facet(markdownResources).identity()) }).range(block ? line.from : node.from, block ? line.to : node.to))
+    ranges.push(Decoration.replace({ block, widget: new ImageWidget(source, alt, block, block ? node.from-line.from : 0,`${state.facet(markdownResources).identity()}|${revision}`) }).range(block ? line.from : node.from, block ? line.to : node.to))
     return false
   } })
   return Decoration.set(ranges, true)
 }
 // Block replacements must be provided directly by StateField, never a ViewPlugin.
-export const imageField = StateField.define<{ decorations: DecorationSet; composing: boolean }>({
-  create: state => ({ decorations: build(state), composing: false }),
+export const imageField = StateField.define<{ decorations: DecorationSet; composing: boolean; revision: number }>({
+  create: state => ({ decorations: build(state), composing: false, revision: 0 }),
   update(value, transaction) {
     const effect = transaction.effects.find(effect => effect.is(blockComposing))
     const composing = effect ? effect.value : value.composing
-    if (composing) return { composing, decorations: value.decorations.map(transaction.changes) }
-    if (effect || transaction.effects.some(effect=>effect.is(refreshMarkdownResources)) || transaction.docChanged || transaction.selection || syntaxTree(transaction.state) !== syntaxTree(transaction.startState)) return { composing, decorations: build(transaction.state) }
+    const refreshed=transaction.effects.some(effect=>effect.is(refreshMarkdownResources))
+    const revision=value.revision+(refreshed?1:0)
+    if (composing) return { composing, revision, decorations: value.decorations.map(transaction.changes) }
+    if (effect || refreshed || transaction.docChanged || transaction.selection || syntaxTree(transaction.state) !== syntaxTree(transaction.startState)) return { composing, revision, decorations: build(transaction.state,revision) }
     return value
   },
   provide: field => EditorView.decorations.from(field, value => value.decorations),

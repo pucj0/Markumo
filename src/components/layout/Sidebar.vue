@@ -156,6 +156,7 @@
                 @click="group.isExpanded = !group.isExpanded"
               >
                 <span class="twisty">{{ group.isExpanded ? '▾' : '▸' }}</span>
+                <FileIcon :name="group.relativePath" />
                 <span class="group-file-name">{{ group.relativePath }}</span>
                 <span class="group-count">{{ group.matches.length }}</span>
               </div>
@@ -208,6 +209,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onUnmounted, nextTick, watch } from 'vue'
+import FileIcon from '../common/FileIcon.vue'
 import Icon from '../common/Icon.vue'
 import TreeNodeItem from './TreeNodeItem.vue'
 import WorkspaceOperationDialog from '../modals/WorkspaceOperationDialog.vue'

@@ -17,9 +17,14 @@ try {
   assert.equal(await page.evaluate(()=>document.documentElement.style.getPropertyValue('--editor-size')),'17px')
   await page.getByLabel('编辑器字号',{exact:true}).blur();assert.equal(await page.getByLabel('编辑器字号',{exact:true}).inputValue(),'17')
   await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'保存',exact:true}).click()
-  assert.equal(await page.getByLabel('自动保存',{exact:true}).isChecked(),true)
+  // Automatic save is opt-in: a fresh profile must offer it unchecked.
+  assert.equal(await page.getByLabel('自动保存',{exact:true}).isChecked(),false)
+  assert.equal(await page.getByLabel('自动保存延迟',{exact:true}).isDisabled(),true)
   await page.screenshot({path:`${output}/auto-save-default.png`})
-  await page.getByLabel('自动保存延迟',{exact:true}).selectOption('3000');await page.getByLabel('自动保存',{exact:true}).uncheck()
+  await page.getByLabel('自动保存',{exact:true}).check()
+  assert.equal(await page.getByLabel('自动保存延迟',{exact:true}).isDisabled(),false)
+  await page.getByLabel('自动保存延迟',{exact:true}).selectOption('3000')
+  await page.getByLabel('自动保存',{exact:true}).uncheck()
   assert.equal(await page.getByLabel('自动保存延迟',{exact:true}).isDisabled(),true)
   await page.getByRole('button',{name:'完成',exact:true}).click()
   await page.waitForFunction(()=>JSON.parse(localStorage.getItem('lightedit.settings.v1')||'{}').autoSave===false)
@@ -27,7 +32,7 @@ try {
   assert.equal(await page.getByLabel('自动保存',{exact:true}).isChecked(),false)
   assert.equal(await page.getByLabel('自动保存延迟',{exact:true}).inputValue(),'3000')
   assert.equal(await page.getByLabel('编辑器字号',{exact:true}).inputValue(),'17')
-  results.push({name:'字号手动输入/范围校验、自动保存默认/关闭/延迟与重载持久化、编辑区无说明条',result:'PASS'})
+  results.push({name:'字号手动输入/范围校验、自动保存默认关闭/手动开启/延迟与重载持久化、编辑区无说明条',result:'PASS'})
   for(const theme of ['light','dark']) {
     await page.getByLabel('颜色主题',{exact:true}).selectOption(theme)
     for(const width of [1200,680,460]) {

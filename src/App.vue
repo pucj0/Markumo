@@ -63,18 +63,15 @@
           :files="files"
           :welcome="!openedDocuments.length && !workspace.rootPath"
           :startup-loading="startupLoading"
+          :root-path="workspace.rootPath"
           @open-file="openFile()"
           @open-workspace="workspace.openWorkspaceDialog()"
-          @set-md-mode="setMarkdownMode"
-          @toggle-wrap="wordWrap = !wordWrap"
-          @toggle-outline="showOutline = !showOutline"
-          @toggle-split-pane="toggleSplitPane"
-          @close-main="closeDocById($event, 'main')"
-          @close-others="closeOtherTabs($event.id,$event.pane)"
           @new-doc="createNewDoc"
           @open-palette="openPalette"
           @close-outline="showOutline = false"
-          @close-secondary="closeDocById($event, 'secondary')"
+          @close-tab="closeDocById($event.id, $event.pane)"
+          @open-path="openRecent($event)"
+          @reveal-in-explorer="revealInExplorerToken($event)"
         />
       </section>
     </div>
@@ -84,6 +81,9 @@
       v-if="!focusMode"
       :doc="activeDoc"
       @set-language="setLanguage"
+      @reopen-encoding="reopenEncoding"
+      @convert-encoding="convertEncoding"
+      @save-as-encoding="saveAsEncoding"
       :root="activeRoot"
       :multi-root="workspace.roots.length > 1"
       :indent-size="indentSize"
@@ -106,6 +106,11 @@
 
     <!-- 首选项模态框 -->
     <SettingsModal
+      v-model:image-rules="imageRules"
+      :document-image-rules="currentDocumentImageRules"
+      :markdown-path="activeDoc?.mode && activeDoc?.fileToken ? activeDoc.path : undefined"
+      :markdown-name="activeDoc?.mode ? activeDoc.name : undefined"
+      @update:document-image-rules="updateDocumentImageRules"
       ref="settingsRef"
       v-model:theme="theme"
       v-model:font-size="fontSize"
@@ -140,11 +145,12 @@ import GotoLineModal from './components/modals/GotoLineModal.vue'
 import Toast from './components/common/Toast.vue'
 import { computed } from 'vue'
 import { useAppShell } from './app/useAppShell'
-const { appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay,
+const { appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay,imageRules,currentDocumentImageRules,updateDocumentImageRules,
   paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
   setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
-  createNewDoc, closeDocById,closeOtherTabs,cancelPendingClose, discardPending, savePending, setLanguage, setMarkdownMode,
-  gotoLineRef, handleGotoLine, toggleSplitPane,
+  createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,
+  reopenEncoding, convertEncoding, saveAsEncoding,
+  gotoLineRef, handleGotoLine, revealInExplorerToken,
   desktop, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading } = useAppShell()
 
 const activeDocLineCount = computed(() => {

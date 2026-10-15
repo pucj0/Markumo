@@ -31,7 +31,7 @@ describe('真实 CodeMirror 文件状态（gateway 为显式单元测试替身�
     const {manager,files,gateway}=setup()
     files.accept(fixture({name,path:`E:\\fixtures\\${name}`,text:'one\r\ntwo',bom:false}))
     const id=manager.activeId!
-    expect(manager.metadata(id)!.language).toBe('Plain Text')
+    expect(manager.metadata(id)!.language).toBe(['script.bat', 'script.cmd'].includes(name) ? 'Batch' : 'Plain Text')
     manager.dispatch(id,{changes:{from:0,to:3,insert:'changed'},annotations:isolateHistory.of('full')})
     expect(manager.metadata(id)!.dirty).toBe(true)
     expect(applyHistory(manager,id)).toBe(true)

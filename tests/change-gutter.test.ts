@@ -87,8 +87,8 @@ describe('与上次成功保存文本比较的行级 gutter',()=>{
   })
 })
 describe('Windows Batch 复用真实文本内核与原始编码',()=>{
-  it.each(['BAT','cmd'])('%s 是 Plain Text，编辑/撤销/保存快照保留 BOM/CRLF',async ext=>{
-    expect(detectLanguage(`中文 文件.${ext}`)).toBe('Plain Text')
+  it.each(['BAT','cmd'])('%s 是 Batch 语言模式，编辑/撤销/保存快照保留 BOM/CRLF',async ext=>{
+    expect(detectLanguage(`中文 文件.${ext}`)).toBe('Batch')
     const s=setup('@echo off\r\nrem 中文\r\necho hello',`中文 文件.${ext}`);s.edit(0,0,'rem new\n');expect(s.manager.saveSnapshot(s.id)?.text).toBe('rem new\r\n@echo off\r\nrem 中文\r\necho hello')
     s.manager.command('undo');expect(s.manager.saveSnapshot(s.id)?.text).toBe(s.file.text);s.manager.command('redo');await s.files.save(s.id)
     expect(s.save).toHaveBeenCalledWith('token','rem new\r\n@echo off\r\nrem 中文\r\necho hello','v1','UTF-8',true);expect(s.marks()).toEqual([])

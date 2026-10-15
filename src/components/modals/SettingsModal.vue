@@ -35,6 +35,7 @@
             <section id="settings-markdown" class="settings-section">
               <h3>Markdown</h3>
               <div class="settingrow"><label for="settings-md-mode">Markdown 默认模式</label><select id="settings-md-mode" :value="defaultMdMode" @change="$emit('update:defaultMdMode', ($event.target as HTMLSelectElement).value as MarkdownMode)"><option value="live">即时排版</option><option value="source">源码</option><option value="split">双栏</option></select></div>
+              <ImageSettings :global-rules="imageRules" :document-rules="documentImageRules" :document-path="markdownPath" :document-name="markdownName" @global="emit('update:imageRules', $event)" @document="emit('update:documentImageRules', $event)" />
             </section>
             <section id="settings-shortcuts" class="settings-section">
               <details ref="shortcutsRef">
@@ -55,12 +56,15 @@
 import { useModal } from '../../features/shell/useModal'
 import { nextTick, ref, watch } from 'vue'
 import Icon from '../common/Icon.vue'
+import ImageSettings from './ImageSettings.vue'
+import type { ImageRules } from '../../editor/markdown/imageImport'
 import { normalizeShortcut, validateShortcuts, shortcutLabels, type EditorSettings } from '../../features/shell/editorSettings'
 import type { ThemePreference, MarkdownMode } from '../../types'
 const props = defineProps<{
   theme: ThemePreference; fontSize: number; wordWrap: boolean; showOutline: boolean; defaultMdMode: MarkdownMode
   fontFamily: EditorSettings['fontFamily']; indentSize: number; useTabs: boolean; shortcuts: EditorSettings['shortcuts']
   autoSave: boolean; autoSaveDelay: number
+  imageRules: ImageRules; documentImageRules: ImageRules | null; markdownPath?: string; markdownName?: string
 }>()
 const emit = defineEmits<{
   (e: 'update:theme', val: ThemePreference): void
@@ -74,6 +78,8 @@ const emit = defineEmits<{
   (e: 'update:shortcuts', val: EditorSettings['shortcuts']): void
   (e: 'update:autoSave', val: boolean): void
   (e: 'update:autoSaveDelay', val: number): void
+  (e: 'update:imageRules', val: ImageRules): void
+  (e: 'update:documentImageRules', val: ImageRules | null): void
 }>()
 const { visible, dialogRef, open, close, handleKeydown } = useModal()
 const contentRef = ref<HTMLElement | null>(null), shortcutsRef = ref<HTMLDetailsElement | null>(null)

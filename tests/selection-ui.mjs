@@ -1,4 +1,4 @@
-import {setMarkdownMode,viewCommand} from './menu-helpers.mjs'
+import {setMarkdownMode,splitPaneViaMenu,mergePanesViaMenu} from './menu-helpers.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -31,10 +31,10 @@ try {
   assert.equal(await page.evaluate(() => { const m = document.querySelector('#app').__vue_app__._instance.setupState.manager; return m.getText(m.activeId) }), '')
   await editor().press('Control+y')
   assert.equal(await editor().innerText(), text)
-  await viewCommand(page,'编辑器分栏')
+  await splitPaneViaMenu(page)
   await page.locator('.secondary-pane .cm-content').waitFor()
   await checkSelection(page, { output, name: 'light-secondary', pane: 'secondary' })
-  await viewCommand(page,'编辑器分栏')
+  await mergePanesViaMenu(page)
   results.push({ name: '双窗格选区、源文本与撤销/重做保留', result: 'PASS' })
   await page.getByRole('tab', { name: /README.md/ }).click()
   await setMarkdownMode(page,'源码')

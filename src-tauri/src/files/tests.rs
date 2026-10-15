@@ -125,18 +125,19 @@ fn class_structure_is_optional_and_can_switch_back_to_editing() {
 }
 
 #[test]
-fn markdown_images_require_live_document_and_workspace_or_explicit_file_scope() {
-    let (dir, _, mut service, opened) = fixture(b"![pixel](pixel.png)");
+fn markdown_images_require_live_markdown_and_allow_document_local_attachments() {
+    let dir=tempfile::tempdir().unwrap();let doc=dir.path().join("readme.md");fs::write(&doc,b"![pixel](pixel.png)").unwrap();
+    let mut service=FileService::default();let opened=service.open_selected(doc,None).unwrap();
     let mut png=b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();png.extend_from_slice(&1u32.to_be_bytes());png.extend_from_slice(&1u32.to_be_bytes());
     let path=dir.path().join("中文 图片.png");fs::write(&path,&png).unwrap();
-    assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[]).unwrap_err().code,"image_scope");
+    assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[]).unwrap(),png);
     assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[dir.path().to_path_buf()]).unwrap(),png);
     for source in ["../outside.png","file:///secret.png","https://example.com/a.png","/absolute.png","C:\\secret.png"] { assert!(service.markdown_image(&opened.metadata.token,source,&[dir.path().to_path_buf()]).is_err()); }
     // An image selected independently is an explicit file grant, not a directory grant.
     let image=service.open_selected(path.clone(),Some("Hex")).unwrap();
     assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[]).unwrap(),png);
     service.release(&image.metadata.token);
-    assert!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[]).is_err());
+    assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[]).unwrap(),png);
     fs::write(&path,b"<svg onload='bad()'>").unwrap();assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[dir.path().to_path_buf()]).unwrap_err().code,"image_format");
     png[16..20].copy_from_slice(&100000u32.to_be_bytes());fs::write(&path,&png).unwrap();
     assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[dir.path().to_path_buf()]).unwrap_err().code,"image_size");
@@ -173,7 +174,8 @@ fn batch_and_cmd_are_never_executed_and_preserve_encoding_bom_crlf_on_save_and_s
             let bytes = codec::encode(source, encoding, bom).unwrap();
             fs::write(&path, &bytes).unwrap();
             let mut service = FileService::default();
-            if !bom && encoding != "UTF-8" { assert_eq!(service.open_selected(path.clone(), None).unwrap().metadata.encoding, "Hex"); }
+            let opened_auto = service.open_selected(path.clone(), None).unwrap();
+            assert_eq!(opened_auto.metadata.encoding, encoding, "有中文或重音文本特征的批处理文件必须自动识别为其真实编码");
             let file = service.open_selected(path.clone(), Some(encoding)).unwrap();
             assert_eq!(file.text, source);
             assert_eq!(file.metadata.eol, "CRLF");
@@ -218,7 +220,7 @@ fn explicit_legacy_encoding_and_lossy_save_rejection() {
     let dir = tempfile::tempdir().unwrap(); let path = dir.path().join("legacy.txt");
     let text = "中文测试"; let bytes = codec::encode(text, "GB18030", false).unwrap();
     fs::write(&path, &bytes).unwrap(); let mut service = FileService::default();
-    assert_eq!(service.open_selected(path.clone(), None).unwrap().metadata.encoding, "Hex");
+    assert_eq!(service.open_selected(path.clone(), None).unwrap().metadata.encoding, "GB18030", "无 BOM 中文文本应自动识别为 GB18030");
     let file = service.open_selected(path.clone(), Some("GB18030")).unwrap();
     assert_eq!(file.metadata.encoding, "GB18030"); assert_eq!(file.text, text);
     service.save(&file.metadata.token, text, Some(&file.metadata.version), "GB18030", false).unwrap();
@@ -226,6 +228,57 @@ fn explicit_legacy_encoding_and_lossy_save_rejection() {
     assert_eq!(codec::encode("中文🚀", "windows-1252", false).unwrap_err().code, "encoding_loss");
     assert!(codec::decode(&[0xff, 0xfe, 0x00], None).is_err());
     assert!(codec::decode(&[0xef, 0xbb, 0xbf, b'a'], Some("windows-1252")).is_err());
+}
+
+#[test]
+fn windows_traditional_chinese_batch_and_text_encodings_round_trip() {
+    // 1. package.bat 包含中文注释、%date%、%web%、!variable!，以 GB18030/GBK 编码
+    let dir = tempfile::tempdir().unwrap();
+    let bat_path = dir.path().join("package.bat");
+    let bat_source = "@echo off\r\nrem 这是自动化构建脚本\r\necho 当前日期: %date%\r\necho 目标网址: %web%\r\necho 变量状态: !variable!\r\nexit /b 0\r\n";
+    let bat_bytes = codec::encode(bat_source, "GB18030", false).unwrap();
+    fs::write(&bat_path, &bat_bytes).unwrap();
+
+    let mut service = FileService::default();
+    // 自动检测：无 BOM、包含中文注释的 BAT 必须正常识别为 GB18030，而非 HEX
+    let opened = service.open_selected(bat_path.clone(), None).unwrap();
+    assert_eq!(opened.metadata.encoding, "GB18030");
+    assert_eq!(opened.text, bat_source);
+    assert_eq!(opened.metadata.eol, "CRLF");
+    assert_eq!(opened.metadata.bom, false);
+
+    // 2. 不修改内容直接保存后，原始文件字节完全一致
+    service.save(&opened.metadata.token, &opened.text, Some(&opened.metadata.version), "GB18030", false).unwrap();
+    assert_eq!(fs::read(&bat_path).unwrap(), bat_bytes, "不修改内容直接保存后字节必须 100% 相同");
+
+    // 3. 编辑中文后保持预期编码与 CRLF
+    let edited = format!("{bat_source}rem 新增中文注释\r\necho 成功\r\n");
+    let current_version = service.open_recent(&opened.metadata.path, None).unwrap().metadata.version;
+    let saved_meta = service.save(&opened.metadata.token, &edited, Some(&current_version), "GB18030", false).unwrap();
+    assert_eq!(saved_meta.encoding, "GB18030");
+    assert_eq!(saved_meta.eol, "CRLF");
+    assert_eq!(fs::read(&bat_path).unwrap(), codec::encode(&edited, "GB18030", false).unwrap());
+
+    // 4. 合法二进制不能误判为文本（PNG、ClassFile、含 NUL 字节）
+    let png_path = dir.path().join("image.png");
+    fs::write(&png_path, b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR").unwrap();
+    assert_eq!(service.open_selected(png_path, None).unwrap().metadata.encoding, "Hex");
+
+    let bin_path = dir.path().join("data.bin");
+    fs::write(&bin_path, b"\xd5\xe2\xca\xc7\x00\x01\x02binary").unwrap();
+    assert_eq!(service.open_selected(bin_path, None).unwrap().metadata.encoding, "Hex");
+
+    // 5. HEX 模式能够安全切换为 GB18030
+    let hex_file = service.open_selected(bat_path.clone(), Some("Hex")).unwrap();
+    assert_eq!(hex_file.metadata.encoding, "Hex");
+    let reopened_as_gb = service.reopen(&hex_file.metadata.token, "GB18030").unwrap();
+    assert_eq!(reopened_as_gb.metadata.encoding, "GB18030");
+    assert_eq!(reopened_as_gb.text, edited);
+
+    // 6. 转换编码为 windows-1252 时因含有中文阻止有损保存，原文件不受影响
+    let lossy_err = service.save(&reopened_as_gb.metadata.token, &edited, Some(&reopened_as_gb.metadata.version), "windows-1252", false).unwrap_err();
+    assert_eq!(lossy_err.code, "encoding_loss");
+    assert_eq!(fs::read(&bat_path).unwrap(), codec::encode(&edited, "GB18030", false).unwrap(), "转换编码失败绝不得破坏原文件内容");
 }
 
 #[test]
@@ -285,6 +338,65 @@ fn arbitrary_path_token_and_released_grant_are_denied() {
 }
 
 #[test]
+fn cancelling_or_aborting_a_save_as_creates_no_file() {
+    let dir = tempfile::tempdir().unwrap();
+    // The dialog can be cancelled after the target name is known; preparing a
+    // target only reads state and must never create or truncate anything.
+    for name in ["Untitled-1.md", "Untitled-2.txt", "笔记.md"] {
+        let target = dir.path().join(name);
+        let mut service = FileService::default();
+        let prepared = service.prepare_target(target.clone(), None).unwrap();
+        assert!(prepared.version.is_none(), "新目标不应有磁盘版本");
+        assert!(!target.exists(), "取消保存不得产生文件：{name}");
+        // The grant is dropped without ever writing.
+        service.release(&prepared.token);
+        assert!(!target.exists());
+    }
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    // Completing the save does create exactly the chosen file.
+    let target = dir.path().join("Untitled-3.jsonc");
+    let mut service = FileService::default();
+    let prepared = service.prepare_target(target.clone(), None).unwrap();
+    service.save(&prepared.token, "{}", None, "UTF-8", false).unwrap();
+    assert_eq!(fs::read(&target).unwrap(), b"{}");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn router_recognises_an_open_document_through_the_real_grants() {
+    use crate::session::{plan_external_open, LaunchRegistry};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Note.txt");
+    fs::write(&path, "content").unwrap();
+    let canonical = checked_path(&path, false).unwrap();
+    let mut files = FileService::default();
+    files.set_owner("main");
+    files.open_selected(path.clone(), None).unwrap();
+    let mut registry = LaunchRegistry::default();
+    registry.insert("main".into(), Vec::new());
+
+    // Already open in the workspace window: activate, never create a window.
+    let owners = vec![files.owner_of_path(&canonical)];
+    let plan = plan_external_open(&mut registry, &[canonical.clone()], &owners, &|_| true);
+    assert_eq!(plan.activate, vec![("main".to_string(), vec![canonical.clone()])]);
+    assert!(plan.created.is_none());
+    assert!(registry.windows["main"].pending.is_empty());
+
+    // The same file may be handed to us with a different case spelling.
+    let other_case = checked_path(&dir.path().join("NOTE.TXT"), false).unwrap_or_else(|_| canonical.clone());
+    let owners = vec![files.owner_of_path(&other_case)];
+    let plan = plan_external_open(&mut registry, &[other_case], &owners, &|_| true);
+    assert!(plan.created.is_none(), "同一文件的不同大小写拼写必须识别为已打开");
+
+    // Once the window closes its grants are released, so a later double-click
+    // legitimately opens a new single-file window.
+    files.release_owner("main");
+    let owners = vec![files.owner_of_path(&canonical)];
+    let plan = plan_external_open(&mut registry, &[canonical], &owners, &|_| true);
+    assert!(plan.created.is_some(), "窗口关闭后不得复用失效记录");
+}
+
+#[test]
 fn recent_and_single_file_layout_are_persisted_without_text() {
     let dir = tempfile::tempdir().unwrap(); let prefs = dir.path().join("app-data").join("files.json");
     let path = dir.path().join("notes.txt"); fs::write(&path, b"private-content").unwrap();
@@ -330,6 +442,71 @@ fn windows_exclusive_file_lock_preserves_original() {
 
 #[cfg(windows)]
 #[test]
+fn windows_save_keeps_file_identity_creation_time_and_acl() {
+    use std::os::windows::io::AsRawHandle;
+    use std::process::Command;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+    fn identity(path: &Path) -> (u64, u64) {
+        let file = fs::File::open(path).unwrap();
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        assert_ne!(unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) }, 0);
+        (((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+         ((info.ftCreationTime.dwHighDateTime as u64) << 32) | info.ftCreationTime.dwLowDateTime as u64)
+    }
+    let original = "第一行\r\n第二行";
+    let (_dir, path, mut service, file) = fixture(&codec::encode(original, "UTF-8", true).unwrap());
+    let before = identity(&path);
+    let acl_before = Command::new("icacls").arg(&path).output().unwrap().stdout;
+    let edited = "第一行\r\n第二行\r\n新增第三行 (longer than before)";
+    service.save(&file.metadata.token, edited, Some(&file.metadata.version), "UTF-8", true).unwrap();
+    // Saving must not create a new directory entry: the same file ID and the same
+    // creation time are what keep a Desktop icon in place.
+    assert_eq!(identity(&path), before, "保存必须保持 Windows 文件 ID 与创建时间");
+    assert_eq!(fs::read(&path).unwrap(), codec::encode(edited, "UTF-8", true).unwrap());
+    assert_eq!(Command::new("icacls").arg(&path).output().unwrap().stdout, acl_before, "原位写入必须保持原有 ACL");
+    assert!(!path.exists() || fs::read_dir(path.parent().unwrap()).unwrap().count() == 1, "保存后不得留下临时文件");
+    // A shorter edit must truncate the old tail, still on the same file.
+    let shorter = "短";
+    let current = service.open_recent(&file.metadata.path, None).unwrap().metadata.version;
+    service.save(&file.metadata.token, shorter, Some(&current), "UTF-8", true).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), codec::encode(shorter, "UTF-8", true).unwrap());
+    assert_eq!(identity(&path), before);
+    assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+}
+
+#[cfg(windows)]
+#[test]
+fn native_file_identity_matches_one_file_and_separates_two() {
+    // The router can fall back to the native file identity when two path
+    // spellings of one file (for example a mapped drive and its UNC form)
+    // canonicalize to different text. Volume aliases cannot be created inside a
+    // test, so this covers the identity contract itself.
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("one.txt");
+    let second = dir.path().join("two.txt");
+    fs::write(&first, "one").unwrap();
+    fs::write(&second, "two").unwrap();
+    let a = file_identity(&canonical_of(&first)).unwrap();
+    let b = file_identity(&canonical_of(&first)).unwrap();
+    assert_eq!(a, b, "同一文件必须得到相同标识");
+    assert_ne!(a, file_identity(&canonical_of(&second)).unwrap());
+    assert!(file_identity(&dir.path().join("missing.txt")).is_none());
+    // A granted document is found by that identity even with no path match.
+    let mut service = FileService::default();
+    service.set_owner("main");
+    service.open_selected(first.clone(), None).unwrap();
+    let canonical = canonical_of(&first);
+    assert_eq!(service.owner_of_path(&canonical).as_deref(), Some("main"));
+    assert!(service.owner_of_path(&canonical_of(&second)).is_none());
+}
+
+#[cfg(windows)]
+fn canonical_of(path: &Path) -> PathBuf {
+    checked_path(path, false).unwrap()
+}
+
+#[cfg(windows)]
+#[test]
 fn windows_acl_denies_write_without_losing_original() {
     use std::process::Command;
     let (_dir, path, mut service, file) = fixture(b"ACL protected");
@@ -346,20 +523,30 @@ fn windows_acl_denies_write_without_losing_original() {
 
 #[cfg(windows)]
 #[test]
-fn unwritable_parent_reports_save_stage_and_keeps_original_without_fallback() {
+fn unwritable_parent_still_saves_in_place_but_refuses_a_new_file() {
     use std::process::Command;
     let (dir, path, mut service, file) = fixture(b"protected original");
     // Deny adding a sibling file only; the original remains individually writable.
     let denied = Command::new("icacls").arg(dir.path()).args(["/deny", "*S-1-1-0:(WD)"]).output().unwrap();
     assert!(denied.status.success());
-    let result = service.save(&file.metadata.token, "must not overwrite", Some(&file.metadata.version), "UTF-8", false);
+    // An existing document is written in place, so it does not need a new
+    // directory entry and stays editable in a folder that refuses new files.
+    let saved = service.save(&file.metadata.token, "in place edit", Some(&file.metadata.version), "UTF-8", false).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"in place edit");
+    // A brand-new target still needs the atomic temp file and must fail cleanly
+    // with the actionable stage message, leaving the folder untouched.
+    let fresh = dir.path().join("brand-new.txt");
+    let target = service.prepare_target(fresh.clone(), None).unwrap();
+    let error = service.save(&target.token, "must not appear", None, "UTF-8", false).unwrap_err();
     let restored = Command::new("icacls").arg(dir.path()).args(["/remove:d", "*S-1-1-0"]).output().unwrap();
     assert!(restored.status.success(), "fixture ACL cleanup failed");
-    let error = result.unwrap_err();
     assert_eq!(error.code, "permission");
     assert!(error.message.contains("目标文件夹创建原子保存临时文件"));
-    assert_eq!(fs::read(&path).unwrap(), b"protected original");
+    assert!(!fresh.exists());
+    assert_eq!(fs::read(&path).unwrap(), b"in place edit");
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "in place edit");
+    let _ = saved.version;
 }
 
 #[cfg(unix)]

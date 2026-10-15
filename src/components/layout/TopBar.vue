@@ -1,7 +1,7 @@
 <template>
   <header class="topbar" @mousedown="dragWindow" @dblclick="maximizeFromHeader">
     <div class="brandarea">
-      <div class="app-brand"><img class="logo" src="/logo.png" alt="LightEdit 标志" width="26" height="26" /><span class="brand">LightEdit</span></div>
+      <div class="app-brand"><img class="logo" src="/logo.svg" alt="LightEdit 标志" width="26" height="26" /><span class="brand">LightEdit</span></div>
       <AppMenu :groups="menuGroups" :registry="commandRegistry" @execute="$emit('execute-command',$event)" />
     </div>
 

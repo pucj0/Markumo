@@ -1,4 +1,4 @@
-import {setMarkdownMode,viewCommand} from './menu-helpers.mjs'
+import {setMarkdownMode,splitPaneViaMenu,mergePanesViaMenu} from './menu-helpers.mjs'
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -55,30 +55,41 @@ async function connect() {
 }
 try {
   await connect()
-  await test('自动保存：默认开启、真实BOM/CRLF写入、关闭/重启设置、外部冲突保留并暂停',async()=>{
+  await test('自动保存：默认关闭、手动开启后真实BOM/CRLF写入、关闭/重启设置、外部冲突保留并暂停',async()=>{
     await setMarkdownMode(page,'源码')
     const filePath=await page.evaluate(()=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;return m.activeDocument.path})
     assert.equal(await page.locator('.kernel-notice,.sidefoot').count(),0)
-    await editor().focus();await editor().press('Control+End');await page.keyboard.insertText('自动保存中文')
-    for(let i=0;i<50;i++){if((await readFile(fixture)).equals(Buffer.concat([bom,Buffer.from(original+'自动保存中文')])))break;await pause(100)}
-    assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from(original+'自动保存中文')]))
+    // Opt-in: the profile is fresh, so editing must not touch the disk.
+    await editor().focus();await editor().press('Control+End');await page.keyboard.insertText('暂不自动写入')
+    await pause(2200);assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from(original)]))
+    assert.equal(await page.evaluate(()=>document.querySelector('#app').__vue_app__._instance.setupState.manager.activeDocument.dirty),true)
+    // A manual save still works while automatic save is off.
+    await editor().press('Control+s')
+    for(let i=0;i<50;i++){if((await readFile(fixture)).equals(Buffer.concat([bom,Buffer.from(original+'暂不自动写入')])))break;await pause(100)}
+    assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from(original+'暂不自动写入')]))
     await page.waitForFunction(()=>!document.querySelector('#app').__vue_app__._instance.setupState.manager.activeDocument.dirty)
-    assert.equal(await page.locator('.toast').count(),0)
-    await page.getByTitle('设置',{exact:true}).click();assert.equal(await page.getByLabel('自动保存',{exact:true}).isChecked(),true)
-    await page.getByLabel('自动保存',{exact:true}).uncheck()
+    await page.getByTitle('设置',{exact:true}).click()
+    assert.equal(await page.getByLabel('自动保存',{exact:true}).isChecked(),false)
+    await page.getByLabel('自动保存',{exact:true}).check();await page.getByLabel('自动保存延迟',{exact:true}).selectOption('500')
     await page.getByLabel('编辑器字号',{exact:true}).fill('18');await page.getByLabel('编辑器字号',{exact:true}).blur()
     assert.equal(await page.evaluate(()=>document.documentElement.style.getPropertyValue('--editor-size')),'18px')
     await page.getByLabel('编辑器字号',{exact:true}).fill('14');await page.getByRole('button',{name:'完成',exact:true}).click()
+    await editor().focus();await editor().press('Control+End');await page.keyboard.insertText('自动保存中文')
+    for(let i=0;i<50;i++){if((await readFile(fixture)).equals(Buffer.concat([bom,Buffer.from(original+'暂不自动写入自动保存中文')])))break;await pause(100)}
+    assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from(original+'暂不自动写入自动保存中文')]))
+    await page.waitForFunction(()=>!document.querySelector('#app').__vue_app__._instance.setupState.manager.activeDocument.dirty)
+    assert.equal(await page.locator('.toast').count(),0)
+    await page.getByTitle('设置',{exact:true}).click();await page.getByLabel('自动保存',{exact:true}).uncheck();await page.getByRole('button',{name:'完成',exact:true}).click()
     await editor().focus();await editor().press('Control+End');await page.keyboard.insertText('暂不保存')
-    await pause(1800);assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from(original+'自动保存中文')]))
+    await pause(1800);assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from(original+'暂不自动写入自动保存中文')]))
     await page.getByTitle('设置',{exact:true}).click();await page.getByLabel('自动保存',{exact:true}).check();await page.getByLabel('自动保存延迟',{exact:true}).selectOption('500');await page.getByRole('button',{name:'完成',exact:true}).click()
-    for(let i=0;i<30;i++){if((await readFile(fixture)).equals(Buffer.concat([bom,Buffer.from(original+'自动保存中文暂不保存')])))break;await pause(100)}
-    assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from(original+'自动保存中文暂不保存')]))
+    for(let i=0;i<30;i++){if((await readFile(fixture)).equals(Buffer.concat([bom,Buffer.from(original+'暂不自动写入自动保存中文暂不保存')])))break;await pause(100)}
+    assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from(original+'暂不自动写入自动保存中文暂不保存')]))
     const external=Buffer.concat([bom,Buffer.from(original+'外部修改')]);await writeFile(fixture,external)
     await editor().focus();await editor().press('Control+End');await page.keyboard.insertText('冲突保留')
     await page.waitForFunction(()=>document.querySelector('.toast')?.textContent.includes('自动保存已暂停'))
     await page.keyboard.insertText('继续编辑');await pause(1600)
-    assert.deepEqual(await readFile(fixture),external);assert.equal(await raw(),original+'自动保存中文暂不保存冲突保留继续编辑')
+    assert.deepEqual(await readFile(fixture),external);assert.equal(await raw(),original+'暂不自动写入自动保存中文暂不保存冲突保留继续编辑')
     assert.equal(await page.evaluate(()=>document.querySelector('#app').__vue_app__._instance.setupState.manager.activeDocument.dirty),true)
     await page.getByTitle('设置',{exact:true}).click();await page.getByLabel('自动保存延迟',{exact:true}).selectOption('1500');await page.getByLabel('自动保存',{exact:true}).uncheck();await page.getByRole('button',{name:'完成',exact:true}).click()
     await page.getByRole('button',{name:'关闭 complex.md',exact:true}).click();await page.getByRole('button',{name:'放弃修改并关闭',exact:true}).click()
@@ -184,7 +195,7 @@ try {
   })
   await test('Phase 6: 双窗格真实键盘编辑、共享撤销与磁盘保存',async()=>{
     const before=await raw()
-    await viewCommand(page,'编辑器分栏')
+    await splitPaneViaMenu(page)
     await page.waitForSelector('.secondary-pane .cm-editor')
     const left=page.locator('.main-pane .cm-content'),right=page.locator('.secondary-pane .cm-content')
     await left.click();await left.press('Control+Home');await page.keyboard.insertText('LEFT')
@@ -195,7 +206,7 @@ try {
     await right.press('Control+y');await right.press('Control+y');assert.equal(await raw(),'LEFT'+before+'RIGHT')
     await right.press('Control+s');await pause(300)
     assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from('LEFT'+before+'RIGHT')]))
-    await viewCommand(page,'编辑器分栏')
+    await mergePanesViaMenu(page)
     assert.equal(await page.locator('.cm-editor').count(),1)
   })
   await test('Phase 6: 设置与自定义快捷键实际交互、冲突拒绝与模态保护',async()=>{

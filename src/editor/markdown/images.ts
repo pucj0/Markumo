@@ -4,6 +4,7 @@ import { safeMarkdownURL } from './links'
 
 export interface MarkdownResources {
   loadLocal(path: string): Promise<Uint8Array>
+  authorizeLocal?(path: string): Promise<boolean>
   allowedRemote: Set<string>
   identity(): string
 }
@@ -15,9 +16,14 @@ export function createMarkdownResources(token: () => string | undefined,identity
   return {
     allowedRemote: new Set(),
     identity,
+    async authorizeLocal(path) {
+      const grant=token()
+      if(!isTauri()||!grant)return false
+      return invoke<boolean>('authorize_markdown_image_read',{token:grant,relative:path})
+    },
     async loadLocal(path) {
       const grant = token()
-      if (!isTauri() || !grant) throw new Error('请保存文档，并将图片所在文件夹加入工作区。')
+      if (!isTauri() || !grant) throw new Error('请先保存 Markdown 文档。')
       const bytes = await invoke<ArrayBuffer>('read_markdown_image', { token: grant, relative: path })
       return new Uint8Array(bytes)
     },
@@ -31,7 +37,8 @@ export function imageDestination(source: string): ImageDestination {
   if (network?.startsWith('https:')) return { kind: 'remote', path: network }
   try {
     const path = decodeURIComponent(raw)
-    if (!path || /^[\/\\]/.test(path) || /[:\0?#\r\n]/.test(path)) return { kind: 'blocked', path }
+    const localDrive = /^[a-z]:[\/\\]/i.test(path)
+    if (!path || /^[/\\]{2}/.test(path) || /[\0\r\n]/.test(path) || (!localDrive && path.includes(':')) || (localDrive && path.slice(2).includes(':'))) return { kind: 'blocked', path }
     return { kind: 'local', path }
   } catch { return { kind: 'blocked', path: raw } }
 }
@@ -40,7 +47,7 @@ export function imageDestination(source: string): ImageDestination {
 export function mountMarkdownImage(host: HTMLElement, source: string, alt: string, resources: MarkdownResources, edit: () => void, measure: () => void = () => {}) {
   const destination = imageDestination(source)
   host.replaceChildren()
-  let disposed = false, objectURL: string | undefined, timer: ReturnType<typeof setTimeout> | undefined, generation = 0, heldBytes=0,heldPixels=0
+  let disposed = false, objectURL: string | undefined, timer: ReturnType<typeof setTimeout> | undefined, generation = 0, heldBytes=0,heldPixels=0, needsAuthorization=false
   const release=()=>{
     if(objectURL)URL.revokeObjectURL(objectURL);objectURL=undefined
     retainedBytes-=heldBytes;retainedPixels-=heldPixels;heldBytes=heldPixels=0
@@ -59,7 +66,7 @@ export function mountMarkdownImage(host: HTMLElement, source: string, alt: strin
     status.textContent = '图片加载中…'; action.hidden = true
     try {
       let src: string
-      if (destination.kind === 'blocked') { failure('只允许相对路径或经确认的 HTTPS 图片'); return }
+      if (destination.kind === 'blocked') { failure('只允许授权本地路径或经确认的 HTTPS 图片'); return }
       if (destination.kind === 'remote') src = destination.path
       else {
         const bytes = await resources.loadLocal(destination.path)
@@ -85,10 +92,21 @@ export function mountMarkdownImage(host: HTMLElement, source: string, alt: strin
       timer = setTimeout(() => { if (!disposed && current === generation) { generation++; image.remove();release();failure('加载超时') } }, 15000)
       host.prepend(image); image.src = src; measure()
     } catch (error) {
-      if (!disposed && current === generation) {release();failure(typeof error === 'object' && error && 'message' in error ? String(error.message) : String(error))}
+      if (!disposed && current === generation) {
+        release();failure(typeof error === 'object' && error && 'message' in error ? String(error.message) : String(error))
+        needsAuthorization=destination.kind==='local'&&!!resources.authorizeLocal&&typeof error==='object'&&!!error&&'code' in error&&error.code==='image_scope'
+        if(needsAuthorization)action.textContent='授权此本地图片…'
+      }
     }
   }
-  action.onclick = () => {
+  action.onclick = async () => {
+    if(needsAuthorization){
+      action.disabled=true
+      try{if(!await resources.authorizeLocal?.(destination.path))return;needsAuthorization=false}
+      catch(error){failure(error instanceof Error?error.message:String(error));return}
+      finally{action.disabled=false}
+      if(disposed)return
+    }
     if (destination.kind === 'remote') resources.allowedRemote.add(destination.path)
     void load()
   }

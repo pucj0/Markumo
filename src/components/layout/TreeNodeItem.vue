@@ -12,6 +12,8 @@
       role="button"
       :aria-label="node.name"
       :aria-expanded="node.isDirectory ? !!node.isExpanded : undefined"
+      :draggable="!node.isDirectory"
+      @dragstart="handleDragStart"
       tabindex="0"
       @click="handleClick"
       @dblclick="handleDblClick"
@@ -30,7 +32,7 @@
       </template>
 
       <template v-else>
-        <span class="twisty" aria-hidden="true"></span><Icon name="file" size="small" />
+        <span class="twisty" aria-hidden="true"></span><FileIcon :name="node.name" />
         <span class="label">{{ node.name }}</span>
         <span v-if="isDirty" class="dirty-dot">●</span>
       </template>
@@ -93,6 +95,7 @@ import { computed, ref } from 'vue'
 import ContextMenu from '../common/ContextMenu.vue'
 import { CommandRegistry, menuCommand as cmd, separator } from '../../features/shell/menuModel'
 import Icon from '../common/Icon.vue'
+import FileIcon from '../common/FileIcon.vue'
 import type { WorkspaceNode } from '../../features/workspace/contracts'
 import { readablePath, displayPathKey } from '../../features/shell/pathDisplay'
 
@@ -120,6 +123,12 @@ const emit = defineEmits<{
 const isDirty = computed(() => {
   return props.dirtyPaths?.includes(props.node.path) ?? false
 })
+
+function handleDragStart(event: DragEvent) {
+  if (props.node.isDirectory) return
+  event.dataTransfer?.setData('application/x-lightedit-file', JSON.stringify({ path: props.node.path, name: props.node.name }))
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove'
+}
 
 
 function handleClick() {

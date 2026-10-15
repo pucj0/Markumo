@@ -7,6 +7,8 @@ import { indentUnit } from '@codemirror/language'
 import { coreExtensions, editorTheme } from './extensions'
 import { detectLanguage, loadLanguage, type LanguageName } from '../languages'
 import { TabGroup } from '../../features/tabs/TabGroup'
+import { EditorLayoutManager } from '../layout/EditorLayoutManager'
+import type { SplitDirection } from '../layout/types'
 import type { EditorDocument, Theme, MarkdownMode } from '../../types'
 import { lineEndings, type LineEndingSnapshot } from './lineEndings'
 import type { FileMetadata, OpenFile, ClassInfo } from '../../features/files/contracts'
@@ -15,9 +17,11 @@ import { livePreviewExtension } from '../markdown/livePreview'
 import { markdownFormatTransaction, type MarkdownFormat } from '../markdown/formatCommands'
 import { captureLineBaseline, savedLineBaseline } from './changeGutter'
 import { createMarkdownResources, markdownResources, refreshMarkdownResources } from '../markdown/images'
+import { imageImportBookmarks } from '../markdown/imageImport'
+import { sameFilePath } from '../../features/files/pathKey'
 
 export interface DocumentSeed { id: string; name: string; path: string; text: string; pinned?: boolean; mode?: MarkdownMode; kind?: 'text' | 'javaClass'; classInfo?: ClassInfo; encoding?: string }
-export type Pane = 'main' | 'secondary'
+export type Pane = string
 const sharedConfiguration = Annotation.define<boolean>()
 interface CachedDocument {
   meta: EditorDocument
@@ -33,23 +37,17 @@ interface CachedDocument {
   languageGeneration: number
   readyLanguageGeneration: number | null
   scroll: { top: number; left: number }
-  panes: Record<Pane, { selection: EditorSelection; top: number; left: number }>
+  panes: Record<string, { selection: EditorSelection; top: number; left: number }>
 }
 
 export class DocumentManager {
-  readonly group = new TabGroup('main')
-  readonly secondaryGroup = new TabGroup('secondary')
-  isSplit = false
-  activePane: 'main' | 'secondary' = 'main'
-
+  readonly layout = new EditorLayoutManager()
+  private readonly views = new Map<string, EditorView>()
+  private readonly hosts = new Map<string, HTMLElement>()
   private readonly records = new Map<string, CachedDocument>()
   private readonly seeds = new Map<string, DocumentSeed>()
   private readonly listeners = new Set<() => void>()
   private readonly deferred = new Map<string, StateEffect<unknown>[]>()
-  private view: EditorView | null = null
-  private secondaryView: EditorView | null = null
-  // Hosts may outlive their documents, but an editable view never may.
-  private readonly hosts = new Map<Pane, HTMLElement>()
   private timer: ReturnType<typeof setTimeout> | null = null
   private nextUntitled = 1
   private wordWrap = false
@@ -63,33 +61,62 @@ export class DocumentManager {
 
   constructor(seeds: DocumentSeed[] = [], private readonly languageLoader = loadLanguage) {
     for (const seed of seeds) this.seeds.set(seed.id, seed)
+    this.layout.subscribe(() => this.notify())
   }
 
   subscribe(listener: () => void) { this.listeners.add(listener); return () => this.listeners.delete(listener) }
-  private notify() { for (const listener of this.listeners) listener() }
-  get activeId() {
-    return this.activePane === 'main' ? this.group.activeId : this.secondaryGroup.activeId
+  notify() { for (const listener of this.listeners) listener() }
+
+  get isSplit() { return this.layout.getAllLeafIds().length > 1 }
+  get group() { return this.layout.getPane(this.layout.activePaneId)?.group || this.layout.getPrimaryPane().group }
+  get secondaryGroup() {
+    const leaves = this.layout.getAllLeafIds()
+    const otherId = leaves.find(id => id !== this.layout.activePaneId) || 'secondary'
+    return this.layout.getPane(otherId)?.group || new TabGroup(otherId)
   }
+  get activePaneId() { return this.layout.activePaneId }
+  get activePane(): string { return this.layout.activePaneId }
+  set activePane(id: string) { this.focusPane(id) }
+  get activeId() { return this.layout.getPane(this.layout.activePaneId)?.group.activeId || null }
   get activeDocument() { return this.activeId ? this.metadata(this.activeId) : null }
-  get activeEditorView() { return this.paneView(this.activePane) }
+  get activeEditorView() { return this.views.get(this.layout.activePaneId) || null }
+  get view() { return this.views.get('main') || this.views.get(this.layout.activePaneId) || null }
+  get secondaryView() {
+    const leaves = this.layout.getAllLeafIds()
+    const otherId = leaves.find(id => id !== 'main')
+    return (otherId && this.views.get(otherId)) || null
+  }
   get hasDirtyDocuments() { return [...this.records.values()].some(record => record.meta.dirty) }
   get isComposing() {
-    return (['main', 'secondary'] as const).some(pane => {
+    return this.layout.getAllLeafIds().some(pane => {
       const id = this.paneGroup(pane).activeId
       return !!id && this.records.has(id) && !!this.paneView(pane)?.compositionStarted
     })
   }
   get catalog() { return [...this.seeds.values()].map(({ id, name, path }) => ({ id, name, path })) }
-  get openedDocuments() { return [...new Set([...this.group.tabs, ...this.secondaryGroup.tabs].map(t => t.documentId))].map(id => this.metadata(id)!) }
-  get mainOpenedDocuments() { return this.group.tabs.map(tab => this.metadata(tab.documentId)!) }
-  get secondaryOpenedDocuments() { return this.secondaryGroup.tabs.map(tab => this.metadata(tab.documentId)!) }
+  get openedDocuments() {
+    const allDocIds = new Set<string>()
+    for (const pane of this.layout.getAllPanes()) {
+      for (const tab of pane.group.tabs) allDocIds.add(tab.documentId)
+    }
+    return [...allDocIds].map(id => this.metadata(id)!).filter(Boolean)
+  }
+  get mainOpenedDocuments() { return this.layout.getPrimaryPane().group.tabs.map(tab => this.metadata(tab.documentId)!).filter(Boolean) }
+  get secondaryOpenedDocuments() {
+    const leaves = this.layout.getAllLeafIds()
+    const other = leaves.find(id => id !== 'main')
+    return other ? (this.layout.getPane(other)?.group.tabs.map(tab => this.metadata(tab.documentId)!).filter(Boolean) || []) : []
+  }
+
   metadata(id: string): EditorDocument | null {
     const record = this.records.get(id)
     if (!record) return null
     const pane = this.activePane
+    if (!record.panes[pane]) record.panes[pane] = { selection: record.state.selection, top: 0, left: 0 }
     const selection = this.paneGroup(pane).activeId === id ? this.paneView(pane)?.state.selection || record.panes[pane].selection : record.state.selection
     const head = Math.min(selection.main.head, record.state.doc.length), line = record.state.doc.lineAt(head)
-    return { ...record.meta, line: line.number, column: head - line.from + 1, pinned: this.group.tabs.find(tab => tab.documentId === id)?.pinned ?? this.secondaryGroup.tabs.find(tab => tab.documentId === id)?.pinned ?? true }
+    const isPinned = this.layout.getAllPanes().some(p => p.group.tabs.some(tab => tab.documentId === id && tab.pinned))
+    return { ...record.meta, line: line.number, column: head - line.from + 1, pinned: isPinned }
   }
   getState(id: string) { return this.records.get(id)?.state }
   getText(id: string) { return this.records.get(id)?.state.doc.toString() }
@@ -106,6 +133,7 @@ export class DocumentManager {
       doc: seed.text,
       extensions: [
         coreExtensions,
+        imageImportBookmarks,
         markdownResources.of(createMarkdownResources(() => this.records.get(seed.id)?.meta.fileToken,()=>{const meta=this.records.get(seed.id)?.meta;return `${meta?.fileToken||''}|${meta?.path||''}`})),
         binary ? [EditorState.readOnly.of(true), EditorView.editable.of(false), EditorState.transactionFilter.of(tr => tr.docChanged ? [] : tr)] : [],
         indent.of([EditorState.tabSize.of(this.indentSize), indentUnit.of(this.useTabs ? '\t' : ' '.repeat(this.indentSize))]),
@@ -162,7 +190,9 @@ export class DocumentManager {
   openFile(file: OpenFile, preview = false) {
     if (this.disposed || this.isComposing) return null
     // A second open must never reload a dirty editor or reset its undo history.
-    const existing = [...this.records.values()].find(record => record.meta.path === file.path && record.meta.fileToken)
+    // The same file may arrive with a different spelling (case, separators) from
+    // the shell, so the lookup uses the shared path key rather than exact text.
+    const existing = [...this.records.values()].find(record => record.meta.fileToken && sameFilePath(record.meta.path, file.path))
     if (existing) { this.open(existing.meta.id, preview); return existing.meta.id }
     const id = `file:${file.token}`
     const seed: DocumentSeed = { id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text, pinned: !preview,
@@ -215,16 +245,16 @@ export class DocumentManager {
     }
   }
 
-  reloadFile(id: string, file: OpenFile) {
+  reloadFile(id: string, file: OpenFile, force = false) {
     const record = this.records.get(id)
-    if (!record || record.meta.dirty || this.isComposing || this.disposed) return false
+    if (!record || (!force && record.meta.dirty) || this.isComposing || this.disposed) return false
     this.deferred.delete(id)
     const seed: DocumentSeed = { id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text,
       kind: file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined, encoding: file.encoding }
     const next = this.create(seed)
     this.attachMetadata(next, file)
     this.restoreFileMode(next)
-    for (const pane of ['main', 'secondary'] as const) if (this.paneGroup(pane).activeId === id) this.showActive(pane)
+    for (const pane of this.layout.getAllLeafIds()) if (this.paneGroup(pane).activeId === id) this.showActive(pane)
     this.notify()
     return true
   }
@@ -258,29 +288,47 @@ export class DocumentManager {
     if (this.activeId === id) this.paneView(this.activePane)?.focus()
   }
 
+  resolvePaneId(pane: Pane): string {
+    if (this.layout.panes.has(pane)) return pane
+    if (pane === 'secondary') {
+      const leaves = this.layout.getAllLeafIds()
+      const other = leaves.find(id => id !== 'main')
+      if (other) return other
+    }
+    if (pane === 'main') {
+      return this.layout.getPrimaryPane().id
+    }
+    return pane
+  }
+
   open(id: string, preview = true, pane: Pane = this.activePane) {
     if (this.disposed || this.isComposing) return false
+    const targetPane = this.resolvePaneId(pane)
     let record = this.records.get(id)
     if (!record) {
       const seed = this.seeds.get(id)
       if (!seed) return false
       record = this.create(seed)
     }
-    this.captureScroll(pane)
-    const group = this.paneGroup(pane), previousId = group.activeId
+    this.captureScroll(targetPane)
+    const group = this.paneGroup(targetPane), previousId = group.activeId
     const replaced = group.open(id, preview)
     if (replaced) this.release(replaced)
-    this.activePane = pane
-    if (previousId !== id) this.showActive(pane)
+    this.activePane = targetPane
+    if (previousId !== id) this.showActive(targetPane)
     this.notify()
     return true
   }
 
   select(id: string, pane: Pane = this.activePane) {
-    if (!this.paneGroup(pane).tabs.some(tab => tab.documentId === id)) return false
-    return this.open(id, true, pane)
+    const targetPane = this.resolvePaneId(pane)
+    if (!this.paneGroup(targetPane).tabs.some(tab => tab.documentId === id)) return false
+    return this.open(id, true, targetPane)
   }
-  pin(id: string) { this.group.pin(id); this.secondaryGroup.pin(id); this.notify() }
+  pin(id: string) {
+    for (const pane of this.layout.getAllPanes()) pane.group.pin(id)
+    this.notify()
+  }
   createUntitled(extension: 'txt' | 'md' = 'txt') {
     if (this.isComposing || this.disposed) return null
     const count = this.nextUntitled++
@@ -292,59 +340,80 @@ export class DocumentManager {
   }
 
   close(id: string, discard = false, pane: Pane = this.activePane): 'closed' | 'dirty' | 'composing' | 'missing' {
-    const group = this.paneGroup(pane), other = this.paneGroup(pane === 'main' ? 'secondary' : 'main')
+    const targetPane = this.resolvePaneId(pane)
+    const group = this.paneGroup(targetPane)
     if (!this.records.has(id) || !group.tabs.some(t => t.documentId === id)) return 'missing'
     if (this.isComposing) return 'composing'
-    if (this.records.get(id)!.meta.dirty && !discard && !other.tabs.some(t => t.documentId === id)) return 'dirty'
-    this.captureScroll(pane)
+
+    const isLastRef = !this.layout.getAllPanes().some(p => p.id !== targetPane && p.group.tabs.some(t => t.documentId === id))
+    if (isLastRef && this.records.get(id)!.meta.dirty && !discard) return 'dirty'
+
+    this.captureScroll(targetPane)
     const wasActive = group.activeId === id
-    group.close(id)
-    this.release(id)
-    if (!this.records.has(id) && id.startsWith('untitled-')) this.seeds.delete(id)
-    if (wasActive) this.showActive(pane)
+    const res = this.layout.closeTab(targetPane, id)
+    if (isLastRef) {
+      this.release(id)
+      if (!this.records.has(id) && id.startsWith('untitled-')) this.seeds.delete(id)
+    }
+
+    if (res.paneRemoved) {
+      this.destroyView(targetPane)
+      this.hosts.delete(targetPane)
+      this.showActive(this.layout.activePaneId)
+    } else if (wasActive) {
+      this.showActive(targetPane)
+    }
     this.notify()
     return 'closed'
   }
 
   private release(id: string) {
-    if ([...this.group.tabs, ...this.secondaryGroup.tabs].some(t => t.documentId === id)) return
+    if (this.layout.getAllPanes().some(p => p.group.tabs.some(t => t.documentId === id))) return
     this.records.delete(id); this.deferred.delete(id)
   }
-  private paneGroup(pane: Pane) { return pane === 'main' ? this.group : this.secondaryGroup }
-  private paneView(pane: Pane) { return pane === 'main' ? this.view : this.secondaryView }
+  paneGroup(pane: Pane) {
+    const resolved = this.resolvePaneId(pane)
+    return this.layout.getPane(resolved)?.group || this.layout.getPrimaryPane().group
+  }
+  paneView(pane: Pane) {
+    const resolved = this.resolvePaneId(pane)
+    return this.views.get(resolved) || null
+  }
   focusPane(pane: Pane, focus = true) {
-    if (pane === 'secondary' && !this.isSplit) return
-    if (pane !== this.activePane && this.isComposing) return
-    this.activePane = pane
-    if (focus) this.paneView(pane)?.focus()
+    const resolved = this.resolvePaneId(pane)
+    if (resolved !== this.activePane && this.isComposing) return
+    this.layout.focusPane(resolved)
+    if (focus) this.views.get(resolved)?.focus()
     this.notify()
   }
   private captureScroll(pane: Pane = this.activePane) {
-    const id = this.paneGroup(pane).activeId, record = id && this.records.get(id), view = this.paneView(pane)
+    const resolved = this.resolvePaneId(pane)
+    const id = this.paneGroup(resolved).activeId, record = id && this.records.get(id), view = this.paneView(resolved)
     if (record && view) {
-      record.panes[pane] = { selection: view.state.selection, top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
-      if (pane === 'main') record.scroll = { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
+      record.panes[resolved] = { selection: view.state.selection, top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
+      if (resolved === 'main') record.scroll = { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
     }
   }
   private showActive(pane: Pane = this.activePane) {
-    let view = this.paneView(pane)
-    const targetId = this.paneGroup(pane).activeId
+    const resolved = this.resolvePaneId(pane)
+    let view = this.paneView(resolved)
+    const targetId = this.paneGroup(resolved).activeId
     const record = targetId && this.records.get(targetId)
-    if (!record) { this.destroyView(pane); return }
+    if (!record) { this.destroyView(resolved); return }
+    if (!record.panes[resolved]) record.panes[resolved] = { selection: record.state.selection, top: 0, left: 0 }
     if (!view) {
-      const parent = this.hosts.get(pane)
+      const parent = this.hosts.get(resolved)
       if (!parent || this.disposed) return
-      view = new EditorView({ parent, state: record.state, dispatchTransactions: trs => this.applyTransactions(pane, trs) })
-      if (pane === 'main') this.view = view
-      else this.secondaryView = view
+      view = new EditorView({ parent, state: record.state, dispatchTransactions: trs => this.applyTransactions(resolved, trs) })
+      this.views.set(resolved, view)
     }
     const shownView = view
-    shownView.setState(record.state.update({ selection: record.panes[pane].selection, annotations: Transaction.addToHistory.of(false) }).state)
-    const scroll = { ...record.panes[pane] }
+    shownView.setState(record.state.update({ selection: record.panes[resolved].selection, annotations: Transaction.addToHistory.of(false) }).state)
+    const scroll = { ...record.panes[resolved] }
     shownView.requestMeasure({
       read: () => scroll,
       write: saved => {
-        if (this.paneView(pane) === shownView && this.paneGroup(pane).activeId === targetId) {
+        if (this.paneView(resolved) === shownView && this.paneGroup(resolved).activeId === targetId) {
           shownView.scrollDOM.scrollTop = saved.top
           shownView.scrollDOM.scrollLeft = saved.left
         }
@@ -352,71 +421,142 @@ export class DocumentManager {
     })
   }
 
-  mount(parent: HTMLElement) {
-    this.mountPane(parent, 'main')
-    this.view?.focus()
+  mount(parent: HTMLElement, pane: Pane = 'main') {
+    const resolved = this.resolvePaneId(pane)
+    this.mountPane(parent, resolved)
+    this.paneView(resolved)?.focus()
   }
 
   mountSecondary(parent: HTMLElement) {
-    this.mountPane(parent, 'secondary')
+    const leaves = this.layout.getAllLeafIds()
+    const otherId = leaves.find(id => id !== 'main') || 'secondary'
+    this.mountPane(parent, otherId)
   }
 
-  private mountPane(parent: HTMLElement, pane: Pane) {
-    if (this.disposed || this.hosts.get(pane) === parent) return
-    this.captureScroll(pane)
-    this.destroyView(pane)
-    this.hosts.set(pane, parent)
-    this.showActive(pane)
+  mountPane(parent: HTMLElement, pane: Pane) {
+    const resolved = this.resolvePaneId(pane)
+    if (this.disposed || this.hosts.get(resolved) === parent) return
+    this.captureScroll(resolved)
+    this.destroyView(resolved)
+    this.hosts.set(resolved, parent)
+    this.showActive(resolved)
   }
 
   splitEditor(): boolean {
     if (this.disposed || this.isComposing) return false
     if (this.isSplit) return true
-    this.isSplit = true
-    const currentId = this.group.activeId
-    if (currentId) {
-      this.secondaryGroup.open(currentId, false)
-    }
-    // A collapse/reopen can be batched by Vue without remounting the host.
-    this.showActive('secondary')
-    this.notify()
+    this.splitPane('right')
     return true
+  }
+
+  splitPane(direction: SplitDirection, targetPane: Pane = this.activePane, docId?: string): string {
+    if (this.disposed || this.isComposing) return targetPane
+    const resolvedTarget = this.resolvePaneId(targetPane)
+    const targetGroup = this.paneGroup(resolvedTarget)
+    const openDocId = docId || targetGroup.activeId || undefined
+    this.captureScroll(resolvedTarget)
+    const newPaneId = this.layout.splitPane(resolvedTarget, direction, openDocId)
+    if (openDocId) {
+      let record = this.records.get(openDocId)
+      if (!record) {
+        const seed = this.seeds.get(openDocId)
+        if (seed) record = this.create(seed)
+      }
+      if (record) {
+        if (!record.panes[newPaneId]) {
+          record.panes[newPaneId] = record.panes[resolvedTarget] ? { ...record.panes[resolvedTarget] } : { selection: record.state.selection, top: 0, left: 0 }
+        }
+      }
+    }
+    this.activePane = newPaneId
+    this.showActive(newPaneId)
+    this.notify()
+    return newPaneId
   }
 
   closeSplit() {
     if (this.isComposing) return false
-    this.captureScroll('secondary')
-    for (const tab of this.secondaryGroup.tabs) if (!this.group.tabs.some(t => t.documentId === tab.documentId)) {
-      this.group.tabs.push({ ...tab, pinned: true })
-      const record = this.records.get(tab.documentId)
-      if (record) record.panes.main = { ...record.panes.secondary }
+    return this.mergeAllPanes()
+  }
+
+  closePane(paneId: Pane): boolean {
+    const resolved = this.resolvePaneId(paneId)
+    if (this.disposed || this.isComposing) return false
+    const leaves = this.layout.getAllLeafIds()
+    if (leaves.length <= 1) return false
+
+    const pane = this.layout.getPane(resolved)
+    if (pane) {
+      for (const tab of pane.group.tabs) {
+        const isLast = !this.layout.getAllPanes().some(p => p.id !== resolved && p.group.tabs.some(t => t.documentId === tab.documentId))
+        if (isLast && this.records.get(tab.documentId)?.meta.dirty) return false
+      }
     }
-    if (!this.group.activeId) this.group.activeId = this.secondaryGroup.activeId
-    this.isSplit = false
-    this.destroyView('secondary')
-    this.secondaryGroup.tabs.length = 0
-    this.secondaryGroup.activeId = null
-    this.activePane = 'main'
-    this.showActive('main')
+
+    this.captureScroll(resolved)
+    this.destroyView(resolved)
+    this.hosts.delete(resolved)
+    const closed = this.layout.closePane(resolved)
+    if (closed) {
+      this.showActive(this.layout.activePaneId)
+      this.notify()
+    }
+    return closed
+  }
+
+  mergeAllPanes(): boolean {
+    if (this.isComposing) return false
+    const primaryId = this.layout.getPrimaryPane().id
+
+    for (const paneId of this.layout.getAllLeafIds()) {
+      if (paneId !== primaryId) {
+        this.captureScroll(paneId)
+        const pane = this.layout.getPane(paneId)
+        if (pane) {
+          for (const tab of pane.group.tabs) {
+            const record = this.records.get(tab.documentId)
+            if (record && !record.panes[primaryId]) {
+              record.panes[primaryId] = { ...record.panes[paneId] }
+            }
+          }
+        }
+        this.destroyView(paneId)
+        this.hosts.delete(paneId)
+      }
+    }
+    this.layout.mergeAllPanes()
+    this.activePane = primaryId
+    this.showActive(primaryId)
     this.notify()
     return true
   }
 
-  moveTab(id: string, from: Pane, to: Pane) {
-    if (this.isComposing || from === to || !this.paneGroup(from).tabs.some(t => t.documentId === id)) return false
-    if (to === 'secondary' && !this.isSplit) this.splitEditor()
-    this.captureScroll(from)
+  moveTab(id: string, from: Pane, to: Pane, targetIndex?: number) {
+    const resolvedFrom = this.resolvePaneId(from)
+    const resolvedTo = this.resolvePaneId(to)
+    if (this.isComposing || !this.paneGroup(resolvedFrom).tabs.some(t => t.documentId === id)) return false
+    this.captureScroll(resolvedFrom)
     const record = this.records.get(id)
-    if (record && !this.paneGroup(to).tabs.some(t => t.documentId === id)) record.panes[to] = { ...record.panes[from] }
-    this.paneGroup(to).open(id, false)
-    this.paneGroup(from).close(id)
-    this.activePane = to
-    this.showActive(from); this.showActive(to); this.notify()
+    if (record && !record.panes[resolvedTo] && record.panes[resolvedFrom]) {
+      record.panes[resolvedTo] = { ...record.panes[resolvedFrom] }
+    }
+    this.layout.moveTab(id, resolvedFrom, resolvedTo, targetIndex)
+    this.showActive(resolvedFrom)
+    this.showActive(resolvedTo)
+    this.notify()
     return true
   }
 
+  reorderTab(pane: Pane, id: string, targetIndex: number) {
+    const resolved = this.resolvePaneId(pane)
+    const reordered = this.layout.reorderTab(resolved, id, targetIndex)
+    if (reordered) this.notify()
+    return reordered
+  }
+
   private applyTransactions(pane: Pane, transactions: readonly Transaction[]) {
-    const view = this.paneView(pane), id = this.paneGroup(pane).activeId, record = id && this.records.get(id)
+    const resolved = this.resolvePaneId(pane)
+    const view = this.paneView(resolved), id = this.paneGroup(resolved).activeId, record = id && this.records.get(id)
     if (!view || !record) return
     if (record.meta.kind === 'javaClass' && transactions.some(tr => tr.docChanged)) return
     this.applying = true
@@ -427,13 +567,18 @@ export class DocumentManager {
         // including CodeMirror's internal undo/redo history annotation.
         const canonical = record.state.update(tr)
         record.state = canonical.state
-        record.panes[pane].selection = tr.state.selection
-        const other: Pane = pane === 'main' ? 'secondary' : 'main', receiver = this.paneView(other)
-        record.panes[other].selection = record.panes[other].selection.map(tr.changes)
-        if (this.paneGroup(other).activeId === id && receiver && (tr.docChanged || tr.annotation(sharedConfiguration))) {
-          receiver.update([receiver.state.update({ changes: tr.changes, effects: tr.effects,
-            selection: receiver.state.selection.map(tr.changes), annotations: Transaction.addToHistory.of(false) })])
-          record.panes[other].selection = receiver.state.selection
+        if (!record.panes[resolved]) record.panes[resolved] = { selection: tr.state.selection, top: 0, left: 0 }
+        record.panes[resolved].selection = tr.state.selection
+        for (const otherPane of this.layout.getAllLeafIds()) {
+          if (otherPane === resolved) continue
+          if (!record.panes[otherPane]) record.panes[otherPane] = { selection: record.state.selection, top: 0, left: 0 }
+          record.panes[otherPane].selection = record.panes[otherPane].selection.map(tr.changes)
+          const receiver = this.paneView(otherPane)
+          if (this.paneGroup(otherPane).activeId === id && receiver && (tr.docChanged || tr.annotation(sharedConfiguration))) {
+            receiver.update([receiver.state.update({ changes: tr.changes, effects: tr.effects,
+              selection: receiver.state.selection.map(tr.changes), annotations: Transaction.addToHistory.of(false) })])
+            record.panes[otherPane].selection = receiver.state.selection
+          }
         }
         this.accept(record, record.state, tr.docChanged)
       }
@@ -441,15 +586,16 @@ export class DocumentManager {
   }
 
   unmount(pane: Pane = 'main') {
-    this.captureScroll(pane)
-    this.destroyView(pane)
-    this.hosts.delete(pane)
+    const resolved = this.resolvePaneId(pane)
+    this.captureScroll(resolved)
+    this.destroyView(resolved)
+    this.hosts.delete(resolved)
   }
 
   private destroyView(pane: Pane) {
-    this.paneView(pane)?.destroy()
-    if (pane === 'main') this.view = null
-    else this.secondaryView = null
+    const resolved = this.resolvePaneId(pane)
+    this.views.get(resolved)?.destroy()
+    this.views.delete(resolved)
   }
 
   setIndent(size: number, tabs: boolean) {
@@ -478,13 +624,15 @@ export class DocumentManager {
   }
 
   switchPane() {
-    if (this.isSplit && !this.isComposing) this.focusPane(this.activePane === 'main' ? 'secondary' : 'main')
+    if (this.isSplit && !this.isComposing) this.layout.focusNextPane()
   }
 
   private activeViewFor(id: string) {
-    if (this.paneGroup(this.activePane).activeId === id) return this.paneView(this.activePane)
-    if (this.group.activeId === id) return this.view
-    if (this.secondaryGroup.activeId === id) return this.secondaryView
+    const activeLeaf = this.layout.activePaneId
+    if (this.paneGroup(activeLeaf).activeId === id) return this.views.get(activeLeaf) || null
+    for (const pane of this.layout.getAllLeafIds()) {
+      if (this.paneGroup(pane).activeId === id) return this.views.get(pane) || null
+    }
     return null
   }
 
@@ -555,8 +703,12 @@ export class DocumentManager {
     if (view) view.dispatch(view.state.update(spec))
     else {
       const transaction = record.state.update(spec)
-      for (const pane of ['main', 'secondary'] as const) record.panes[pane].selection = record.panes[pane].selection.map(transaction.changes)
-      record.panes[this.activePane].selection = transaction.state.selection
+      for (const pane of this.layout.getAllLeafIds()) {
+        if (!record.panes[pane]) record.panes[pane] = { selection: record.state.selection, top: 0, left: 0 }
+        record.panes[pane].selection = record.panes[pane].selection.map(transaction.changes)
+      }
+      if (!record.panes[this.activePane]) record.panes[this.activePane] = { selection: transaction.state.selection, top: 0, left: 0 }
+      else record.panes[this.activePane].selection = transaction.state.selection
       this.accept(record, transaction.state, transaction.docChanged)
     }
   }
@@ -631,6 +783,7 @@ export class DocumentManager {
   setWrap(wrap: boolean) {
     this.wordWrap = wrap
     for (const record of this.records.values()) this.effects(record, [record.wrap.reconfigure(wrap ? EditorView.lineWrapping : [])])
+    for (const view of this.views.values()) view.dispatch({ effects: [] })
   }
   setTheme(theme: Theme) {
     this.theme = theme
@@ -651,10 +804,8 @@ export class DocumentManager {
   dispose() {
     this.disposed = true
     if (this.timer) clearTimeout(this.timer)
-    this.view?.destroy()
-    this.secondaryView?.destroy()
-    this.secondaryView = null
-    this.view = null
+    for (const view of this.views.values()) view.destroy()
+    this.views.clear()
     this.hosts.clear()
     this.records.clear(); this.seeds.clear(); this.deferred.clear(); this.listeners.clear()
   }

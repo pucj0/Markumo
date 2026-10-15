@@ -57,6 +57,23 @@ try {
   $sha.Dispose()
   $report.installedBinaryMatches=(Get-FileHash -LiteralPath $installedExe).Hash -eq $expectedHash
   if(!$report.installedBinaryMatches){throw 'Installed binary differs from tested build.'}
+
+  # Verify Windows File Associations & Context Menu registration in HKCU
+  $appKey = 'HKCU:\Software\Classes\Applications\lightedit.exe'
+  if (!(Test-Path $appKey)) { throw 'Registry Applications\lightedit.exe missing.' }
+  $supportedTypes = 'HKCU:\Software\Classes\Applications\lightedit.exe\SupportedTypes'
+  if (!(Test-Path $supportedTypes)) { throw 'SupportedTypes registry key missing.' }
+  foreach ($ext in @('.txt', '.md', '.json', '.rs')) {
+    if ((Get-Item $supportedTypes).GetValue($ext) -eq $null) { throw "SupportedTypes $ext missing in registry." }
+  }
+  $txtContextKey = 'HKCU:\Software\Classes\SystemFileAssociations\.txt\shell\LightEdit\command'
+  if (!(Test-Path $txtContextKey)) { throw 'SystemFileAssociations .txt shell command missing.' }
+  $regCommand = (Get-ItemProperty $txtContextKey).'(default)'
+  if (!$regCommand.Contains($installedExe)) { throw "Context menu command does not point to installed exe: $regCommand" }
+  $regApps = 'HKCU:\Software\RegisteredApplications'
+  if ((Get-ItemProperty $regApps -ErrorAction SilentlyContinue).LightEdit -ne 'Software\LightEdit\Capabilities') { throw 'RegisteredApplications LightEdit capability mapping missing.' }
+  $report.associationsVerified = $true
+
   $env:LIGHTEDIT_INSTALL_TEST_EXE=$installedExe
   $env:LIGHTEDIT_INSTALL_TEST_OUTPUT=$outputPath
   & node (Join-Path $PSScriptRoot 'installer-app-smoke.mjs')
@@ -72,6 +89,12 @@ finally {
       # The launcher exits before its temporary NSIS child completes uninstall.
       for($i=0;$i -lt 900 -and ((Test-Path $uninstallKey) -or (Test-Path (Join-Path $installPath 'lightedit.exe')));$i++){Start-Sleep -Milliseconds 100}
       if((Test-Path $uninstallKey) -or (Test-Path (Join-Path $installPath 'lightedit.exe'))){$report.failure='Isolated installation did not finish uninstalling.'}
+
+      # Verify uninstaller cleaned up LightEdit registry associations
+      if (Test-Path 'HKCU:\Software\Classes\Applications\lightedit.exe') { $report.failure = 'Uninstaller failed to remove Applications\lightedit.exe.' }
+      if (Test-Path 'HKCU:\Software\LightEdit\Capabilities') { $report.failure = 'Uninstaller failed to remove LightEdit\Capabilities.' }
+      if (Test-Path 'HKCU:\Software\Classes\SystemFileAssociations\.txt\shell\LightEdit') { $report.failure = 'Uninstaller failed to remove SystemFileAssociations\.txt\shell\LightEdit.' }
+      if ((Get-ItemProperty 'HKCU:\Software\RegisteredApplications' -ErrorAction SilentlyContinue).LightEdit) { $report.failure = 'Uninstaller failed to remove RegisteredApplications entry.' }
     }
   }
   foreach($item in $metadata){

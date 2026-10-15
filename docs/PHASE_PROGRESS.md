@@ -1,5 +1,89 @@
 # LightEdit 阶段进度与验收台账
 
+### 2026-10-15 NSIS 重复宏打包修复
+- 仅修复用户报错的打包单点，不推进完整 Phase 8：Tauri 先包含 `FileAssociation.nsh`，钩子的 `!ifdef/!undef` 只处理 define 符号，无法删除已有宏；两处改为 `!ifmacrodef/!macroundef`，保留原有安全关联逻辑，不改生成脚本或编辑器业务。
+- PASS：关联/打包针对性 Vitest 14/14；`node scripts/package.mjs --skip-install` 全链路（Vue typecheck/build、Rust release、makensis）通过，产出 `src-tauri/target/release/bundle/nsis/LightEdit_0.1.0_x64-setup.exe`，3813757 字节（3.64 MiB）。变更文件：`src-tauri/windows/installerHooks.nsh` 宏替换、`docs/PACKAGING.md` 故障说明、本进度记录。
+- REVIEW；未运行安装/卸载，未改系统关联，未提交/推送/发布。图片原生验收仍按用户要求暂停。
+
+### 2026-10-15 Markdown 图片资源与文件图标专项
+- 既有 Phase 5 图片增量及用户追加图标修订，不推进新 Phase。五种图片位置、默认 assets、文件名变量、路径选项、全局/文档覆盖、统一菜单/命令/粘贴/原生 Drop 导入，先保存 Markdown/取消不落盘，成功后 CM 事务插入。Rust 文档/窗口/原生来源授权，真实落盘、重名避让、目录句柄/Unix openat 防链接逃逸；保留远程默认关闭和现有图片预算。文档设置不写 YAML。
+- 52 种 16px 本地 SVG，覆盖支持语言、常见资源与特殊文件；树/标签/搜索/快速打开共用，深浅主题适配，无前端新依赖。仅将 Cargo.lock 已有 rustix 声明为 Unix 直接依赖并补 Windows 剪贴板 feature/图片读取能力。
+- 实测 PASS：当前工作树前端 245/245、Rust 83/83、cargo check、生产 src 的 TS/Vue 类型检查、图片相关 28 项、图标浏览器三组（52 字形/主题/三组件）。整仓 typecheck/build FAIL：并行新增 `tests/batch-syntax-and-encoding.test.ts:94` 两个未使用参数，保留另一专项修改。无独立 lint 配置。
+- 用户明确选择“另一处仍在进行，暂缓原生验收”，已停止 Windows 图片端到端，不再启动测试窗口。此前原生尝试被实例标识冲突/进行中的布局白屏阻断，无图片交互通过记录。系统拖放/剪贴板/选择框、IME/DPI 与 macOS/Linux NOT RUN。状态 REVIEW；完整文件用途、证据与手工步骤见 [MARKDOWN_IMAGE_ASSETS.md](MARKDOWN_IMAGE_ASSETS.md)，图标截图 `test-results/file-icons/`。未提交、推送或发布。
+
+### 2026-10-15 Windows BAT/CMD 中文编码识别及语法高亮专项
+- 范围与目标：彻底解决包含中文的 BAT/CMD、TXT、INI、CFG 等文件（GB2312、GBK、CP936、GB18030、UTF-8、UTF-16）打开显示为 HEX 十六进制、无高亮的问题，使 LightEdit 具备类似 Notepad++ 的通用传统编码识别与高亮能力。
+- 根因排查与修复：
+  1. 编码检测原有问题：旧流程（BOM → UTF-8 → 失败即退回 HEX）对无 BOM 的 GBK/GB2312 批处理脚本一律判定 UTF-8 失败并回退为十六进制视图。已在 `src-tauri/src/files/codec.rs` 改造为严格四层检测：BOM 严格优先 → 严格 UTF-8 → 排除已知二进制魔数（ClassFile、PNG、ZIP、PDF、GZIP、EXE、ELF 等）与 NUL/控制字符 → 对文本扩展名尝试 `GB18030`（兼容 GB2312、GBK、CP936）与 `windows-1252` 解码。
+  2. 编码边界与严格校验：要求解码后文本无非法控制字符，且必须通过**字节级 100% 无损往返校验**（`GB18030.encode(&text) == original_bytes`），并验证存在有效 CJK 字符/全角符号；非文本扩展名或随机二进制坚决不误判为中文，仍走 HEX 安全路径。
+  3. 状态栏编码交互重构（`StatusBar.vue`）：编码展示区改造为交互式下拉菜单（`ContextMenu`），支持“以指定编码重新打开”、“转换为指定编码并保存”、“另存为指定编码…”，提供 UTF-8、GB18030、UTF-16LE、UTF-16BE、Windows-1252 及 HEX 字节模式。
+  4. 重新打开与转换安全保护：区分“重新打开”与“转换编码”，重新打开不改变磁盘字节；当前文档有未保存修改时，触发 `DiscardDialog` 询问用户（可放弃重新打开或保存后重新打开），绝不静默丢失未保存内容。从 HEX 模式重新打开为 GB18030 时，自动恢复常规文本编辑与语法高亮。
+  5. 保持原编码与换行符：无修改直接保存保证原文件字节 100% 一致；编辑中文后保存维持 GB18030 编码与 CRLF；转换编码到无法表示字符的编码时阻止有损保存，原文件与编辑内容均安全保留。
+  6. Windows Batch 语言高亮：在 `src/editor/languages/batch.ts` 基于 CodeMirror 6 `StreamLanguage` 实现轻量高效的 Batch 词法解析器，支持 `@echo`、`echo`、`rem`、`::`、`set`、`setlocal`、`endlocal`、`call`、`if`、`else`、`for`、`goto`、`exit`、`powershell`、`%var%`、`!var!`、`%~dp0`、`%1`、`%%i` 等，纯文本装饰高亮，绝不执行脚本；将 `.bat` 与 `.cmd` 映射为 `Batch`。
+- 实测结果：
+  1. `pnpm typecheck`：PASS（0 错误）。
+  2. `pnpm test`：PASS 全仓库 24 套件 **245/245** 测试全部通过（新增 `tests/batch-syntax-and-encoding.test.ts` 8 项全过）。
+  3. `pnpm build`：PASS，Vite 生产构建成功，成功产出 `dist/assets/batch-*.js`。
+  4. `cargo test --manifest-path src-tauri/Cargo.toml`：PASS **83/83** 全部通过（新增 GB2312/GBK/GB18030 批处理与文本无损往返、HEX 切回、二进制排除测试）。
+  5. `cargo check`：PASS。
+- 状态 REVIEW。未提交、推送或发布。详见 `BAT_ENCODING_AND_HIGHLIGHT_UPDATE.md`。
+
+### 2026-10-15 保存机制与外部文件打开行为专项
+- 范围仅四项：Windows 保存对话框文件类型、保存导致桌面图标移动、自动保存默认开启、重复双击创建多窗口。未改动 Markdown 与分栏业务。
+- 根因（均经实测或代码路径确认）：
+  1. `save_dialog` 只设置文件名，没有 `add_filter`；并确认 Tauri 的 `blocking_save_file()` **不返回所选过滤器**，因此默认类型必须在打开对话框前确定、扩展名在拿到用户输入后补全。
+  2. 旧保存用同目录临时文件 + `ReplaceFileW`：实测**文件 ID 改变**（`1688849860475895` → `1407374883765253`），且每次保存都在目标目录创建/删除临时文件与临时目录 → 资源管理器把桌面文件当作新项目重排图标。
+  3. `defaultSettings()` 与 Rust `EditorSettings::default()` 都是 `autoSave: true`，且前端 `autoSave = ref(true)`。
+  4. `route_launch` 对任何非空文件参数都新建 `file-N` 窗口；另外前端监听的 `files-pending` 事件 Rust 从未 emit，导致“交给已有窗口”的链路此前不通。
+- 修复：新增 `write_checked_preserving_identity`（Windows 已有文件原位写入：独占写句柄 + 同一句柄复核版本 + `%TEMP%` 已 fsync 回滚备份 + 失败回滚与备份路径上报），新文件仍原子创建，会话/首选项等内部数据继续 `write_checked` 原子替换；`save_dialog` 增加 18 组过滤器与默认类型排序、按文档扩展名补全且不重复扩展名；`autoSave` 默认关闭 + `settingsVersion` 迁移（旧文件读作 1，无法区分来源的 `autoSave: true` 予以保留并给出一次性提示，不强行覆盖）；`route_launch` 重写为文件路由器（`plan_external_open` 纯函数：已打开→激活标签不重读盘、已排队→留在该窗口、已有单文件窗口→加标签、仅工作区窗口→新建/复用独立单文件窗口、未运行→单文件窗口无草稿），以规范化路径 + 原生文件 ID 去重，前端新增 `external-activate` 处理。
+- 过程中发现并修复多分栏重构遗留回归：`EditorPaneItem`/`SplitLayoutNode` 的 computed 读取非响应式的 layout 状态且未接收 `revision`，导致“以文件启动后编辑区显示空状态、标签栏为空而文档其实已载入”。已把 `revision` 传入分栏子树并恢复 `main-pane`/`secondary-pane` 类名。同时修掉 `EditorContainer` 同时转发 `close-tab` 与 legacy `close-main`/`close-secondary` 造成的同一标签重复关闭（脏文档重复确认），并把已失效的“源码/即时排版”按钮点击改为菜单助手。
+- 实测 PASS：`pnpm typecheck`、`pnpm test` 23 套件 **236/236**、`pnpm build`、`cargo check`、`cargo test` **82/82**；`node tests/external-open-native.mjs` **5 组真实 DOM 断言**（真实 release 程序 + WebView2 CDP：单文件启动一窗一标签、重复 3 次与并发 4 次双击不增窗不增标签且未保存内容逐字节保留、不同文件成为同窗第 2 标签、磁盘与主会话均未被写入）；`tests/external-open-native.ps1`（单进程单窗口）；`tests/desktop-icon-save.ps1` 与 `-DesktopFixture`（旧策略丢失文件 ID、新策略保持文件 ID 与创建时间、目录无残留条目）。
+- 状态 REVIEW：资源管理器鼠标双击/右键打开方式、工作区窗口端到端场景、桌面图标坐标截图、断电场景未验证（NOT RUN）；Playwright 相关脚本已按新默认值与新菜单更新但本环境无法运行。详见 `SAVE_AND_EXTERNAL_OPEN_UPDATE.md`。未提交、推送或发布。
+
+### 2026-10-15 Windows 文件关联与右键菜单集成专项
+- 根因分析：
+  1. `src-tauri/tauri.conf.json` 中此前未配置 `bundle.fileAssociations`，且未配置 NSIS 关联脚本，导致生成安装包未向 Windows 注册任何打开方式或文件类型。
+  2. Tauri 默认的 `APP_ASSOCIATE` 宏直接将 `Software\Classes\.${EXT}` 默认值强行覆盖为应用 ProgID，会直接抢占用户已有的默认应用（如 Notepad、VS Code、Typora 等），破坏用户配置。
+  3. Windows 11 “打开方式”、“选择其他应用”与“默认应用设置”依赖 `Applications\lightedit.exe`、`SupportedTypes`、`OpenWithProgids` 以及 `Capabilities\FileAssociations` + `RegisteredApplications` 规范注册，单纯覆盖扩展名默认键无法被 Windows 11 正常索引。
+- 修复方案：
+  1. 在 `src-tauri/tauri.conf.json` 中配置官方 `bundle.fileAssociations`，完整声明首批 29 种文本与代码格式（.txt, .md, .markdown, .json, .jsonc, .xml, .yaml, .yml, .js, .jsx, .ts, .tsx, .vue, .html, .css, .scss, .java, .py, .go, .rs, .sql, .log, .ini, .cfg, .conf, .properties, .sh, .bat, .cmd），声明 role 为 Editor。
+  2. 新增 `src-tauri/windows/installerHooks.nsh` 并通过 `bundle.windows.nsis.installerHooks` 接入：
+     - 重定义 `APP_ASSOCIATE` 与 `APP_UNASSOCIATE` 宏：仅向 `OpenWithProgids` 注册应用 ProgID，绝不覆盖扩展名默认 ProgID，绝不抢占用户原有默认程序。
+     - `NSIS_HOOK_POSTINSTALL`：以 currentUser 范围（HKCU）注册 `Applications\lightedit.exe`（FriendlyAppName、DefaultIcon、open\command、29 种扩展名 SupportedTypes）、Windows 默认应用能力（`Software\LightEdit\Capabilities\FileAssociations` 与 `RegisteredApplications`）、Windows 10/11 经典右键菜单（`SystemFileAssociations\.${EXT}\shell\LightEdit` 与 `text\shell\LightEdit`，命令带完整双引号 `"$INSTDIR\lightedit.exe" "%1"`，显示“使用 LightEdit 打开”并带图标），并通过 `SHChangeNotify` 立即刷新 Shell 缓存。
+     - `NSIS_HOOK_PREUNINSTALL`：严格仅清理 LightEdit 自主创建的注册项（RegisteredApplications、Capabilities、Applications\lightedit.exe、SystemFileAssociations 专用项与 ProgID），绝不删除其他软件关联或修改 UserChoice。
+  3. Windows 11 新版右键菜单顶层限制：根据微软官方规范，新版 Win11 顶层上下文菜单必须依赖包含稀疏包标识（Sparse Package Identity）与注册为 COM InProcServer32 的 `IExplorerCommand` 实现，不能使用 Shell Verb 伪造。本轮严格遵守规范，实现 Windows 10 标准右键菜单、Windows 11 “显示更多选项”与“打开方式”，新版顶层菜单列为后续规划，不引入沉重运行时。
+- 实测结果：
+  1. `pnpm typecheck`：PASS，0 错误。
+  2. `pnpm test`：PASS，全仓库 22 个测试套件，231/231 个测试用例全部通过（包含新增 `tests/windows-associations.test.ts` 7/7 用例）。
+  3. `pnpm build`：PASS，Vite 生产构建成功。
+  4. `cargo check`：PASS。
+  5. `cargo test`：PASS，58/58 个 Rust 单元/集成测试全部通过。
+  6. 状态：REVIEW。未提交、推送或发布。详细实施见 `WINDOWS_ASSOCIATIONS_UPDATE.md`。
+
+### 2026-10-15 Fleet 风格多分栏与编辑器交互全面重构专项
+- 根因排查与修复：
+  1. 空编辑区输入异常与窗口关闭拦截：旧代码在无文档时仍可能在 DOM 中挂载 EditorView，且 `EmptyEditorPane` 的 `tabindex="0"` 导致中文输入法（IME）在空区域激活 `compositionstart`，触发 `isComposing` 或文件繁忙保护；修复为无文档时不挂载 CodeMirror，去除空区域无意义焦点捕获，`isComposing` 仅对拥有真实活动文档的 Pane 生效，合成输入结束/取消可靠恢复正常关闭与切换。
+  2. 窗口关闭保护诊断：完善 `WindowCloseGuard`，关闭请求记录来源（titlebar/command/native）、阶段与状态诊断，严禁记录正文；保留脏文档弹窗确认和保存中的防丢保护。
+- 架构全面重构为递归 Split Tree（Phase B）：
+  1. 抽离类型安全的 `EditorLayoutManager`（`LayoutNode = PaneLeafNode | PaneSplitNode`），彻底淘汰旧版单一 `isSplit` 与固定 `main`/`secondary` 限制，支持水平、垂直与任意深度混合嵌套分栏。
+  2. 每个 Leaf Pane 拥有独立 `TabGroup` 与稳定 `paneId`，`DocumentManager` 维护基于 `paneId` 的 `EditorView` 映射，统一事务派发到所有同时展示相同文档的视图，跨 Pane 协同编辑底层无损同步，光标、选区、滚动位置完全独立。
+  3. 空分栏自动回收策略：关闭非唯一 Pane 的最后标签时自动回收该 Pane 并将父级 Split 折叠为兄弟节点；关闭全部文件时平滑恢复为单一空白 Pane，不留僵尸分栏与悬空分隔线；同一文档在多 Pane 打开时，关闭单侧标签仅解除该 Pane 引用，仅在最后引用关闭且有未保存修改时触发保存确认。
+- 标签拖拽与落点高亮（Phase C）：
+  1. 实现 Fleet 风格的 4 方向边缘 Drop Zone（left / right / top / bottom）与中央 Drop Zone，提供半透明落点高亮遮罩（`DropZoneOverlay.vue`）。
+  2. 支持内部标签同组内拖拽重排（精准前后插入指示线）与跨 Pane 移动/拆分。
+  3. 工作区文件树（`TreeNodeItem.vue`）支持直接拖入编辑器中央或边缘创建对应方向分栏，严格遵守 Tauri 路径与授权保护；拖拽取消完全恢复原状态。
+  4. 完整 13+ 项标签右键菜单（`TabBar.vue`）：包含关闭、关闭其他、关闭右侧、关闭全部、固定/取消固定、向左/右/上/下拆分、移动到已有分栏、复制到新分栏（同文档多视图）、关闭当前分栏、合并全部分栏、复制完整路径、复制相对路径、在系统文件管理器中显示等，根据状态动态置灰。固定标签默认不显示普通关闭叉号。
+- 自动换行、焦点导航与视图菜单（Phase D）：
+  1. 修复自动换行即时生效问题：主菜单“自动换行”命令与 `wordWrap` 响应式双向同步，触发 CodeMirror lineWrapping 重配置并实时派发至全部打开的 EditorView；纯视觉排版，不改变换行符（CRLF/LF）、BOM 或 UTF-8 字节。
+  2. 视图菜单重整：在“视图”菜单中增加“编辑器布局 >”（向右拆分、向下拆分、最大化当前编辑器、恢复编辑器布局、合并所有分栏），与 Markdown 模式层级清晰隔离。
+  3. 分栏焦点导航命令与快捷键体系：支持聚焦左/右/上/下分栏、切换下一个分栏、最大化/恢复分栏、关闭当前分栏、合并所有分栏。
+- 验证结果：
+  1. `pnpm typecheck`：PASS，0 错误。
+  2. `pnpm test`：PASS，全仓库 21 个测试套件，224/224 个用例全部通过（包含新增 `tests/editor-layout.test.ts`、`tests/split-tree-editor.test.ts`、`tests/reproduce-phase-a-flow.test.ts`、`tests/word-wrap.test.ts`）。
+  3. `pnpm build`：PASS，Vite 生产构建成功（207 modules transformed）。
+  4. `cargo check` 与 `cargo test`：PASS，58/58 个 Rust 单元/集成测试全部通过。
+  5. 状态：REVIEW。详细设计、根因分析、修改清单与 Windows 手工验证见 `EDITOR_LAYOUT_REFACTOR.md`。不自动提交、推送或发布。
+
 ### 2026-10-15 本地打包脚本专项
 - 仅增加打包入口/文档与针对性脚本测试：Windows `build.bat` 生成 NSIS EXE；macOS/Linux 的 `build.sh` 调用同一个 `scripts/package.mjs`，分别选择 APP/DMG 与 DEB/AppImage。对应系统本机构建，跨系统请求明确失败；不引入依赖、不改编辑器业务、不提交/推送/发布。
 - 默认锁定依赖安装后复用 Tauri 生产构建，可 `--skip-install`；`--check` 不安装/编译。补齐 Cargo PATH，保留代理/签名环境，清除继承的开发配置，mac 图标在生成目录派生，使用 Cargo metadata 定位输出，失败返回非零码，无强制结束进程或自动安装行为。

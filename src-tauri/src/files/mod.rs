@@ -55,13 +55,40 @@ pub struct Preferences {
     pub recent: Vec<Recent>, pub layout: Layout,
     #[serde(skip_serializing_if = "Option::is_none")] pub warning: Option<String>,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct FileIdentity { pub volume: u32, pub index: u64 }
+
+/// Native file identity (volume serial + file index). Two different path
+/// spellings of the same file — a mapped drive versus its UNC form, or a
+/// verbatim prefix — share this identity even when their canonical text differs.
+/// Only used to recognise an already-open document; never for authorization.
+pub(crate) fn file_identity(path: &Path) -> Option<FileIdentity> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+        let file = fs::File::open(path).ok()?;
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 { return None; }
+        Some(FileIdentity {
+            volume: info.dwVolumeSerialNumber,
+            index: ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+        })
+    }
+    #[cfg(not(windows))]
+    { let _ = path; None }
+}
+
 #[derive(Clone)]
-struct Grant { selected: PathBuf, canonical: PathBuf, writable: bool, hex: bool, owner: String }
+struct Grant { selected: PathBuf, canonical: PathBuf, writable: bool, hex: bool, owner: String, identity: Option<FileIdentity> }
 #[derive(Default)]
 pub struct FileService {
     grants: HashMap<String, Grant>, next_token: u64,
     pub preferences: Preferences, prefs_path: Option<PathBuf>,
     current_owner: String,
+    image_inputs: HashMap<String, (String, PathBuf)>,
+    image_directories: HashMap<String, (String, PathBuf)>,
+    image_reads: HashMap<String, Vec<PathBuf>>,
 }
 
 pub(crate) fn checked_path(path: &Path, allow_missing: bool) -> Result<PathBuf> {
@@ -109,10 +136,17 @@ fn read_disk(path: &Path) -> Result<(Vec<u8>, String, bool)> {
     if bytes.len() as u64 > MAX_BYTES || bytes.len() as u64 != after.len() || before.len() != after.len() || before.modified().ok() != after.modified().ok() {
         return fail("conflict", "读取期间文件发生变化，请重试。" );
     }
-    let modified = after.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|time| time.as_nanos()).unwrap_or(0);
-    let version = format!("{:x}:{}:{modified}", Sha256::digest(&bytes), bytes.len());
+    let version = version_of(&bytes, after.modified().ok());
     let read_only = after.permissions().readonly() || fs::OpenOptions::new().write(true).open(path).is_err();
     Ok((bytes, version, read_only))
+}
+
+/// The disk-version string used to detect external changes. Callers that hold an
+/// open handle rebuild it from the bytes they just read so both sides of a write
+/// comparison use exactly one format.
+pub(crate) fn version_of(bytes: &[u8], modified: Option<std::time::SystemTime>) -> String {
+    let modified = modified.and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|time| time.as_nanos()).unwrap_or(0);
+    format!("{:x}:{}:{modified}", Sha256::digest(bytes), bytes.len())
 }
 
 pub fn disk_version(path: &Path) -> Result<Option<String>> {
@@ -125,7 +159,12 @@ pub fn disk_version(path: &Path) -> Result<Option<String>> {
 
 impl FileService {
     pub fn set_owner(&mut self, owner: &str) { self.current_owner=owner.to_owned(); }
-    pub fn release_owner(&mut self, owner: &str) { self.grants.retain(|_,grant|grant.owner!=owner); }
+    pub fn release_owner(&mut self, owner: &str) {
+        let tokens: Vec<_> = self.grants.iter().filter(|(_,g)|g.owner==owner).map(|(t,_)|t.clone()).collect();
+        for token in tokens { self.image_reads.remove(&token); self.image_directories.remove(&token); }
+        self.image_inputs.retain(|_,(o,_)|o!=owner);
+        self.grants.retain(|_,grant|grant.owner!=owner);
+    }
     pub fn session_path(&self, token: &str) -> Result<PathBuf> {
         let grant=self.grants.get(token).filter(|grant|grant.owner==self.current_owner).ok_or_else(||FileError::new("scope","此窗口没有该文件授权"))?;
         Ok(grant.canonical.clone())
@@ -173,7 +212,8 @@ impl FileService {
         // A new generation avoids late release responses revoking a reopened file.
         // The frontend deduplicates by canonical path and releases extra grants.
         self.next_token += 1; let token = format!("document-{}", self.next_token);
-        self.grants.insert(token.clone(), Grant { selected, canonical, writable, hex: false, owner: self.current_owner.clone() }); token
+        let identity = file_identity(&canonical);
+        self.grants.insert(token.clone(), Grant { selected, canonical, writable, hex: false, owner: self.current_owner.clone(), identity }); token
     }
     fn validate(&self, token: &str, missing: bool) -> Result<PathBuf> {
         let grant = self.grants.get(token).ok_or_else(|| FileError::new("scope", "文件授权已经释放或无效。"))?;
@@ -195,7 +235,7 @@ impl FileService {
         if encoding == Some("Hex") && bytes.len() > MAX_BYTES as usize / 3 { return fail("size", "文件的十六进制显示超过 16 MiB，请使用专用二进制编辑器。"); }
         // Extensions select highlighting only. Binary bytes use an editable,
         // reversible representation instead of a lossy UTF-8 conversion.
-        let decoded = codec::decode(&bytes, encoding);
+        let decoded = codec::decode_with_path(&bytes, encoding, Some(&path));
         let (text, encoding, bom) = match decoded {
             Ok(decoded) => decoded,
             Err(error) if encoding.is_none() && byte_fallback_allowed(&bytes, &error) => {
@@ -245,7 +285,9 @@ impl FileService {
         let bytes = codec::encode(text, encoding, bom)?;
         if encoding == "Hex" && bytes.len() > MAX_BYTES as usize / 3 { return fail("size", "字节内容超过当前十六进制编辑容量（约 5.33 MiB），已阻止写入。"); }
         if bytes.len() as u64 > MAX_BYTES { return fail("size", "编码后的文件超过 16 MiB，已阻止写入。" ); }
-        atomic::write_checked(&path, &bytes, expected)?;
+        // User documents keep their Windows file identity so a Desktop item never
+        // moves; internal data keeps the atomic replacement helper instead.
+        atomic::write_checked_preserving_identity(&path, &bytes, expected)?;
         let (written, version, read_only) = read_disk(&path)?;
         if written != bytes { return fail("conflict", "写入后检测到外部修改；磁盘状态未确认，编辑内容保留。" ); }
         self.grants.get_mut(token).unwrap().hex = encoding == "Hex";
@@ -253,7 +295,7 @@ impl FileService {
         Ok(FileMetadata { token: token.into(), path: path.to_string_lossy().into_owned(), name: path.file_name().unwrap().to_string_lossy().into_owned(),
             encoding: encoding.into(), bom, eol: codec::eol(text), read_only, version, warning })
     }
-    pub fn release(&mut self, token: &str) { if self.grants.get(token).is_some_and(|grant|grant.owner==self.current_owner){self.grants.remove(token);} }
+    pub fn release(&mut self, token: &str) { if self.grants.get(token).is_some_and(|grant|grant.owner==self.current_owner){self.grants.remove(token);self.image_reads.remove(token);self.image_directories.remove(token);} }
     fn require_text_grant(&self, token: &str) -> Result<()> {
         self.session_path(token)?;
         match self.grants.get(token) {
@@ -294,6 +336,22 @@ impl FileService {
     }
     pub fn has_grants_under(&self, path: &Path) -> bool {
         self.grants.values().any(|g| g.canonical.starts_with(path))
+    }
+    /// The window that currently owns an open document for this canonical path,
+    /// if any. Used by the external open router to focus an existing tab instead
+    /// of creating another window. Matching uses the canonical path key and, as
+    /// an auxiliary signal, the native file identity so two different path
+    /// spellings of one file still resolve to a single tab.
+    pub fn owner_of_path(&self, canonical: &Path) -> Option<String> {
+        let wanted = crate::session::PathKey::of(canonical);
+        let identity = file_identity(canonical);
+        self.grants
+            .values()
+            .find(|grant| {
+                crate::session::PathKey::of(&grant.canonical) == wanted
+                    || (identity.is_some() && grant.identity == identity)
+            })
+            .map(|grant| grant.owner.clone())
     }
     pub fn open_batch(&mut self, paths: Vec<PathBuf>, encoding: Option<&str>) -> OpenBatch {
         let mut batch = OpenBatch::default();

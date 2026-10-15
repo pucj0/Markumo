@@ -59,10 +59,10 @@ try{
  await command('视图','自动换行','menuitemcheckbox');await menu('视图');assert.equal(await item('自动换行','menuitemcheckbox').getAttribute('aria-checked'),'true');await page.keyboard.press('Escape')
  await command('视图','显示侧边栏','menuitemcheckbox');await page.locator('.sidebar-wrapper').waitFor();await command('视图','显示侧边栏','menuitemcheckbox');await page.locator('.sidebar-wrapper').waitFor({state:'hidden'})
  pass('Ctrl+F/Ctrl+R不刷新、分组替换与撤销、复选状态和单文件侧边栏')
- await contextTab(await activeName(),'在另一窗格中打开');assert.equal(await page.locator('.secondary-pane').count(),1)
- await page.locator('.secondary-pane [role=tab]').first().click({button:'right'});await item('移动到另一窗格').click();assert.equal(await page.locator('.secondary-pane [role=tab]').count(),0)
- await page.locator('.main-pane [role=tab]').last().click({button:'right'});await item('关闭分栏').click();assert.equal(await page.locator('.secondary-pane').count(),0)
- await editor().focus();await page.keyboard.press('Control+n');await page.keyboard.insertText('dirty second');await page.keyboard.press('Control+n');await page.keyboard.insertText('dirty keep')
+  await contextTab(await activeName(),'向右拆分');assert.equal(await page.locator('.secondary-pane').count(),1)
+  await page.locator('.secondary-pane [role=tab]').first().click({button:'right'});await item('移动到另一分栏').click();assert.equal(await page.locator('.secondary-pane [role=tab]').count(),0)
+  // The emptied pane is reclaimed automatically; the document must stay in the main pane.
+  assert.equal(await page.locator('.secondary-pane').count(),0);assert.equal(await page.locator('.main-pane [role=tab]').count()>=1,true)
  const keep=await activeName(),count=await page.getByRole('tab').count();await contextTab(keep,'关闭其他标签');await page.getByRole('dialog',{name:'未保存修改确认'}).waitFor();await page.getByRole('button',{name:'继续编辑',exact:true}).click();assert.equal(await page.getByRole('tab').count(),count)
  await contextTab(keep,'关闭其他标签');for(let i=0;i<count-1;i++){await page.getByRole('button',{name:'放弃修改并关闭',exact:true}).click();if(i<count-2)await page.getByRole('dialog',{name:'未保存修改确认'}).waitFor()}
  assert.equal(await page.getByRole('tab').count(),1);assert.equal(await raw(),'dirty keep');await editor().press('Control+w');await page.getByRole('dialog',{name:'未保存修改确认'}).waitFor();await page.keyboard.press('Escape');assert.equal(await raw(),'dirty keep')

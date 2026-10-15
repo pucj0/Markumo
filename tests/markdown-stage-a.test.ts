@@ -68,7 +68,8 @@ describe('阶段 A：真实解析/事务与渲染语义',()=>{
     expect(md.render('| a |\n| - |\n| ![x](a.png) |')).not.toContain('md-image-slot')
   })
   it('图片目的地拒绝任意file/data/脚本与凭据，只允许授权相对路径或受控HTTPS',()=>{
-    for(const source of ['file:///secret.png','data:image/svg+xml,x','javascript:x','//host/a','C:\\a.png','https://u:p@example.com/a','http://example.com/a'])expect(imageDestination(source).kind).toBe('blocked')
+    for(const source of ['file:///secret.png','data:image/svg+xml,x','javascript:x','//host/a','https://u:p@example.com/a','http://example.com/a'])expect(imageDestination(source).kind).toBe('blocked')
+    expect(imageDestination('C:/a.png').kind).toBe('local') // Rust still verifies document/image grants.
     expect(imageDestination('../assets/中文%20图片.png')).toEqual({kind:'local',path:'../assets/中文 图片.png'})
     expect(imageDestination('https://example.com/a').kind).toBe('remote')
   })
@@ -98,12 +99,12 @@ describe('阶段 A：真实解析/事务与渲染语义',()=>{
     await manager.setLanguage(id,'Markdown')
     const identity=()=>{const keys:string[]=[];manager.getState(id)!.field(imageField).decorations.between(0,file.text.length,(_f,_t,value)=>{if(value.spec.widget)keys.push(value.spec.widget.resourceKey)});return keys}
     manager.dispatch(id,{selection:{anchor:file.text.length}})
-    expect(identity()).toEqual(['old|E:\\old\\doc.md'])
+    expect(identity()).toEqual([expect.stringMatching(/^old\|E:\\old\\doc\.md\|\d+$/)])
     manager.saveSnapshot(id)!.complete({...file,token:'new',path:'E:\\new\\doc.md',version:'v2'})
-    expect(identity()).toEqual(['new|E:\\new\\doc.md']);expect(manager.saveSnapshot(id)!.text).toBe(file.text)
+    expect(identity()).toEqual([expect.stringMatching(/^new\|E:\\new\\doc\.md\|\d+$/)]);expect(manager.saveSnapshot(id)!.text).toBe(file.text)
     manager.renamePath('E:\\new\\doc.md','E:\\moved\\doc.md','doc.md')
     await manager.setLanguage(id,'Markdown')
-    expect(identity()).toEqual(['new|E:\\moved\\doc.md'])
+    expect(identity()).toEqual([expect.stringMatching(/^new\|E:\\moved\\doc\.md\|\d+$/)])
     manager.dispose()
   })
 })

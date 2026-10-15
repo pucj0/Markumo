@@ -9,35 +9,92 @@ use commands::files::FileStore;
 use commands::workspace::WorkspaceStore;
 use workspace::SearchManager;
 
+/// Registers a window's workspace service and launch record.
 fn register_window(app:&tauri::AppHandle,label:&str,paths:Vec<PathBuf>)->Result<(),String>{
     let temporary=!paths.is_empty();
     let mut ws=workspace::WorkspaceService::default();
     ws.configure(app.path().app_data_dir().map_err(|e|e.to_string())?.join("workspaces.json"));
     if temporary{ws.disable_persistence()}
     app.state::<WorkspaceStore>().insert(label,ws)?;
-    app.state::<session::LaunchStore>().lock().map_err(|e|e.to_string())?.insert(label.into(),paths);
+    let state=app.state::<session::LaunchStore>();
+    let mut registry=state.lock().map_err(|_|"启动状态不可用".to_string())?;
+    if !registry.windows.contains_key(label) { registry.insert(label.into(),paths); }
     Ok(())
 }
 
+fn cleanup_window(app:&tauri::AppHandle,label:&str){
+    if let Ok(mut registry)=app.state::<session::LaunchStore>().lock(){registry.remove(label);}
+    app.state::<WorkspaceStore>().remove(label);
+}
+
+/// Brings a window to the front and asks its frontend to open whatever was
+/// queued for it. The queued paths stay in the registry until the frontend
+/// drains them, so a request that arrives before the page is ready is not lost.
+fn deliver(app:&tauri::AppHandle,label:&str){
+    let Some(window)=app.get_webview_window(label) else { return };
+    let _=window.unminimize();
+    let _=window.set_focus();
+    let _=window.emit("files-pending",());
+}
+
+/// Asks a window to select tabs it already has, without reading the files again
+/// or creating duplicate tabs.
+fn activate(app:&tauri::AppHandle,label:&str,paths:&[PathBuf]){
+    let Some(window)=app.get_webview_window(label) else { return };
+    let _=window.unminimize();
+    let _=window.set_focus();
+    let _=window.emit("external-activate",paths.to_vec());
+}
+
+/// External open router. One decision point for every file handed to LightEdit
+/// from the shell (double-click, "open with", context menu, second instance).
+///
+/// Rules:
+/// * A file already open in any window activates that window and tab; it is never
+///   reloaded over unsaved edits and never duplicated.
+/// * A file already queued for a window stays with that window.
+/// * Otherwise the most recent single-file window takes the file as a new tab.
+/// * With no single-file window, one is created for this batch. A workspace
+///   window is never given external files, so its tabs and unsaved work stay put.
 fn route_launch(app:tauri::AppHandle,paths:Vec<PathBuf>){
     // WebView2 window creation must run outside a synchronous event handler.
     std::thread::spawn(move||{
-        let label={
+        let requested=session::normalize_external_paths(paths);
+        if requested.is_empty(){
+            // No usable file arguments: surface the primary window instead.
+            let label={
+                let state=app.state::<session::LaunchStore>();
+                let registry=match state.lock(){Ok(registry)=>registry,Err(_)=>return};
+                registry.owner().or_else(||registry.latest_window())
+            };
+            if let Some(label)=label{deliver(&app,&label)}
+            return;
+        }
+        // Ownership snapshot first, then one atomic registry decision. The two
+        // locks are never held at the same time, so no ordering deadlock exists.
+        let owners:Vec<Option<String>>={
+            let store=app.state::<FileStore>();
+            let files=match store.lock(){Ok(files)=>files,Err(_)=>return};
+            requested.iter().map(|path|files.owner_of_path(path)).collect()
+        };
+        let plan={
             let state=app.state::<session::LaunchStore>();
             let mut registry=match state.lock(){Ok(registry)=>registry,Err(_)=>return};
-            if paths.is_empty(){if let Some(label)=registry.owner(){drop(registry);if let Some(window)=app.get_webview_window(&label){let _=window.unminimize();let _=window.set_focus();}return}}
-            if registry.windows.len()>=16{eprintln!("打开窗口超过16个，请先关闭部分窗口");return}
-            registry.next+=1;
-            let label=format!("{}-{}",if paths.is_empty(){"app"}else{"file"},registry.next);
-            registry.insert(label.clone(),paths.clone());label
+            session::plan_external_open(&mut registry,&requested,&owners,&|label|app.get_webview_window(label).is_some())
         };
-        if let Err(error)=register_window(&app,&label,paths){eprintln!("启动窗口失败：{error}");return}
-        let mut config=app.config().app.windows[0].clone();config.label=label.clone();
-        let result=tauri::WebviewWindowBuilder::from_config(&app,&config).and_then(|builder|builder.build());
-        if let Err(error)=result{
-            app.state::<WorkspaceStore>().remove(&label);
-            if let Ok(mut registry)=app.state::<session::LaunchStore>().lock(){registry.windows.remove(&label);}
-            eprintln!("创建窗口失败：{error}");
+        for label in &plan.deliveries{deliver(&app,label)}
+        for (label,paths) in &plan.activate{activate(&app,label,paths)}
+        if let Some((label,initial))=plan.created{
+            if let Err(error)=register_window(&app,&label,initial){
+                eprintln!("启动窗口失败：{error}");
+                cleanup_window(&app,&label);
+                return;
+            }
+            let mut config=app.config().app.windows[0].clone();config.label=label.clone();
+            if let Err(error)=tauri::WebviewWindowBuilder::from_config(&app,&config).and_then(|builder|builder.build()){
+                eprintln!("创建窗口失败：{error}");
+                cleanup_window(&app,&label);
+            }
         }
     });
 }
@@ -73,14 +130,15 @@ pub fn run() {
             // Require the registered frontend close handshake. Even startup or
             // failed JS registration must not silently close an unsaved editor.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event { api.prevent_close(); }
-            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
-                if let Ok(mut registry)=window.app_handle().state::<session::LaunchStore>().lock(){
-                    if let Some(launch)=registry.windows.get_mut(window.label()){
-                        let capacity=100usize.saturating_sub(launch.pending.len());
-                        launch.pending.extend(paths.iter().take(capacity).cloned());
-                    }
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, position }) = event {
+                // Frontend hit-tests the editor before deciding import vs open.
+                // Send capabilities, never accept arbitrary frontend paths.
+                if let Ok(mut files)=window.app_handle().state::<FileStore>().lock(){
+                    files.set_owner(window.label());
+                    let inputs=files.image_inputs(paths.clone());
+                    let scale=window.scale_factor().unwrap_or(1.0);
+                    let _=window.emit("native-file-drop",serde_json::json!({"inputs":inputs,"x":position.x as f64/scale,"y":position.y as f64/scale}));
                 }
-                let _=window.emit("files-pending",());
             }
             if let tauri::WindowEvent::Destroyed=event{
                 let app=window.app_handle();
@@ -99,6 +157,10 @@ pub fn run() {
             commands::files::save_file, commands::files::release_file,
             commands::files::read_class_hex,
             commands::files::read_markdown_image,
+            commands::files::choose_markdown_images,commands::files::import_markdown_image,
+            commands::files::authorize_markdown_image_directory,commands::files::release_image_inputs,
+            commands::files::authorize_markdown_image_read,
+            commands::files::open_dropped_files,commands::files::clipboard_image_files,
             commands::workspace::reveal_workspace_node,
             commands::files::drain_pending, commands::files::file_preferences, commands::files::persist_layout,
             commands::workspace::open_workspace_dialog,

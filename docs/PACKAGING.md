@@ -1,5 +1,7 @@
 # LightEdit 本地打包
 
+2026-10-15 NSIS 宏冲突修复：若旧代码报 `macro named "APP_ASSOCIATE" already exists`，原因是 `installerHooks.nsh` 用了处理符号的 `!ifdef/!undef`，没有移除 Tauri 先定义的宏。现已改用 `!ifmacrodef/!macroundef`（`APP_ASSOCIATE`、`APP_UNASSOCIATE` 两处）。应修改源码钩子，勿修改下次会重新生成的 `target/release/nsis/x64/installer.nsi`。`node scripts/package.mjs --skip-install` 已实测完整打包成功，生成 `LightEdit_0.1.0_x64-setup.exe`，3813757 字节；此记录不代表安装/卸载或文件关联验收。参见 [NSIS 官方宏命令](https://nsis.sourceforge.io/Docs/Chapter5.html#macroundef)。
+
 根目录新增 `build.bat`（Windows）和 `build.sh`（macOS/Linux），共用 `scripts/package.mjs`。它们只执行本地 release 构建，不安装软件，不提交、推送或创建 Release，不启动/关闭已有编辑窗口。
 
 ## Windows：EXE 安装包

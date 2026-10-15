@@ -26,6 +26,13 @@ export function mainMenu(state: MainMenuState): MenuGroup[] {
       sep('insert-section'),format('link','插入链接'),format('image','插入图片'),format('table','插入表格')]},
     {id:'view',title:'视图',items:[checkbox('sidebar','显示侧边栏',state.sidebar),checkbox('outline','显示文档大纲',state.outline),checkbox('wrap','自动换行',state.wrap),
       sep('mode-section'),submenu('markdown-mode','Markdown 编辑模式',(['live','source','split'] as const).map(mode => ({type:'radio',id:`mode-${mode}`,commandId:`md-${mode}`,group:'markdown-mode',checked:state.markdownMode === mode,label:{live:'实时排版',source:'源码编辑',split:'双栏预览'}[mode]})),state.markdown),
-      checkbox('split-editor','编辑器分栏',state.split),checkbox('focus','专注模式',state.focus)]},
+      submenu('editor-layout','编辑器布局',[
+        cmd('split-right','向右拆分'),
+        cmd('split-down','向下拆分'),
+        cmd('maximize-pane','最大化当前编辑器'),
+        cmd('restore-pane','恢复编辑器布局'),
+        cmd('merge-panes','合并所有分栏'),
+      ]),
+      checkbox('focus','专注模式',state.focus)]},
   ]
 }

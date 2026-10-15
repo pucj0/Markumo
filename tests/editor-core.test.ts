@@ -20,8 +20,8 @@ function applyUndo(manager: DocumentManager, id: string, action = undo) {
 
 describe('语言识别和官方按需模块', () => {
   it('支持约定的扩展名、大小写和 Windows 路径，未知及无扩展名退回纯文本', () => {
-    const names = ['a.txt', 'a.md', 'a.markdown', 'a.json', 'a.jsonc', 'a.yml', 'a.yaml', 'a.toml', 'a.js', 'a.ts', 'a.jsx', 'a.tsx', 'a.vue', 'a.html', 'a.css', 'a.py', 'a.go', 'a.rs', 'a.sql', 'a.xml', 'a.ini', 'a.csv', 'a.log']
-    expect(names.map(detectLanguage)).toEqual(['Plain Text', 'Markdown', 'Markdown', 'JSON', 'JSONC', 'YAML', 'YAML', 'TOML', 'JavaScript', 'TypeScript', 'JSX', 'TSX', 'Vue', 'HTML', 'CSS', 'Python', 'Go', 'Rust', 'SQL', 'XML', 'INI', 'CSV', 'Log'])
+    const names = ['a.txt', 'a.md', 'a.markdown', 'a.bat', 'a.cmd', 'a.json', 'a.jsonc', 'a.yml', 'a.yaml', 'a.toml', 'a.js', 'a.ts', 'a.jsx', 'a.tsx', 'a.vue', 'a.html', 'a.css', 'a.py', 'a.go', 'a.rs', 'a.sql', 'a.xml', 'a.ini', 'a.csv', 'a.log']
+    expect(names.map(detectLanguage)).toEqual(['Plain Text', 'Markdown', 'Markdown', 'Batch', 'Batch', 'JSON', 'JSONC', 'YAML', 'YAML', 'TOML', 'JavaScript', 'TypeScript', 'JSX', 'TSX', 'Vue', 'HTML', 'CSS', 'Python', 'Go', 'Rust', 'SQL', 'XML', 'INI', 'CSV', 'Log'])
     expect(detectLanguage('C:\\notes\\README.MARKDOWN')).toBe('Markdown')
     expect(detectLanguage('Dockerfile')).toBe('Plain Text')
     expect(detectLanguage('.env')).toBe('Plain Text')

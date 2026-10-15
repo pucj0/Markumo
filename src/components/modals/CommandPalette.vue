@@ -38,7 +38,7 @@
             @mouseenter="selectedIndex = index"
             @click="executeItem(item)"
           >
-            <span class="title">{{ item.title }}</span>
+            <span class="title"><FileIcon v-if="item.fileName" :name="item.fileName" />{{ item.title }}</span>
             <span class="meta">{{ item.detail }}</span>
           </button>
 
@@ -61,6 +61,7 @@
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useModal } from '../../features/shell/useModal'
 import Icon from '../common/Icon.vue'
+import FileIcon from '../common/FileIcon.vue'
 import type { PaletteAction } from '../../types'
 
 const props = defineProps<{
@@ -210,7 +211,7 @@ defineExpose({ open, close, visible })
   transition: background 0.1s;
 }
 .title, .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.title { flex-shrink: 0; }
+.title { display:flex;align-items:center;gap:9px;min-width:0;flex-shrink:1; }
 
 .palrow:hover,
 .palrow.on {

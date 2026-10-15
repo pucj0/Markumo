@@ -11,12 +11,13 @@ import type DiscardDialog from '../components/modals/DiscardDialog.vue'
 import type Toast from '../components/common/Toast.vue'
 import { markdownFormats } from '../editor/markdown/formatCommands'
 import { FileController, fileError } from '../features/files/FileController'
+import { sameFilePath } from '../features/files/pathKey'
 import { AutoSaveController } from '../features/files/AutoSaveController'
 import { tauriFiles } from '../features/files/tauriFiles'
 import type { Encoding, FileOpenEncoding, Preferences } from '../features/files/contracts'
 import { WorkspaceController } from '../features/workspace/WorkspaceController'
 import { tauriWorkspace } from '../features/workspace/tauriWorkspace'
-import { defaultShortcuts, eventShortcut, fontFamilies, loadEditorSettings, saveEditorSettings, validateShortcuts, relativeFilePath, type EditorSettings, type ShortcutAction } from '../features/shell/editorSettings'
+import { currentSettingsVersion, defaultShortcuts, eventShortcut, fontFamilies, loadEditorSettings, saveEditorSettings, validateShortcuts, relativeFilePath, type EditorSettings, type ShortcutAction } from '../features/shell/editorSettings'
 import { readablePath } from '../features/shell/pathDisplay'
 import { CommandRegistry, recentFileCommand, recentWorkspaceCommand } from '../features/shell/menuModel'
 import { mainMenu } from '../features/shell/mainMenu'
@@ -27,6 +28,7 @@ import { EditorView } from '@codemirror/view'
 import { WindowCloseGuard, type CloseSource } from '../features/shell/WindowCloseGuard'
 import { initializeLaunch, sessionInput, SessionWriter } from '../features/shell/launchSession'
 import { invoke } from '@tauri-apps/api/core'
+import { defaultImageRules, imageRuleKey, ImageImporter, imageGateway, clipboardImages, isImageFile, type ImageRules, type ImageSource, type NativeImageInput } from '../editor/markdown/imageImport'
 
 export function useAppShell() {
   const desktop = isTauri()
@@ -40,7 +42,8 @@ export function useAppShell() {
   systemTheme.addEventListener('change', updateSystemTheme)
   const fontSize = ref(14), wordWrap = ref(false), showOutline = ref(false), defaultMdMode = ref<MarkdownMode>('live')
   const fontFamily = ref<EditorSettings['fontFamily']>('system'), indentSize = ref(2), useTabs = ref(false)
-  const autoSave = ref(true), autoSaveDelay = ref(1500)
+  const autoSave = ref(false), autoSaveDelay = ref(1500)
+  const imageRules = ref(defaultImageRules()), documentImageRules = ref<Record<string, ImageRules>>({})
   const shortcuts = ref<EditorSettings['shortcuts']>({ ...defaultShortcuts }), fileModes = ref<Record<string, MarkdownMode>>({})
   const customShortcuts = ref<ShortcutAction[]>([])
   let settingsReady = false, settingsTimer: ReturnType<typeof setTimeout> | undefined
@@ -78,10 +81,74 @@ export function useAppShell() {
   const mainActiveId = computed(() => { revision.value; return manager.group.activeId })
   const activeDoc = computed(() => { revision.value; return manager.activeDocument })
   const activeDocId = computed(() => { revision.value; return manager.activeId })
-  let pendingClose: { kind: 'document'; id: string; pane: 'main' | 'secondary' } | { kind: 'window' } | null = null
-  let tabCloseQueue: {id:string;pane:'main'|'secondary'}[]=[]
+  const currentDocumentImageRules = computed(() => activeDoc.value?.path ? documentImageRules.value[imageRuleKey(activeDoc.value.path)] || null : null)
+  function updateDocumentImageRules(rules: ImageRules | null) {
+    const doc = activeDoc.value
+    if (!doc?.fileToken || !doc.mode) return
+    const key = imageRuleKey(doc.path), next = { ...documentImageRules.value }
+    if (rules) next[key] = rules; else delete next[key]
+    documentImageRules.value = Object.fromEntries(Object.entries(next).slice(-100))
+  }
+  const imageImporter = new ImageImporter(manager,imageGateway,async id => {
+    toast('请先保存 Markdown 文档，再导入图片。')
+    return files.save(id)
+  },id => { const path=manager.metadata(id)?.path; return path && documentImageRules.value[imageRuleKey(path)] || imageRules.value })
+  async function importImages(id: string, sources: ImageSource[]) {
+    if (!desktop || fileBusy.value || files.workspaceBusy || files.saving.size || manager.isComposing || discardRef.value?.visible || settingsRef.value?.visible) {
+      await imageGateway.release(sources.filter((s):s is NativeImageInput=>'token' in s).map(s=>s.token)).catch(()=>{})
+      toast('请先完成当前文件操作，再导入图片。'); return
+    }
+    fileBusy.value=true
+    try { await imageImporter.insert(id,sources) }
+    catch(error){toast(fileError(error))}
+    finally { fileBusy.value=false; await refreshRecent();void drainPending() }
+  }
+  async function chooseImages() {
+    const doc=manager.activeDocument
+    if (!desktop || !doc?.mode || fileBusy.value || manager.isComposing) return
+    // Pin before asynchronous dialogs so opening a preview tab cannot release this document.
+    manager.pin(doc.id);fileBusy.value=true
+    try {
+      await imageImporter.insert(doc.id,()=>invoke<NativeImageInput[]>('choose_markdown_images'))
+    }catch(error){toast(fileError(error))}
+    finally{fileBusy.value=false;await refreshRecent();void drainPending()}
+  }
+  function imagePaste(event: ClipboardEvent) {
+    const target=event.target instanceof Element ? event.target : null
+    const view=target?.closest('.cm-editor') ? EditorView.findFromDOM(target.closest('.cm-editor')!) : null
+    const doc=manager.activeDocument
+    if (!doc?.mode || !view || !desktop) return
+    const images=Array.from(event.clipboardData?.files || []).filter(file=>file.type.startsWith('image/') || isImageFile(file.name))
+    if (!images.length)return
+    event.preventDefault();event.stopImmediatePropagation();void importImages(doc.id,images)
+  }
+  async function nativeFileDrop(payload: { inputs: NativeImageInput[]; x: number; y: number }) {
+    const target=document.elementFromPoint(payload.x,payload.y), pane=target?.closest<HTMLElement>('[data-pane-id],.pane')
+    const inEditor=!!target?.closest('.pane-body')
+    if(pane)manager.focusPane((pane.dataset.paneId || [...pane.classList].find(name=>name.startsWith('pane-'))?.slice(5) || (pane.classList.contains('secondary-pane')?'secondary':'main')) as Parameters<DocumentManager['focusPane']>[0],false)
+    const doc=manager.activeDocument, images=payload.inputs.filter(file=>isImageFile(file.name))
+    if (inEditor && doc?.mode && images.length) {
+      // Mixed drops inside Markdown are imports; never open a bitmap as a Hex tab.
+      const ignored=payload.inputs.filter(file=>!isImageFile(file.name))
+      await imageGateway.release(ignored.map(s=>s.token))
+      if(ignored.length)toast('已忽略非图片文件；请拖到编辑区外打开。')
+      const view=target?.closest('.cm-editor') ? EditorView.findFromDOM(target.closest('.cm-editor')!) : null
+      const position=view?.posAtCoords({x:payload.x,y:payload.y})
+      if(position!=null && !manager.isComposing)view?.dispatch({selection:{anchor:position}})
+      await importImages(doc.id,images)
+    }else{
+      if(fileBusy.value||manager.isComposing||discardRef.value?.visible){await imageGateway.release(payload.inputs.map(s=>s.token));toast('请完成当前操作后重新拖入文件。');return}
+      fileBusy.value=true
+      try{files.acceptBatch(await invoke('open_dropped_files',{tokens:payload.inputs.map(s=>s.token)}))}
+      finally{fileBusy.value=false;void refreshRecent()}
+    }
+  }
+  let pendingClose: { kind: 'document'; id: string; pane: string } | { kind: 'window' } | { kind: 'reopen'; id: string; encoding: FileOpenEncoding } | null = null
+  let tabCloseQueue: { id: string; pane: string }[] = []
   let unlistenWindow: UnlistenFn | undefined
   let unlistenPending: UnlistenFn | undefined
+  let unlistenActivate: UnlistenFn | undefined
+  let unlistenDrop: UnlistenFn | undefined
   let layoutTimer: ReturnType<typeof setTimeout> | undefined
   let preferencesReady = false
   let pendingDrain = false
@@ -145,10 +212,42 @@ export function useAppShell() {
     try { await (await import('@tauri-apps/api/window')).getCurrentWindow().close() }
     catch (error) { closeSource = 'native'; toast(`退出失败：${fileError(error)}`) }
   }
-  async function reopenEncoding(encoding: FileOpenEncoding) {
-    if (fileBusy.value) return
+  async function reopenEncoding(encoding: FileOpenEncoding, force = false) {
+    const doc = manager.activeDocument
+    if (!doc?.fileToken) { toast('请先打开真实文件。'); return }
+    if (doc.kind === 'javaClass' && encoding !== 'Hex') { toast('请使用“编辑文件字节”切回可编辑内容。'); return }
+    if (fileBusy.value || manager.isComposing) { composingHint(); return }
+    if (doc.dirty && !force) {
+      pendingClose = { kind: 'reopen', id: doc.id, encoding }
+      paletteRef.value?.close(); settingsRef.value?.close()
+      discardRef.value?.open(doc.name)
+      return
+    }
     fileBusy.value = true
-    try { await files.reopen(encoding) } finally { fileBusy.value = false; void drainPending() }
+    try { await files.reopen(encoding, true) } finally { fileBusy.value = false; void drainPending() }
+  }
+  async function convertEncoding(payload: { encoding: Encoding; bom: boolean }) {
+    const doc = manager.activeDocument
+    if (!doc?.fileToken) { toast('内存草稿请直接另存为；已有磁盘文件方可转换编码。'); return }
+    if (doc.kind === 'javaClass' || doc.encoding === 'Hex') { toast('二进制/字节模式不支持直接转换文本编码。'); return }
+    if (fileBusy.value || manager.isComposing) { composingHint(); return }
+    fileBusy.value = true
+    try {
+      const saved = await files.save(doc.id, false, payload.encoding, payload.bom)
+      if (saved) {
+        toast(`已将文件编码转换为 ${payload.encoding}${payload.bom ? ' (BOM)' : ''} 并保存`)
+        await refreshRecent()
+      }
+    } finally {
+      fileBusy.value = false
+      void drainPending()
+    }
+  }
+  function saveAsEncoding(encoding: Encoding) {
+    const doc = manager.activeDocument
+    if (!doc) return
+    if (doc.kind === 'javaClass' || doc.encoding === 'Hex') { toast('二进制/字节模式不支持直接转换文本编码。'); return }
+    void saveActive(true, encoding)
   }
   async function drainPending() {
     if (!desktop || !alive) return
@@ -157,10 +256,32 @@ export function useAppShell() {
     draining = true
     fileBusy.value = true
     try {
-      while (pendingDrain && alive) { pendingDrain = false; files.acceptBatch(await tauriFiles.drainPending()) }
+      while (pendingDrain && alive) {
+        pendingDrain = false
+        const batch = await tauriFiles.drainPending()
+        files.acceptBatch(batch)
+        // A file handed to us from the shell should end up focused and visible.
+        if (batch.files.length && !manager.isComposing) manager.focusPane(manager.activePane)
+      }
       await refreshRecent()
     } catch (error) { toast(fileError(error)) }
     finally { draining = false; fileBusy.value = false; advanceTabCloseQueue() }
+  }
+  // A file opened from the shell that this window already has: select the tab.
+  // The document is never re-read, so unsaved edits cannot be replaced.
+  async function activateExternal(paths: readonly string[]) {
+    if (!desktop || !alive || !paths.length) return
+    let activated = 0
+    for (const pane of manager.layout.getAllLeafIds()) {
+      for (const tab of manager.layout.getPane(pane)?.group.tabs || []) {
+        const doc = manager.metadata(tab.documentId)
+        if (!doc?.path || !paths.some(path => sameFilePath(path, doc.path))) continue
+        if (manager.open(doc.id, false, pane)) activated++
+      }
+    }
+    if (activated) { manager.focusPane(manager.activePane); return }
+    // The document was closed in the meantime: fall back to opening it again.
+    void drainPending()
   }
   function setMode(mode: AppMode) { appMode.value = mode; sidebarVisible.value = mode === 'workspace' }
   function toggleSidebar() { sidebarVisible.value = !sidebarVisible.value }
@@ -177,31 +298,32 @@ export function useAppShell() {
   function handleSelectDoc(id: string, preview = true) { if (!manager.open(id, preview) && manager.isComposing) composingHint() }
   function pinDocById(id: string) { manager.pin(id) }
   function createNewDoc() { if (startupLoading.value) return; if (!manager.createUntitled()) composingHint() }
-  function closeDocById(id: string, pane: 'main' | 'secondary' = 'main',queued=false) {
-    if(!queued)tabCloseQueue=[]
+  function closeDocById(id: string, pane: string = manager.activePane, queued = false) {
+    if (!queued) tabCloseQueue = []
     if (fileBusy.value) { toast('文件操作进行中，请稍后关闭。'); return }
     const result = files.close(id, false, pane)
     if (result === 'dirty') {
       pendingClose = { kind: 'document', id, pane }
       paletteRef.value?.close(); settingsRef.value?.close()
       discardRef.value?.open(manager.metadata(id)?.name || '文档')
-    } else if (result === 'composing') {tabCloseQueue=[];composingHint()}
-    else if(result==='saving')tabCloseQueue=[]
-    return result==='closed'||result==='missing'
+    } else if (result === 'composing') { tabCloseQueue = []; composingHint() }
+    else if (result === 'saving') tabCloseQueue = []
+    return result === 'closed' || result === 'missing'
   }
   function advanceTabCloseQueue() {
     // Saving also drains pending desktop opens. Resume only after that IPC has
     // released fileBusy; do not consume a queued close while it is blocked.
     while (tabCloseQueue.length && !fileBusy.value && !pendingClose && !discardRef.value?.visible) {
       const next = tabCloseQueue.shift()!
-      if (!closeDocById(next.id,next.pane,true)) break
+      if (!closeDocById(next.id, next.pane, true)) break
     }
   }
-  function closeOtherTabs(id:string,pane:'main'|'secondary') {
-    if(fileBusy.value||files.saving.size||manager.isComposing||discardRef.value?.visible){toast('请等待当前文件操作完成。');return}
-    if (!manager.select(id,pane)) return
-    const docs=pane==='main'?manager.mainOpenedDocuments:manager.secondaryOpenedDocuments
-    tabCloseQueue=docs.filter(doc=>doc.id!==id).map(doc=>({id:doc.id,pane}));advanceTabCloseQueue()
+  function closeOtherTabs(id: string, pane: string) {
+    if (fileBusy.value || files.saving.size || manager.isComposing || discardRef.value?.visible) { toast('请等待当前文件操作完成。'); return }
+    if (!manager.select(id, pane)) return
+    const paneModel = manager.layout.getPane(pane)
+    const docs = paneModel ? paneModel.group.tabs.map(t => manager.metadata(t.documentId)!).filter(Boolean) : []
+    tabCloseQueue = docs.filter(doc => doc.id !== id).map(doc => ({ id: doc.id, pane })); advanceTabCloseQueue()
   }
   function cancelPendingClose(){pendingClose=null;tabCloseQueue=[]}
   async function discardPending() {
@@ -209,6 +331,10 @@ export function useAppShell() {
     const pending = pendingClose
     pendingClose = null
     if (pending?.kind === 'document') files.close(pending.id, true, pending.pane)
+    else if (pending?.kind === 'reopen') {
+      fileBusy.value = true
+      try { await files.reopen(pending.encoding, true) } finally { fileBusy.value = false; void drainPending() }
+    }
     else if (pending?.kind === 'window') {
       try {
         await flushSettings()
@@ -224,6 +350,16 @@ export function useAppShell() {
   async function savePending() {
     const pending = pendingClose
     if (!pending || fileBusy.value || manager.isComposing) return
+    if (pending.kind === 'reopen') {
+      const saved = await saveDoc(pending.id)
+      if (saved) {
+        discardRef.value?.close()
+        pendingClose = null
+        fileBusy.value = true
+        try { await files.reopen(pending.encoding, true) } finally { fileBusy.value = false; void drainPending() }
+      }
+      return
+    }
     const ids = pending.kind === 'document' ? [pending.id] : manager.openedDocuments.filter(doc => doc.dirty).map(doc => doc.id)
     for (const id of ids) if (!await saveDoc(id)) return
     if (pendingClose !== pending || manager.isComposing || (pending.kind === 'window' && manager.hasDirtyDocuments)) return
@@ -286,6 +422,17 @@ export function useAppShell() {
     }
   }
 
+  async function revealInExplorerToken(token: string) {
+    if (token && desktop) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('reveal_in_explorer', { token })
+      } catch (e) {
+        toast(`在文件管理器显示失败: ${e}`)
+      }
+    }
+  }
+
   function zoomIn() {
     fontSize.value = Math.min(24, fontSize.value + 1)
   }
@@ -324,7 +471,7 @@ export function useAppShell() {
       { id:'focus',title:'专注模式',detail:'',category:'action',action:toggleFocus },
       { id:'explorer',title:'资源管理器',detail:'',category:'action',action:()=>{focusMode.value=false;appMode.value='workspace';sidebarPanel.value='files';sidebarVisible.value=true} },
       ...(['live','source','split'] as const).map(mode=>({id:`md-${mode}`,title:{live:'Markdown 实时排版',source:'Markdown 源码编辑',split:'Markdown 双栏预览'}[mode],detail:'',category:'action' as const,disabled:!activeDoc.value?.mode || manager.isComposing,action:()=>setMarkdownMode(mode)})),
-      ...markdownFormats.map(([id,title])=>({id:id==='bold'||id==='italic'?id:`format-${id}`,title,detail:'',category:'action' as const,disabled:activeDoc.value?.kind==='javaClass'||!activeDoc.value?.mode||manager.isComposing,action:()=>{manager.formatMarkdown(id)}})),
+      ...markdownFormats.map(([id,title])=>({id:id==='bold'||id==='italic'?id:`format-${id}`,title,detail:'',category:'action' as const,disabled:activeDoc.value?.kind==='javaClass'||!activeDoc.value?.mode||manager.isComposing||(id==='image'&&(!desktop||fileBusy.value||!!activeDoc.value?.readOnly)),action:()=>{if(id==='image')void chooseImages();else manager.formatMarkdown(id)}})),
       { id: 'open', title: '打开文件', detail: desktop ? 'Ctrl+O' : '需要 Tauri 桌面版', category: 'file', disabled: !desktop || fileBusy.value, action: () => void openFile() },
       { id: 'save', title: '保存文件', detail: 'Ctrl+S', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass', action: () => void saveActive() },
       { id: 'save-as', title: '另存为', detail: 'Ctrl+Shift+S', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass', action: () => void saveActive(true) },
@@ -338,6 +485,19 @@ export function useAppShell() {
       { id: 'lowercase', title: '选区转小写', detail: 'Ctrl+Alt+L', category: 'action', action: () => manager.transformSelection(false) },
       { id: 'goto-line', title: '转到指定行', detail: 'Ctrl+G', category: 'action', action: openGotoLine },
       { id: 'split-editor', title: manager.isSplit ? '关闭分栏' : '双 Pane 分栏编辑', detail: 'Ctrl+\\', category: 'action', action: toggleSplitPane },
+      { id: 'split-right', title: '向右拆分', detail: '', category: 'action', action: () => manager.splitPane('right') },
+      { id: 'split-down', title: '向下拆分', detail: '', category: 'action', action: () => manager.splitPane('bottom') },
+      { id: 'split-left', title: '向左拆分', detail: '', category: 'action', action: () => manager.splitPane('left') },
+      { id: 'split-up', title: '向上拆分', detail: '', category: 'action', action: () => manager.splitPane('top') },
+      { id: 'maximize-pane', title: '最大化当前编辑器', detail: '', category: 'action', action: () => manager.layout.maximizePane(manager.activePaneId) },
+      { id: 'restore-pane', title: '恢复编辑器布局', detail: '', category: 'action', action: () => manager.layout.restoreMaximized() },
+      { id: 'merge-panes', title: '合并所有分栏', detail: '', category: 'action', action: () => manager.mergeAllPanes() },
+      { id: 'close-current-pane', title: '关闭当前分栏', detail: '', category: 'action', disabled: !manager.isSplit, action: () => manager.closePane(manager.activePaneId) },
+      { id: 'focus-left-pane', title: '聚焦左侧分栏', detail: '', category: 'action', action: () => manager.layout.focusDirection('left') },
+      { id: 'focus-right-pane', title: '聚焦右侧分栏', detail: '', category: 'action', action: () => manager.layout.focusDirection('right') },
+      { id: 'focus-up-pane', title: '聚焦上方分栏', detail: '', category: 'action', action: () => manager.layout.focusDirection('up') },
+      { id: 'focus-down-pane', title: '聚焦下方分栏', detail: '', category: 'action', action: () => manager.layout.focusDirection('down') },
+      { id: 'focus-next-pane', title: '切换到下一个分栏', detail: '', category: 'action', action: () => manager.layout.focusNextPane() },
       { id: 'copy-path', title: '复制文件完整路径', detail: '剪贴板', category: 'action', disabled: !activeDoc.value?.path, action: () => void copyFullPath() },
       { id: 'copy-relative-path', title: '复制文件相对路径', detail: '剪贴板', category: 'action', disabled: !activeDoc.value?.path, action: () => void copyRelativePath() },
       { id: 'reveal-explorer', title: '在文件管理器中显示', detail: desktop ? '系统资源管理器' : '需要 Tauri 桌面版', category: 'action', disabled: !desktop || !activeDoc.value?.fileToken, action: () => void revealInExplorer() },
@@ -365,10 +525,11 @@ export function useAppShell() {
       ...encodings.map(encoding => ({ id: `open-${encoding}`, title: `按 ${encoding} 编码打开文件`, detail: '原生文件选择', category: 'action' as const, disabled: !desktop || fileBusy.value, action: () => void openFile(encoding) })),
       ...encodings.map(encoding => ({ id: `reopen-${encoding}`, title: `用 ${encoding} 编码重新打开`, detail: '需要先保存修改', category: 'action' as const, disabled: !desktop || !activeDoc.value?.fileToken || fileBusy.value, action: () => void reopenEncoding(encoding) })),
       ...workspace.recentWorkspaces.map(path => ({ id: recentWorkspaceCommand(path), title: `打开工作区：${path.split(/[\\/]/).pop()}`, detail: readablePath(path), category: 'action' as const, disabled: !desktop || fileBusy.value, action: () => void workspace.openWorkspacePath(path) })),
-      ...(demo ? manager.catalog : manager.openedDocuments).map(doc => ({ id: `file-${doc.id}`, title: doc.name, detail: doc.path || '未命名 · 内存草稿', category: 'file' as const, action: () => handleSelectDoc(doc.id) })),
+      ...(demo ? manager.catalog : manager.openedDocuments).map(doc => ({ id: `file-${doc.id}`, title: doc.name, fileName: doc.name, detail: doc.path || '未命名 · 内存草稿', category: 'file' as const, action: () => handleSelectDoc(doc.id) })),
       ...(paletteRef.value?.visible ? workspace.getAllKnownFiles() : []).map(file => ({
         id: `ws-${file.path}`,
         title: file.name,
+        fileName: file.name,
         detail: file.relativePath,
         category: 'file' as const,
         action: () => void workspace.openFile({
@@ -384,7 +545,7 @@ export function useAppShell() {
           hasChildren: false,
         })
       })),
-      ...recentFiles.value.map(file => ({ id: recentFileCommand(file.path), title: `最近：${file.name}`, detail: readablePath(file.path), category: 'file' as const, disabled: !desktop || fileBusy.value, action: () => void openRecent(file.path) }))]
+      ...recentFiles.value.map(file => ({ id: recentFileCommand(file.path), title: `最近：${file.name}`, fileName: file.name, detail: readablePath(file.path), category: 'file' as const, disabled: !desktop || fileBusy.value, action: () => void openRecent(file.path) }))]
   })
 
   const commandRegistry = computed(() => new CommandRegistry(paletteActions.value.map(action => ({
@@ -404,6 +565,15 @@ export function useAppShell() {
       else {
         const editor=element instanceof HTMLElement ? element.closest<HTMLElement>('.cm-editor') : null
         const view=(editor && EditorView.findFromDOM(editor)) || manager.activeEditorView
+        if(operation==='paste' && manager.activeDocument?.mode && desktop && view) {
+          if(fileBusy.value||manager.isComposing||files.workspaceBusy||files.saving.size)return
+          const id=manager.activeId!;manager.pin(id);fileBusy.value=true
+          const before=view.state
+          let hasImages=false
+          try { await imageImporter.insert(id,async()=>{const sources=await clipboardImages();hasImages=!!sources.length;return sources});if(hasImages)return }
+          finally{fileBusy.value=false;void drainPending()}
+          if(manager.activeId!==id||manager.activeEditorView!==view||view.state.doc!==before.doc||!view.state.selection.eq(before.selection))throw new Error('读取剪贴板期间文档或选区变化，已取消粘贴。')
+        }
         if(view) await editorClipboard(view,operation,textClipboard)
       }
     }catch(error){toast(fileError(error))}
@@ -417,6 +587,7 @@ export function useAppShell() {
     if (document.querySelector('.app-menu-popup') && document.activeElement?.closest('[data-menu-popup],.app-menu') && !(event.ctrlKey||event.metaKey||event.altKey)) return
     if (document.querySelector('.workspace-operation-dialog') || event.isComposing || alreadyHandled || manager.isComposing || paletteRef.value?.visible || settingsRef.value?.visible || discardRef.value?.visible || gotoLineRef.value?.visible) return
     const binding = event.key === '+' && shortcuts.value['zoom-in'] === 'Mod+=' && (event.ctrlKey || event.metaKey) && !event.altKey ? 'Mod+=' : eventShortcut(event)
+    if(desktop && binding==='Mod+V' && event.target instanceof Element && event.target.closest('.cm-content') && manager.activeDocument?.mode){event.preventDefault();event.stopPropagation();void clipboardAction('paste');return}
     const id = (Object.keys(shortcuts.value) as ShortcutAction[]).find(key => shortcuts.value[key] === binding)
     if (!id && Object.values(defaultShortcuts).includes(binding as typeof defaultShortcuts[ShortcutAction])) {
       event.preventDefault(); event.stopPropagation(); return
@@ -466,7 +637,7 @@ export function useAppShell() {
   watch([indentSize,useTabs], () => manager.setIndent(indentSize.value,useTabs.value), { immediate: true })
   function settingsSnapshot(): EditorSettings {
     return { theme: theme.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value,
-      defaultMdMode: defaultMdMode.value, indentSize: indentSize.value, useTabs: useTabs.value, shortcutVersion: 3, customShortcuts:[...customShortcuts.value], shortcuts: { ...shortcuts.value }, fileModes: { ...fileModes.value } }
+      defaultMdMode: defaultMdMode.value, indentSize: indentSize.value, useTabs: useTabs.value, imageRules:{...imageRules.value},documentImageRules:{...documentImageRules.value}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[...customShortcuts.value], shortcuts: { ...shortcuts.value }, fileModes: { ...fileModes.value } }
   }
   function flushSettings() {
     if (settingsTimer) clearTimeout(settingsTimer)
@@ -483,7 +654,7 @@ export function useAppShell() {
     shortcuts.value = value
   }
   watch([autoSave, autoSaveDelay], () => autoSaver.configure(desktop && settingsReady && autoSave.value, autoSaveDelay.value))
-  watch([theme,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay], () => {
+  watch([theme,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,imageRules,documentImageRules], () => {
     if (!settingsReady) return
     if (settingsTimer) clearTimeout(settingsTimer)
     settingsTimer = setTimeout(() => void flushSettings(),250)
@@ -505,6 +676,7 @@ export function useAppShell() {
   onMounted(async () => {
     if (desktop) fileBusy.value=true
     window.addEventListener('editor-notice', editorNotice)
+    window.addEventListener('paste',imagePaste,true)
     window.addEventListener('resize', adaptWindowWidth)
     window.addEventListener('keydown', handleGlobalKeydown, true)
     window.addEventListener('beforeunload', beforeUnload)
@@ -516,9 +688,13 @@ export function useAppShell() {
       if (!alive) return
       theme.value = settings.theme; fontSize.value = settings.fontSize; fontFamily.value = settings.fontFamily; wordWrap.value = settings.wordWrap
       autoSave.value = settings.autoSave; autoSaveDelay.value = settings.autoSaveDelay
+      imageRules.value=settings.imageRules;documentImageRules.value=settings.documentImageRules
       showOutline.value = settings.showOutline; defaultMdMode.value = settings.defaultMdMode; indentSize.value = settings.indentSize; useTabs.value = settings.useTabs
       shortcuts.value = settings.shortcuts; fileModes.value = settings.fileModes; manager.setFileModes(settings.fileModes)
       customShortcuts.value=settings.customShortcuts
+      // An older version could not record who enabled automatic save. Preserve
+      // that value and tell the user once instead of silently overwriting it.
+      if (settings.legacyAutoSaveNotice) toast('自动保存此前已开启并已保留；如不需要可在“设置”中关闭。')
       await nextTick()
     } catch (error) { toast(`首选项读取失败，使用默认值：${fileError(error)}`) }
     settingsReady = true
@@ -556,6 +732,12 @@ export function useAppShell() {
       try {
         const unlisten = await (await import('@tauri-apps/api/window')).getCurrentWindow().listen('files-pending', () => void drainPending())
         if (alive) unlistenPending = unlisten; else unlisten()
+        // The router tells us when a double-clicked file is already open here:
+        // select that tab instead of reading the file again or adding a tab.
+        const stopActivate=await (await import('@tauri-apps/api/window')).getCurrentWindow().listen<string[]>('external-activate',event=>{void activateExternal(event.payload)})
+        if(alive)unlistenActivate=stopActivate;else stopActivate()
+        const stopDrop=await (await import('@tauri-apps/api/window')).getCurrentWindow().listen<{inputs:NativeImageInput[];x:number;y:number}>('native-file-drop',event=>{void nativeFileDrop(event.payload).catch(error=>toast(fileError(error)))})
+        if(alive)unlistenDrop=stopDrop;else stopDrop()
         const prefs = await tauriFiles.preferences()
         if (alive) {
           recentFiles.value = prefs.recent
@@ -571,10 +753,13 @@ export function useAppShell() {
   onUnmounted(() => {
     systemTheme.removeEventListener('change', updateSystemTheme)
     window.removeEventListener('editor-notice', editorNotice)
+    window.removeEventListener('paste',imagePaste,true)
     window.removeEventListener('resize', adaptWindowWidth)
     alive = false
     unlistenWindow?.()
     unlistenPending?.()
+    unlistenActivate?.()
+    unlistenDrop?.()
     if (layoutTimer) clearTimeout(layoutTimer)
     void flushSettings()
     window.removeEventListener('keydown', handleGlobalKeydown, true)
@@ -585,10 +770,11 @@ export function useAppShell() {
     sessionWriter?.dispose()
     autoSaver.dispose(); files.dispose(); workspace.destroy(); unsubscribeWorkspace(); unsubscribe(); manager.dispose()
   })
-  return { appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay,
+  return { appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay,imageRules,currentDocumentImageRules,updateDocumentImageRules,
     paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, mainOpenedDocuments, mainActiveId, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
     setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, selectDocById, handleSelectDoc,
     pinDocById, createNewDoc, closeDocById,closeOtherTabs,cancelPendingClose, discardPending, savePending, setLanguage, setMarkdownMode,
-    gotoLineRef, openGotoLine, handleGotoLine, toggleSplitPane, copyFullPath, copyRelativePath, revealInExplorer, zoomIn, zoomOut, resetZoom,
+    reopenEncoding, convertEncoding, saveAsEncoding,
+    gotoLineRef, openGotoLine, handleGotoLine, toggleSplitPane, copyFullPath, copyRelativePath, revealInExplorer, revealInExplorerToken, zoomIn, zoomOut, resetZoom,
     desktop, demo, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading }
 }

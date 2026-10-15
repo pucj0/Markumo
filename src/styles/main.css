@@ -46,23 +46,3 @@
   color: var(--muted);
   line-height: 1.2;
 }
-
-.fileext {
-  font-size: 9px;
-  font-weight: 700;
-  font-family: var(--font-mono);
-  padding: 2px 4px;
-  border-radius: 3px;
-  text-transform: uppercase;
-  flex: none;
-}
-
-.fileext.rs { background: rgba(226, 183, 122, 0.15); color: var(--yellow); }
-.fileext.md { background: rgba(156, 147, 244, 0.15); color: var(--accent); }
-.fileext.ts { background: rgba(130, 175, 255, 0.15); color: var(--blue); }
-.fileext.js { background: rgba(226, 183, 122, 0.15); color: var(--yellow); }
-.fileext.json { background: rgba(145, 206, 172, 0.15); color: var(--green); }
-.fileext.txt { background: rgba(155, 163, 179, 0.15); color: var(--sub); }
-.fileext.toml { background: rgba(230, 161, 198, 0.15); color: var(--pink); }
-.fileext.css { background: rgba(130, 175, 255, 0.15); color: var(--blue); }
-.fileext.log { background: rgba(110, 119, 135, 0.15); color: var(--muted); }

@@ -35,9 +35,54 @@
       "nsis": {
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"],
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "windows/installerHooks.nsh"
       }
     },
+    "fileAssociations": [
+      {
+        "ext": ["txt", "log", "ini", "cfg", "conf", "properties"],
+        "name": "Text Document",
+        "description": "文本文档 (LightEdit)",
+        "role": "Editor",
+        "mimeType": "text/plain"
+      },
+      {
+        "ext": ["md", "markdown"],
+        "name": "Markdown Document",
+        "description": "Markdown 文档 (LightEdit)",
+        "role": "Editor",
+        "mimeType": "text/markdown"
+      },
+      {
+        "ext": ["json", "jsonc"],
+        "name": "JSON Document",
+        "description": "JSON 文档 (LightEdit)",
+        "role": "Editor",
+        "mimeType": "application/json"
+      },
+      {
+        "ext": ["xml", "yaml", "yml"],
+        "name": "Data File",
+        "description": "配置文件 (LightEdit)",
+        "role": "Editor",
+        "mimeType": "text/plain"
+      },
+      {
+        "ext": ["js", "jsx", "ts", "tsx", "vue", "html", "css", "scss"],
+        "name": "Web Source File",
+        "description": "Web 源文件 (LightEdit)",
+        "role": "Editor",
+        "mimeType": "text/plain"
+      },
+      {
+        "ext": ["java", "py", "go", "rs", "sql", "sh", "bat", "cmd"],
+        "name": "Source Code File",
+        "description": "源代码文件 (LightEdit)",
+        "role": "Editor",
+        "mimeType": "text/plain"
+      }
+    ],
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"

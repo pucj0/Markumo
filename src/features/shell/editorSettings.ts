@@ -3,6 +3,7 @@ import type { MarkdownMode, ThemePreference } from '../../types'
 import { defaultKeymap, historyKeymap } from '@codemirror/commands'
 import { searchKeymap } from '@codemirror/search'
 import { foldKeymap } from '@codemirror/language'
+import { defaultImageRules, imageRulesFrom, type ImageRules } from '../../editor/markdown/imageImport'
 import { completionKeymap, closeBracketsKeymap } from '@codemirror/autocomplete'
 export const defaultShortcuts = {
   new: 'Mod+N', open: 'Mod+O', save: 'Mod+S', 'save-as': 'Mod+Shift+S',
@@ -22,17 +23,31 @@ export const shortcutLabels: Record<ShortcutAction, string> = {
   explorer:'资源管理器',
   'zoom-in': '放大字号', 'zoom-out': '缩小字号', 'zoom-reset': '恢复默认字号', undo: '撤销', redo: '重做', uppercase: '转为大写', lowercase: '转为小写',
 }
+/** Bumped when a stored preference needs migration. Version 4 made automatic
+ * save opt-in: files written by older versions always stored the old `true`
+ * default, so that value cannot prove intent. */
+export const currentSettingsVersion = 4
 export interface EditorSettings {
   theme: ThemePreference; fontSize: number; fontFamily: 'system' | 'consolas' | 'cascadia'
   wordWrap: boolean; showOutline: boolean; indentSize: number; useTabs: boolean; defaultMdMode: MarkdownMode
   autoSave: boolean; autoSaveDelay: number
+  imageRules: ImageRules
+  documentImageRules: Record<string, ImageRules>
+  settingsVersion: number
+  /** Transient migration notice for the UI. Never persisted. */
+  legacyAutoSaveNotice: boolean
   shortcutVersion: number
   customShortcuts: ShortcutAction[]
   shortcuts: Record<ShortcutAction, string>; fileModes: Record<string, MarkdownMode>
 }
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
 export function defaultSettings(): EditorSettings {
-  return { theme: 'system', fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: true, autoSaveDelay: 1500, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
+  return { theme: 'system', fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
+}
+/** Drop the transient migration notice before writing preferences to disk. */
+export function persistedSettings(settings: EditorSettings) {
+  const { legacyAutoSaveNotice: _transient, ...persisted } = settings
+  return persisted
 }
 export function normalizeShortcut(raw: string) {
   const parts = raw.trim().split('+'), key = parts.pop() || ''
@@ -72,10 +87,26 @@ export function settingsFrom(raw: unknown): EditorSettings {
   const defaults = defaultSettings()
   if (!raw || typeof raw !== 'object') return defaults
   const s = raw as Partial<EditorSettings>
+  defaults.imageRules = imageRulesFrom(s.imageRules)
+  if (s.documentImageRules && typeof s.documentImageRules === 'object') for (const [path,rules] of Object.entries(s.documentImageRules).slice(-100)) {
+    if (path && path.length <= 4096 && !['__proto__','constructor','prototype'].includes(path)) Object.defineProperty(defaults.documentImageRules,path,{value:imageRulesFrom(rules),enumerable:true,configurable:true,writable:true})
+  }
   if (s.theme === 'dark' || s.theme === 'light' || s.theme === 'system') defaults.theme = s.theme
   if (Number.isInteger(s.fontSize) && s.fontSize! >= 10 && s.fontSize! <= 24) defaults.fontSize = s.fontSize!
   if (s.fontFamily && ['system','consolas','cascadia'].includes(s.fontFamily)) defaults.fontFamily = s.fontFamily
-  for (const key of ['wordWrap','showOutline','useTabs','autoSave'] as const) if (typeof s[key] === 'boolean') defaults[key] = s[key]!
+  for (const key of ['wordWrap','showOutline','useTabs'] as const) if (typeof s[key] === 'boolean') defaults[key] = s[key]!
+  // Automatic save is opt-in. A file written by an older version could not
+  // record who enabled it, so an ambiguous legacy `true` is preserved (never
+  // overwritten) and surfaced as a one-time notice instead. From version 4 on,
+  // the stored value is written only by the settings UI and is authoritative.
+  const legacySettings = !(Number.isInteger(s.settingsVersion) && s.settingsVersion! >= currentSettingsVersion)
+  if (typeof s.autoSave === 'boolean') {
+    defaults.autoSave = s.autoSave
+    defaults.legacyAutoSaveNotice = legacySettings && s.autoSave
+  } else if (legacySettings && s.autoSave !== undefined) {
+    // A non-boolean legacy value is corrupt; fall back to the new safe default.
+    defaults.legacyAutoSaveNotice = false
+  }
   if (Number.isInteger(s.autoSaveDelay) && s.autoSaveDelay! >= 500 && s.autoSaveDelay! <= 10000) defaults.autoSaveDelay = s.autoSaveDelay!
   if (Number.isInteger(s.indentSize) && s.indentSize! >= 1 && s.indentSize! <= 8) defaults.indentSize = s.indentSize!
   if (['live','source','split'].includes(s.defaultMdMode || '')) defaults.defaultMdMode = s.defaultMdMode!
@@ -123,8 +154,9 @@ export async function loadEditorSettings(): Promise<EditorSettings> {
   return settingsFrom(isTauri() ? await invoke('load_editor_settings') : JSON.parse(localStorage.getItem('lightedit.settings.v1') || 'null'))
 }
 export async function saveEditorSettings(settings: EditorSettings) {
-  if (isTauri()) await invoke('save_editor_settings', { settings })
-  else localStorage.setItem('lightedit.settings.v1', JSON.stringify(settings))
+  const payload = persistedSettings(settings)
+  if (isTauri()) await invoke('save_editor_settings', { settings: payload })
+  else localStorage.setItem('lightedit.settings.v1', JSON.stringify(payload))
 }
 export function relativeFilePath(path: string, root: string | null) {
   if (!root) return path

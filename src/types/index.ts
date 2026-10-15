@@ -45,5 +45,6 @@ export interface PaletteAction {
   detail: string
   category: 'action' | 'file'
   disabled?: boolean
+  fileName?: string
   action: () => void
 }

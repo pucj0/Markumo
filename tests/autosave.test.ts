@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DocumentManager } from '../src/editor/core/DocumentManager'
 import { FileController } from '../src/features/files/FileController'
 import { AutoSaveController } from '../src/features/files/AutoSaveController'
-import { defaultSettings, settingsFrom } from '../src/features/shell/editorSettings'
+import { defaultSettings, persistedSettings, settingsFrom, currentSettingsVersion } from '../src/features/shell/editorSettings'
 import type { FileGateway, FileMetadata, OpenFile } from '../src/features/files/contracts'
 
 const cleanups: (() => void)[] = []
@@ -23,11 +23,27 @@ function setup() {
   return { manager, files, autosave, id, file, save, target, notify, edit, block: (value: boolean) => { blocked = value } }
 }
 describe('automatic saves use the existing safe file controller', () => {
-  it('defaults on, preserves explicit off and rejects invalid delays in old settings', () => {
-    expect(defaultSettings().autoSave).toBe(true)
+  it('is opt-in by default, preserves explicit or ambiguous legacy choices and rejects invalid delays', () => {
+    // A new installation never starts writing to disk on its own.
+    expect(defaultSettings().autoSave).toBe(false)
+    expect(defaultSettings().settingsVersion).toBe(currentSettingsVersion)
+    expect(settingsFrom({theme:'dark'}).autoSave).toBe(false)
+    expect(settingsFrom({theme:'dark'}).legacyAutoSaveNotice).toBe(false)
     expect(settingsFrom({theme:'dark'}).autoSaveDelay).toBe(1500)
+    // A legacy file cannot prove intent, so an enabled value is kept (never
+    // overwritten) and reported once instead of being silently dropped.
+    const legacyOn = settingsFrom({theme:'dark',autoSave:true})
+    expect(legacyOn.autoSave).toBe(true)
+    expect(legacyOn.legacyAutoSaveNotice).toBe(true)
+    // A legacy explicit "off" and a current-version explicit value are trusted.
+    expect(settingsFrom({autoSave:false}).autoSave).toBe(false)
+    expect(settingsFrom({autoSave:false}).legacyAutoSaveNotice).toBe(false)
+    expect(settingsFrom({settingsVersion:currentSettingsVersion,autoSave:true})).toMatchObject({autoSave:true,legacyAutoSaveNotice:false})
+    expect(settingsFrom({settingsVersion:currentSettingsVersion,autoSave:false})).toMatchObject({autoSave:false,legacyAutoSaveNotice:false})
     expect(settingsFrom({autoSave:false,autoSaveDelay:3000})).toMatchObject({autoSave:false,autoSaveDelay:3000})
     expect(settingsFrom({autoSaveDelay:0}).autoSaveDelay).toBe(1500)
+    // The transient notice must never reach disk.
+    expect(persistedSettings(settingsFrom({autoSave:true}))).not.toHaveProperty('legacyAutoSaveNotice')
   })
   it('debounces text edits but not cursor movement, shares one save across split views and keeps encoding', async () => {
     const s = setup(); s.manager.splitEditor(); s.edit('a')

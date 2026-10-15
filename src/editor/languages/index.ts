@@ -2,11 +2,11 @@ import type { Extension } from '@codemirror/state'
 import { StreamLanguage, LanguageDescription, LanguageSupport } from '@codemirror/language'
 import { markdownSyntaxExtensions } from '../markdown/semantics'
 
-export const languageNames = ['Plain Text', 'Markdown', 'JSON', 'JSONC', 'YAML', 'TOML', 'JavaScript', 'TypeScript', 'JSX', 'TSX', 'Vue', 'HTML', 'CSS', 'Python', 'Go', 'Rust', 'SQL', 'XML', 'INI', 'CSV', 'Log'] as const
+export const languageNames = ['Plain Text', 'Markdown', 'Batch', 'JSON', 'JSONC', 'YAML', 'TOML', 'JavaScript', 'TypeScript', 'JSX', 'TSX', 'Vue', 'HTML', 'CSS', 'Python', 'Go', 'Rust', 'SQL', 'XML', 'INI', 'CSV', 'Log'] as const
 export type LanguageName = typeof languageNames[number]
 
 const extensions: Record<string, LanguageName> = {
-  md: 'Markdown', markdown: 'Markdown', txt: 'Plain Text', bat:'Plain Text', cmd:'Plain Text', log: 'Log', csv: 'CSV',
+  md: 'Markdown', markdown: 'Markdown', txt: 'Plain Text', bat: 'Batch', cmd: 'Batch', log: 'Log', csv: 'CSV',
   json: 'JSON', jsonc: 'JSONC', yaml: 'YAML', yml: 'YAML', toml: 'TOML',
   js: 'JavaScript', mjs: 'JavaScript', cjs: 'JavaScript', ts: 'TypeScript', jsx: 'JSX', tsx: 'TSX',
   vue: 'Vue', html: 'HTML', htm: 'HTML', css: 'CSS', py: 'Python', go: 'Go', rs: 'Rust',
@@ -21,6 +21,7 @@ export function detectLanguage(name: string): LanguageName {
 
 const loaders: Record<LanguageName, () => Promise<Extension>> = {
   'Plain Text': async () => [], CSV: async () => [], Log: async () => [],
+  Batch: async () => (await import('./batch')).batch(),
   Markdown: async () => {
     const { markdownSmartEditing } = await import('../markdown/smartEditing')
     const { markdown } = await import('@codemirror/lang-markdown')

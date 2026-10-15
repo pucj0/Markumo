@@ -16,11 +16,26 @@ pub struct EditorSettings {
     default_md_mode: String,
     auto_save: bool,
     auto_save_delay: u32,
+    image_rules: ImageRules,
+    document_image_rules: BTreeMap<String, ImageRules>,
+    #[serde(default = "legacy_settings_version")]
+    settings_version: u8,
     #[serde(default = "legacy_shortcut_version")]
     shortcut_version: u8,
     custom_shortcuts: Vec<String>,
     shortcuts: BTreeMap<String, String>,
     file_modes: BTreeMap<String, String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageRules {
+    location: String, custom_directory: String, relative: bool, dot_prefix: bool, escape: bool,
+}
+impl Default for ImageRules {
+    fn default()->Self { Self{location:"assets".into(),custom_directory:"./assets/".into(),relative:true,dot_prefix:true,escape:true} }
+}
+fn valid_image_rules(rules: &ImageRules)->bool {
+    ["original","sibling","assets","document","custom"].contains(&rules.location.as_str()) && rules.custom_directory.len()<=4096 && !rules.custom_directory.contains('\0')
 }
 impl Default for EditorSettings {
     fn default() -> Self {
@@ -33,14 +48,23 @@ impl Default for EditorSettings {
             indent_size: 2,
             use_tabs: false,
             default_md_mode: "live".into(),
-            auto_save: true,
+            auto_save: false,
             auto_save_delay: 1500,
+            image_rules: ImageRules::default(),
+            document_image_rules: BTreeMap::new(),
+            settings_version: 4,
             shortcut_version: 3,
             custom_shortcuts: Vec::new(),
             shortcuts: BTreeMap::new(),
             file_modes: BTreeMap::new(),
         }
     }
+}
+/// Files written before settings provenance existed carry no version field.
+/// They are read as version 1 so a legacy `autoSave` value is preserved rather
+/// than replaced by the new opt-in default.
+fn legacy_settings_version() -> u8 {
+    1
 }
 fn legacy_shortcut_version() -> u8 {
     1
@@ -51,12 +75,16 @@ fn validate(settings: &EditorSettings) -> Result<(), String> {
         || !["system", "consolas", "cascadia"].contains(&settings.font_family.as_str())
         || !(1..=8).contains(&settings.indent_size)
         || !(500..=10000).contains(&settings.auto_save_delay)
+        || !(1..=4).contains(&settings.settings_version)
         || !(1..=3).contains(&settings.shortcut_version)
         || settings.custom_shortcuts.len() > 32
         || settings.custom_shortcuts.iter().any(|id| id.len()>64)
         || !["live", "source", "split"].contains(&settings.default_md_mode.as_str())
         || settings.file_modes.len() > 100
         || settings.shortcuts.len() > 32
+        || !valid_image_rules(&settings.image_rules)
+        || settings.document_image_rules.len()>100
+        || settings.document_image_rules.iter().any(|(key,value)|key.len()>16384||!valid_image_rules(value))
     {
         return Err("首选项超出支持范围".into());
     }
@@ -124,6 +152,17 @@ pub async fn save_editor_settings(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn image_rules_defaults_and_document_overrides_roundtrip_without_touching_markdown() {
+        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("settings.json");
+        let mut settings=super::load(&path).unwrap();assert_eq!(settings.image_rules.location,"assets");
+        settings.image_rules.location="original".into();
+        let mut rule=super::ImageRules::default();rule.location="custom".into();rule.custom_directory="./${filename}.assets/中文 图片".into();
+        settings.document_image_rules.insert("c:/中文.md".into(),rule);
+        super::save(&path,&settings).unwrap();let loaded=super::load(&path).unwrap();
+        assert_eq!(loaded.image_rules.location,"original");assert_eq!(loaded.document_image_rules["c:/中文.md"].custom_directory,"./${filename}.assets/中文 图片");
+        settings.image_rules.location="upload".into();assert!(super::save(&path,&settings).is_err());
+    }
+    #[test]
     fn shortcut_version_distinguishes_legacy_from_explicit_preferences() {
         let legacy: super::EditorSettings = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
         assert_eq!(legacy.shortcut_version, 1);
@@ -137,9 +176,15 @@ mod tests {
     fn automatic_save_defaults_and_explicit_preferences_are_validated_and_persisted() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
+        // A fresh installation never enables automatic save.
+        let fresh = super::load(&path).unwrap();
+        assert!(!fresh.auto_save);
+        assert_eq!(fresh.settings_version, 4);
+        // A legacy file without provenance keeps its stored value as version 1.
         std::fs::write(&path, br#"{"theme":"light"}"#).unwrap();
         let mut settings = super::load(&path).unwrap();
-        assert!(settings.auto_save);
+        assert_eq!(settings.settings_version, 1);
+        assert!(!settings.auto_save);
         assert_eq!(settings.auto_save_delay, 1500);
         settings.auto_save = false;
         settings.auto_save_delay = 3000;
@@ -148,6 +193,27 @@ mod tests {
         settings.auto_save_delay = 0;
         assert!(super::save(&path, &settings).is_err());
         assert_eq!(super::load(&path).unwrap().auto_save_delay, 3000);
+        settings.auto_save_delay = 3000;
+        settings.settings_version = 5;
+        assert!(super::save(&path, &settings).is_err());
+        assert_eq!(super::load(&path).unwrap().settings_version, 1);
+    }
+    #[test]
+    fn legacy_explicit_auto_save_survives_migration_while_new_installs_stay_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Ambiguous legacy `true` is preserved byte-for-byte, not overwritten.
+        std::fs::write(&path, br#"{"theme":"system","autoSave":true,"autoSaveDelay":2000}"#).unwrap();
+        let legacy = super::load(&path).unwrap();
+        assert!(legacy.auto_save);
+        assert_eq!(legacy.settings_version, 1);
+        // Explicitly disabled legacy value is also preserved.
+        std::fs::write(&path, br#"{"theme":"system","autoSave":false}"#).unwrap();
+        assert!(!super::load(&path).unwrap().auto_save);
+        // New settings objects written by this version stay off unless enabled.
+        let current = super::EditorSettings::default();
+        assert!(!current.auto_save);
+        assert_eq!(current.settings_version, 4);
     }
     #[test]
     fn theme_preferences_survive_restart_and_invalid_theme_preserves_previous_file() {
