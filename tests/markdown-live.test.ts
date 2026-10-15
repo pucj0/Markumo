@@ -253,7 +253,10 @@ describe('Markdown Live Preview Core (Phase 5)', () => {
     const state = EditorState.create({ doc: text, selection: EditorSelection.create([EditorSelection.cursor(text.indexOf('first')), EditorSelection.cursor(text.indexOf('second'))]), extensions: [EditorState.allowMultipleSelections.of(true), markdown({ extensions: [GFM] })] })
     const decorations = buildLiveDecorationsForState(state)
     let hidden = false
-    decorations.between(0, text.length, (_from, _to, value) => { if (value.spec.class === 'cm-md-mark-hidden') hidden = true })
+    // Fence markers now have their own inactive rendering; selected inline
+    // syntax and literal code contents must still remain editable source.
+    decorations.between(0, text.indexOf('```js'), (from, _to, value) => { if (from<text.indexOf('```js') && value.spec.class === 'cm-md-mark-hidden') hidden = true })
+    decorations.between(text.indexOf('**literal**'), text.indexOf('**literal**')+11, (_from, _to, value) => { if (value.spec.class === 'cm-md-mark-hidden') hidden = true })
     expect(hidden).toBe(false)
     expect(state.doc.toString()).toBe(text)
   })

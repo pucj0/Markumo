@@ -15,7 +15,13 @@ use crate::{
     },
 };
 
-pub type WorkspaceStore = Arc<Mutex<WorkspaceService>>;
+#[derive(Default)]
+pub struct WorkspaceStore { windows: Mutex<std::collections::HashMap<String, Arc<Mutex<WorkspaceService>>>> }
+impl WorkspaceStore {
+    pub fn insert(&self,label:&str,service:WorkspaceService)->Result<(),String>{self.windows.lock().map_err(|e|e.to_string())?.insert(label.into(),Arc::new(Mutex::new(service)));Ok(())}
+    pub fn for_window(&self,label:&str)->Result<Arc<Mutex<WorkspaceService>>,String>{self.windows.lock().map_err(|e|e.to_string())?.get(label).cloned().ok_or_else(||"窗口工作区尚未初始化".into())}
+    pub fn remove(&self,label:&str){if let Ok(mut windows)=self.windows.lock(){windows.remove(label);}}
+}
 
 #[derive(Serialize, Clone)]
 pub struct SearchDonePayload {
@@ -31,6 +37,8 @@ pub async fn open_workspace_dialog(
     store: State<'_, WorkspaceStore>,
     add: Option<bool>,
 ) -> Result<Option<WorkspaceInfo>, String> {
+    let store = store.for_window(window.label())?;
+
     let folder = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
@@ -60,9 +68,12 @@ pub async fn open_workspace_dialog(
 
 #[tauri::command]
 pub async fn remove_workspace_folder(
+    window: Window,
     path: String,
     store: State<'_, WorkspaceStore>,
 ) -> Result<(), String> {
+    let store = store.for_window(window.label())?;
+
     let store = Arc::clone(&store);
     tauri::async_runtime::spawn_blocking(move || {
         store
@@ -76,8 +87,11 @@ pub async fn remove_workspace_folder(
 
 #[tauri::command]
 pub async fn restore_workspace_folders(
+    window: Window,
     store: State<'_, WorkspaceStore>,
 ) -> Result<Vec<WorkspaceInfo>, String> {
+    let store = store.for_window(window.label())?;
+
     let store = Arc::clone(&store);
     tauri::async_runtime::spawn_blocking(move || {
         store
@@ -91,10 +105,13 @@ pub async fn restore_workspace_folders(
 
 #[tauri::command]
 pub async fn open_workspace_path(
+    window: Window,
     path: String,
     store: State<'_, WorkspaceStore>,
     add: Option<bool>,
 ) -> Result<WorkspaceInfo, String> {
+    let store = store.for_window(window.label())?;
+
     let path_buf = PathBuf::from(path);
     let service = Arc::clone(&store);
     tauri::async_runtime::spawn_blocking(move || {
@@ -118,11 +135,15 @@ pub async fn open_workspace_path(
 
 #[tauri::command]
 pub async fn open_workspace_file(
+    window: Window,
     path: String,
     encoding: Option<String>,
     ws_store: State<'_, WorkspaceStore>,
     file_store: State<'_, FileStore>,
 ) -> Result<OpenFile, String> {
+    let ws_store = ws_store.for_window(window.label())?;
+    let owner = window.label().to_owned();
+
     let path_buf = PathBuf::from(&path);
     let fstore = Arc::clone(&file_store);
     let ws_store = Arc::clone(&ws_store);
@@ -132,6 +153,7 @@ pub async fn open_workspace_file(
         let valid_path = crate::workspace::guard::validate_under_root(root, &path_buf)
             .map_err(|e| e.to_string())?;
         let mut fs = fstore.lock().map_err(|e| e.to_string())?;
+        fs.set_owner(&owner);
         fs.open_selected(valid_path, encoding.as_deref())
             .map_err(|e| e.to_string())
     })
@@ -141,9 +163,12 @@ pub async fn open_workspace_file(
 
 #[tauri::command]
 pub async fn read_directory(
+    window: Window,
     path: String,
     store: State<'_, WorkspaceStore>,
 ) -> Result<Vec<WorkspaceNode>, String> {
+    let store = store.for_window(window.label())?;
+
     let path_buf = PathBuf::from(path);
     let service = Arc::clone(&store);
     tauri::async_runtime::spawn_blocking(move || {
@@ -156,10 +181,13 @@ pub async fn read_directory(
 
 #[tauri::command]
 pub async fn create_workspace_file(
+    window: Window,
     parent_dir: String,
     name: String,
     store: State<'_, WorkspaceStore>,
 ) -> Result<WorkspaceNode, String> {
+    let store = store.for_window(window.label())?;
+
     let parent = PathBuf::from(parent_dir);
     let service = Arc::clone(&store);
     tauri::async_runtime::spawn_blocking(move || {
@@ -172,10 +200,13 @@ pub async fn create_workspace_file(
 
 #[tauri::command]
 pub async fn create_workspace_directory(
+    window: Window,
     parent_dir: String,
     name: String,
     store: State<'_, WorkspaceStore>,
 ) -> Result<WorkspaceNode, String> {
+    let store = store.for_window(window.label())?;
+
     let parent = PathBuf::from(parent_dir);
     let service = Arc::clone(&store);
     tauri::async_runtime::spawn_blocking(move || {
@@ -188,11 +219,15 @@ pub async fn create_workspace_directory(
 
 #[tauri::command]
 pub async fn rename_workspace_node(
+    window: Window,
     old_path: String,
     new_name: String,
     ws_store: State<'_, WorkspaceStore>,
     file_store: State<'_, FileStore>,
 ) -> Result<(String, String), String> {
+    let ws_store = ws_store.for_window(window.label())?;
+    let owner = window.label().to_owned();
+
     let old = PathBuf::from(&old_path);
     let ws_service = Arc::clone(&ws_store);
     let f_service = Arc::clone(&file_store);
@@ -202,6 +237,7 @@ pub async fn rename_workspace_node(
         let old =
             crate::workspace::guard::validate_under_root(root, &old).map_err(|e| e.to_string())?;
         let mut fs = f_service.lock().map_err(|e| e.to_string())?;
+        fs.set_owner(&owner);
         let res = ws.rename_node(&old, &new_name)?;
         let parent = old.parent().unwrap_or_else(|| std::path::Path::new(""));
         let new_path = parent.join(&new_name);
@@ -214,10 +250,13 @@ pub async fn rename_workspace_node(
 
 #[tauri::command]
 pub async fn delete_workspace_node(
+    window: Window,
     path: String,
     store: State<'_, WorkspaceStore>,
     file_store: State<'_, FileStore>,
 ) -> Result<String, String> {
+    let store = store.for_window(window.label())?;
+
     let target = PathBuf::from(path);
     let service = Arc::clone(&store);
     let f_service = Arc::clone(&file_store);
@@ -238,11 +277,15 @@ pub async fn delete_workspace_node(
 
 #[tauri::command]
 pub async fn move_workspace_node(
+    window: Window,
     src_path: String,
     dest_dir: String,
     store: State<'_, WorkspaceStore>,
     file_store: State<'_, FileStore>,
 ) -> Result<(String, String), String> {
+    let store = store.for_window(window.label())?;
+    let owner = window.label().to_owned();
+
     let src = PathBuf::from(src_path);
     let dest = PathBuf::from(dest_dir);
     let service = Arc::clone(&store);
@@ -258,6 +301,7 @@ pub async fn move_workspace_node(
         let dest =
             crate::workspace::guard::validate_under_root(root, &dest).map_err(|e| e.to_string())?;
         let mut files = f_service.lock().map_err(|e| e.to_string())?;
+        files.set_owner(&owner);
         let result = svc.move_node(&src, &dest)?;
         files.update_grant_path(&src, &dest.join(src.file_name().ok_or("无效文件名")?));
         Ok(result)
@@ -268,8 +312,11 @@ pub async fn move_workspace_node(
 
 #[tauri::command]
 pub async fn get_recent_workspaces(
+    window: Window,
     store: State<'_, WorkspaceStore>,
 ) -> Result<Vec<String>, String> {
+    let store = store.for_window(window.label())?;
+
     let service = Arc::clone(&store);
     let svc = service.lock().map_err(|e| e.to_string())?;
     Ok(svc.recent_workspaces())
@@ -282,6 +329,8 @@ pub async fn search_workspace(
     store: State<'_, WorkspaceStore>,
     search_manager: State<'_, SearchManager>,
 ) -> Result<usize, String> {
+    let store = store.for_window(window.label())?;
+
     let roots = {
         let svc = store.lock().map_err(|e| e.to_string())?;
         let roots = svc.roots();
@@ -291,7 +340,8 @@ pub async fn search_workspace(
         roots
     };
 
-    let cancel_token = search_manager.create_token(&query.search_id);
+    let scoped_id=format!("{}:{}",window.label(),query.search_id);
+    let cancel_token = search_manager.create_token(&scoped_id);
     let search_id = query.search_id.clone();
     let sm = search_manager.inner().clone();
     let win = window.clone();
@@ -319,7 +369,7 @@ pub async fn search_workspace(
             },
         );
 
-        sm.cleanup(&search_id, &cancel_token);
+        sm.cleanup(&scoped_id, &cancel_token);
         result
     })
     .await
@@ -328,9 +378,12 @@ pub async fn search_workspace(
 
 #[tauri::command]
 pub async fn set_workspace_ignored(
+    window: Window,
     show: bool,
     store: State<'_, WorkspaceStore>,
 ) -> Result<Vec<WorkspaceNode>, String> {
+    let store = store.for_window(window.label())?;
+
     let store = Arc::clone(&store);
     tauri::async_runtime::spawn_blocking(move || {
         let mut svc = store.lock().map_err(|e| e.to_string())?;
@@ -344,10 +397,13 @@ pub async fn set_workspace_ignored(
 
 #[tauri::command]
 pub async fn find_workspace_files(
+    window: Window,
     query: String,
     include_ignored: bool,
     store: State<'_, WorkspaceStore>,
 ) -> Result<Vec<crate::workspace::search::QuickFile>, String> {
+    let store = store.for_window(window.label())?;
+
     let store = Arc::clone(&store);
     tauri::async_runtime::spawn_blocking(move || {
         let roots = store.lock().map_err(|e| e.to_string())?.roots();
@@ -362,21 +418,26 @@ pub async fn find_workspace_files(
 
 #[tauri::command]
 pub async fn cancel_workspace_search(
+    window: Window,
     search_id: String,
     search_manager: State<'_, SearchManager>,
 ) -> Result<(), String> {
-    search_manager.cancel(&search_id);
+
+
+    search_manager.cancel(&format!("{}:{}",window.label(),search_id));
     Ok(())
 }
 
 #[tauri::command]
-pub async fn reveal_in_explorer(token: String, store: State<'_, FileStore>) -> Result<(), String> {
+pub async fn reveal_in_explorer(
+    window: Window,token: String, store: State<'_, FileStore>) -> Result<(), String> {
+    let owner = window.label().to_owned();
+
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let p = store
-            .lock()
-            .map_err(|e| e.to_string())?
-            .revealed_path(&token)
+        let mut service=store.lock().map_err(|e|e.to_string())?;
+        service.set_owner(&owner);
+        let p = service.revealed_path(&token)
             .map_err(|e| e.message)?;
         reveal_path(&p)
     })
@@ -385,8 +446,11 @@ pub async fn reveal_in_explorer(token: String, store: State<'_, FileStore>) -> R
 }
 
 #[tauri::command]
-pub async fn reveal_workspace_node(path: String, store: State<'_, WorkspaceStore>) -> Result<(),String> {
-    let store=store.inner().clone();
+pub async fn reveal_workspace_node(
+    window: Window,path: String, store: State<'_, WorkspaceStore>) -> Result<(),String> {
+    let store = store.for_window(window.label())?;
+
+    let store=store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let p=store.lock().map_err(|error|error.to_string())?.revealed_path(&std::path::PathBuf::from(path))?;
         reveal_path(&p)

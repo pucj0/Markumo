@@ -1,4 +1,5 @@
-export type Encoding = 'UTF-8' | 'UTF-16LE' | 'UTF-16BE' | 'GB18030' | 'windows-1252'
+export type Encoding = 'UTF-8' | 'UTF-16LE' | 'UTF-16BE' | 'GB18030' | 'windows-1252' | 'Hex'
+export type FileOpenEncoding = Encoding | 'ClassInfo'
 export interface FileMetadata {
   token: string
   path: string
@@ -29,10 +30,10 @@ export interface Preferences {
   warning?: string
 }
 export interface FileGateway {
-  openDialog(encoding?: Encoding): Promise<OpenBatch>
-  openRecent(path: string, encoding?: Encoding): Promise<OpenFile>
+  openDialog(encoding?: FileOpenEncoding): Promise<OpenBatch>
+  openRecent(path: string, encoding?: FileOpenEncoding): Promise<OpenFile>
   drainPending(): Promise<OpenBatch>
-  reopen(token: string, encoding: Encoding): Promise<OpenFile>
+  reopen(token: string, encoding: FileOpenEncoding): Promise<OpenFile>
   saveTarget(sourceToken: string | null, name: string): Promise<SaveTarget | null>
   save(token: string, text: string, expectedVersion: string | null, encoding: Encoding, bom: boolean): Promise<FileMetadata>
   release(token: string): Promise<void>

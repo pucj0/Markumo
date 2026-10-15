@@ -1,5 +1,6 @@
 import type { Extension } from '@codemirror/state'
-import { StreamLanguage, LanguageDescription } from '@codemirror/language'
+import { StreamLanguage, LanguageDescription, LanguageSupport } from '@codemirror/language'
+import { markdownSyntaxExtensions } from '../markdown/semantics'
 
 export const languageNames = ['Plain Text', 'Markdown', 'JSON', 'JSONC', 'YAML', 'TOML', 'JavaScript', 'TypeScript', 'JSX', 'TSX', 'Vue', 'HTML', 'CSS', 'Python', 'Go', 'Rust', 'SQL', 'XML', 'INI', 'CSV', 'Log'] as const
 export type LanguageName = typeof languageNames[number]
@@ -21,32 +22,24 @@ export function detectLanguage(name: string): LanguageName {
 const loaders: Record<LanguageName, () => Promise<Extension>> = {
   'Plain Text': async () => [], CSV: async () => [], Log: async () => [],
   Markdown: async () => {
+    const { markdownSmartEditing } = await import('../markdown/smartEditing')
     const { markdown } = await import('@codemirror/lang-markdown')
-    const { GFM } = await import('@lezer/markdown')
-    const codeLanguages = [
-      LanguageDescription.of({ name: 'JavaScript', alias: ['js'], load: async () => (await import('@codemirror/lang-javascript')).javascript() }),
-      LanguageDescription.of({ name: 'TypeScript', alias: ['ts'], load: async () => (await import('@codemirror/lang-javascript')).javascript({ typescript: true }) }),
-      LanguageDescription.of({ name: 'Rust', alias: ['rs'], load: async () => (await import('@codemirror/lang-rust')).rust() }),
-      LanguageDescription.of({ name: 'Python', alias: ['py'], load: async () => (await import('@codemirror/lang-python')).python() }),
-      LanguageDescription.of({ name: 'JSON', load: async () => (await import('@codemirror/lang-json')).json() }),
-      LanguageDescription.of({ name: 'HTML', load: async () => (await import('@codemirror/lang-html')).html() }),
-      LanguageDescription.of({ name: 'CSS', load: async () => (await import('@codemirror/lang-css')).css() }),
-    ]
-    return markdown({ extensions: [GFM], codeLanguages })
+    const codeLanguages = languageNames.filter(name => !['Plain Text','Markdown','CSV','Log'].includes(name)).map(name => LanguageDescription.of({ name, alias:Object.entries(extensions).filter(([,language])=>language===name).map(([extension])=>extension),load:async()=>await loadLanguage(name) as LanguageSupport }))
+    return [markdown({ extensions: markdownSyntaxExtensions, codeLanguages, addKeymap:false }), markdownSmartEditing]
   },
   JSON: async () => (await import('@codemirror/lang-json')).json(),
   JSONC: async () => {
     const { json } = await import('@codemirror/legacy-modes/mode/javascript')
-    return StreamLanguage.define(json)
+    return new LanguageSupport(StreamLanguage.define(json))
   },
   YAML: async () => (await import('@codemirror/lang-yaml')).yaml(),
   TOML: async () => {
     const { toml } = await import('@codemirror/legacy-modes/mode/toml')
-    return StreamLanguage.define(toml)
+    return new LanguageSupport(StreamLanguage.define(toml))
   },
   INI: async () => {
     const { properties } = await import('@codemirror/legacy-modes/mode/properties')
-    return StreamLanguage.define(properties)
+    return new LanguageSupport(StreamLanguage.define(properties))
   },
   JavaScript: async () => (await import('@codemirror/lang-javascript')).javascript(),
   TypeScript: async () => (await import('@codemirror/lang-javascript')).javascript({ typescript: true }),

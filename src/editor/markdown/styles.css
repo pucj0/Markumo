@@ -169,3 +169,25 @@
 .cm-md-table-tools button { color:var(--sub);padding:2px 6px;font:11px var(--font-sans) }
 .cm-md-table-tools button:hover { color:var(--bright);background:var(--hover) }
 [data-markdown-live] .cm-foldGutter { visibility:hidden }
+
+/* All vertical space is measured content or padding, never line margins. */
+.cm-md-fence-tools { display:inline-flex;align-items:center;gap:8px;margin-left:12px;vertical-align:baseline;font:11px var(--font-sans);color:var(--muted);white-space:nowrap }
+.cm-md-fence-tools button { padding:0 5px;color:var(--sub);border:1px solid var(--line);border-radius:4px;line-height:1.4;background:var(--paper);cursor:pointer }
+.cm-md-fence-tools button:hover { color:var(--bright);background:var(--hover) }
+.md-image-preview { box-sizing:border-box;max-width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--sub);font:12px/1.6 var(--font-sans);white-space:normal }
+.cm-md-image-block { display:block;padding:12px 18px;min-height:64px }
+.cm-md-image-inline { display:inline-block;vertical-align:middle;max-width:320px }
+.md-image-preview img { display:block;min-width:24px;min-height:24px;max-width:100%;max-height:220px;object-fit:contain;cursor:text }
+.cm-md-image-inline img { max-height:80px }
+.md-image-status { display:block;overflow-wrap:anywhere }
+.md-image-preview button { background:transparent;color:var(--blue);border:0;font:inherit;cursor:pointer }
+.md-image-path { display:block;max-width:100%;margin-top:6px;padding:0;overflow-wrap:anywhere;text-align:left;text-decoration:underline }
+.md-image-action { margin-left:8px }
+.md-image-action[hidden] { display:none }
+.tok-keyword,.tok-modifier { color:var(--pink) }
+.tok-string { color:var(--green) }
+.tok-comment { color:var(--muted) }
+.tok-number,.tok-bool,.tok-null { color:var(--yellow) }
+.tok-typeName,.tok-tagName,.tok-propertyName { color:var(--blue) }
+.md-preview-fence-header { display:flex;align-items:center;justify-content:space-between;padding:4px 8px;border:1px solid var(--line);border-bottom:0;background:var(--soft);border-radius:6px 6px 0 0;color:var(--muted);font:12px var(--font-sans) }
+.md-preview-fence-header button { font:inherit;color:var(--sub);background:transparent;cursor:pointer }

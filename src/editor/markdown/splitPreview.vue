@@ -12,44 +12,59 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onUnmounted } from 'vue'
-import MarkdownIt from 'markdown-it'
+import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import { openMarkdownLink } from './links'
+import { createMarkdownRenderer } from './rendering'
+import { createMarkdownResources, mountMarkdownImage, type MarkdownResources } from './images'
+import { textClipboard } from '../../features/shell/clipboard'
 
 const props = defineProps<{
   content: string
   tooLarge?: boolean
+  resources?: MarkdownResources
+  resourceKey?: string
 }>()
-const emit = defineEmits<{ (e: 'scroll-line', line: number): void }>()
+const emit = defineEmits<{ (e: 'scroll-line', line: number): void; (e:'edit-image',from:number,snapshot:string):void }>()
 
 const previewContainerRef = ref<HTMLElement | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
 
 // 实例化安全 markdown-it（禁用原始 html 执行）
-const md = new MarkdownIt({
-  html: false,
-  xhtmlOut: false,
-  breaks: true,
-  langPrefix: 'language-',
-  linkify: true,
-  typographer: true,
-})
-// Images degrade to text. Rendering must not fetch remote resources implicitly.
-md.renderer.rules.image = (tokens, index) => `<span class="md-image-source">${md.utils.escapeHtml(`![${tokens[index].content}](${tokens[index].attrGet('src') || ''})`)}</span>`
+const revision=ref(0);let disposed=false
+const md = createMarkdownRenderer(()=>{if(!disposed)revision.value++})
 const previewText = ref(props.content)
 let timer: ReturnType<typeof setTimeout> | undefined
 watch(() => props.content, content => {
   if (timer) clearTimeout(timer)
   timer = setTimeout(() => { previewText.value = content }, 80)
 })
-onUnmounted(() => { if (timer) clearTimeout(timer) })
+let mountedImages: ReturnType<typeof mountMarkdownImage>[]=[],hydrateGeneration=0
+onUnmounted(() => { disposed=true;if (timer) clearTimeout(timer);for(const image of mountedImages)image.destroy();mountedImages=[] })
 
 const renderedHtml = computed(() => {
+  revision.value
   if (props.tooLarge || previewText.value.length > 1024 * 1024) return '<p>文档较大，已暂停只读预览；源码仍可编辑。</p>'
   const tokens = md.parse(previewText.value || '', {})
   for (const token of tokens) if (token.map && token.nesting === 1 && token.level === 0) token.attrSet('data-source-line', String(token.map[0] + 1))
   return md.renderer.render(tokens, md.options, {})
 })
+const fallbackResources=createMarkdownResources(()=>undefined)
+watch([renderedHtml,()=>props.resources,()=>props.resourceKey],async()=>{
+  const generation=++hydrateGeneration,snapshot=previewText.value
+  for(const image of mountedImages)image.destroy();mountedImages=[]
+  await nextTick();if(disposed||generation!==hydrateGeneration)return
+  for(const button of Array.from(contentRef.value?.querySelectorAll<HTMLButtonElement>('[data-md-copy]')||[])) {
+    button.onmousedown=event=>event.preventDefault()
+    button.onclick=async()=>{
+      const code=button.closest('.md-preview-fence')?.querySelector('code')?.textContent||''
+      try{await textClipboard.writeText(code.replace(/\n$/,''));if(button.isConnected)button.textContent='已复制'}catch{if(button.isConnected)button.textContent='复制失败，请选中后复制'}
+    }
+  }
+  for(const host of Array.from(contentRef.value?.querySelectorAll<HTMLElement>('.md-image-slot')||[]).slice(0,64)) {
+    const source=host.dataset.mdSource||'',from=Number(host.dataset.sourceFrom||0)
+    mountedImages.push(mountMarkdownImage(host,source,host.dataset.mdAlt||'',props.resources||fallbackResources,()=>emit('edit-image',from,snapshot)))
+  }
+},{immediate:true,flush:'post'})
 function onLinkClick(event: MouseEvent) {
   const anchor = (event.target as HTMLElement).closest<HTMLAnchorElement>('a')
   if (!anchor) return

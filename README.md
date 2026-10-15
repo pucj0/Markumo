@@ -4,6 +4,10 @@
 
 **阶段状态以 [进度台账](docs/PHASE_PROGRESS.md) 为准，完整桌面人工验收尚未完成。** 已接入真实 Rust/Tauri 文件服务与工作区：打开、保存、另存为、最近文件、按需目录树、文件管理、快速打开和全文搜索。单文件与工作区共用 CodeMirror 文档状态。2026-10-14 Phase 4 复审及修复结果见 [验收报告](docs/PHASE4_REVIEW.md)；其他并行阶段的实现不等同于本轮已验收。
 
+## 打包安装程序
+
+Windows 双击根目录 `build.bat` 生成 EXE 安装包；macOS/Linux 在对应系统运行 `sh build.sh`，分别生成 APP/DMG、DEB/AppImage。可先运行 `build.bat --check` 或 `sh build.sh --check` 检查基本环境。输出位置、平台依赖和签名说明见 [打包说明](docs/PACKAGING.md)。
+
 ## 先在浏览器启动
 
 在浏览器编辑草稿时，不需要 Rust 或 Visual Studio；磁盘打开/保存按钮禁用，内容只在内存中。显式样例演示入口为 `http://localhost:1420/?demo=1`。

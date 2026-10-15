@@ -4,6 +4,8 @@ import { syntaxTree } from '@codemirror/language'
 import { CheckboxWidget, HorizontalRuleWidget, ListMarkerWidget } from './widgets'
 import { openMarkdownLink, safeMarkdownURL } from './links'
 import { tableField, tableComposition } from './tableField'
+import { imageField } from './imageField'
+import { CodeFenceToolbar, fenceModel } from './codeFence'
 
 const refresh = StateEffect.define<null>()
 const refreshGeneration = StateField.define({ create: () => 0, update: (value: number, tr) => tr.effects.some(effect => effect.is(refresh)) ? value + 1 : value })
@@ -38,6 +40,12 @@ export function buildLiveDecorationsForState(state: EditorState, visibleRanges: 
       const name = node.name
       if (['FencedCode', 'CodeBlock'].includes(name)) {
         for (let number = state.doc.lineAt(Math.max(node.from, from)).number; number <= state.doc.lineAt(Math.min(node.to, to)).number; number++) line(state.doc.line(number).from, 'cm-md-code-block')
+        if (name === 'FencedCode' && node.node.parent?.name === 'Document') {
+          const firstLine = state.doc.lineAt(node.from), model = fenceModel(state,node.node)
+          const editing=active(node.from,node.to)
+          if (firstLine.to >= from && firstLine.to <= to) add(firstLine.to, firstLine.to, Decoration.widget({widget:new CodeFenceToolbar(model.language,!editing),side:1}),`fence-${node.from}`)
+          if (!editing) for (const token of [...node.node.getChildren('CodeMark'),...node.node.getChildren('CodeInfo')]) hide(token.from,token.to)
+        }
         return false
       }
       if (['Table', 'Image'].includes(name)) return false
@@ -86,6 +94,9 @@ export function buildLiveDecorationsForState(state: EditorState, visibleRanges: 
           mark(Math.max(first.to, from), Math.min(textEnd, to), 'cm-md-link', url)
           if (!active(node.from, node.to)) { hide(first.from, first.to); hide(textEnd, node.to) }
         }
+      } else if (name === 'Autolink' || (name === 'URL' && !['Link','Image','Autolink'].includes(node.node.parent?.name || ''))) {
+        const raw=state.sliceDoc(node.from,node.to),url=safeMarkdownURL(raw.startsWith('www.')?`http://${raw}`:raw)
+        if(url)mark(Math.max(node.from,from),Math.min(node.to,to),'cm-md-link',url)
       }
     } })
   }
@@ -129,4 +140,4 @@ export const livePreviewPlugin = ViewPlugin.fromClass(class {
     event.preventDefault(); void openMarkdownLink(link); return true
   },
 } })
-export function livePreviewExtension(): Extension { return [refreshGeneration, tableField, tableComposition, livePreviewPlugin, EditorView.editorAttributes.of({ 'data-markdown-live': 'true' })] }
+export function livePreviewExtension(): Extension { return [refreshGeneration, tableField, imageField, tableComposition, livePreviewPlugin, EditorView.editorAttributes.of({ 'data-markdown-live': 'true' })] }

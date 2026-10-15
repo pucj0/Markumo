@@ -83,6 +83,7 @@ impl Default for WorkspaceService {
 }
 
 impl WorkspaceService {
+    pub fn disable_persistence(&mut self) { self.storage_path=None; }
     pub fn configure(&mut self, storage_path: PathBuf) {
         if let Ok(content) = fs::read_to_string(&storage_path) {
             if let Ok(prefs) = serde_json::from_str(&content) {

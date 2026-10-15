@@ -1,0 +1,98 @@
+# LightEdit 本地打包
+
+根目录新增 `build.bat`（Windows）和 `build.sh`（macOS/Linux），共用 `scripts/package.mjs`。它们只执行本地 release 构建，不安装软件，不提交、推送或创建 Release，不启动/关闭已有编辑窗口。
+
+## Windows：EXE 安装包
+
+双击项目根目录 **build.bat**，或在 CMD/PowerShell 中执行：
+
+```bat
+build.bat
+```
+
+PowerShell 当前目录运行写成 `.\build.bat`。脚本自动进入项目目录，因此也可以从其他目录调用。
+
+```bat
+build.bat --check
+build.bat --skip-install
+build.bat --help
+```
+
+- 默认先执行 `pnpm install --frozen-lockfile`，再使用现有 Tauri CLI 执行 `build --bundles nsis`。Tauri 的 `beforeBuildCommand` 会构建 Vue 前端，不重复构建两次。
+- `--check` 只检查 Node、pnpm、Rust/Cargo 和基本平台依赖，不安装依赖或编译；不能替代实际链接、打包和安装验证。
+- `--skip-install` 跳过依赖安装，适合已经安装好 node_modules 的机器。
+- 无参数双击运行会在结束时保留窗口；带参数或设置了 `CI` 时不暂停。失败返回非零退出码。
+
+正常默认输出：
+
+```text
+src-tauri/target/release/bundle/nsis/LightEdit_*_setup.exe
+```
+
+这是安装包；`src-tauri/target/release/lightedit.exe` 是应用程序本身。已有配置使用当前用户安装，无需改为管理员安装。未安装 WebView2 的用户可能需要联网下载运行时，沿用现有 `downloadBootstrapper` 配置。[Tauri Windows 安装包说明](https://v2.tauri.app/distribute/windows-installer/)
+
+环境：Node.js 18+（建议 LTS）、pnpm、Rust MSVC、Visual Studio 的“使用 C++ 的桌面开发”组件和 Windows SDK。安装完整 Visual Studio 也可以，前提是勾选了该 C++ 工作负载；VS Code 本身不提供链接器。脚本会临时把用户目录 `.cargo/bin` 加入 PATH，不修改系统 PATH。NSIS 工具及依赖可能在首次构建时下载。[官方前置环境](https://v2.tauri.app/start/prerequisites/)
+
+## macOS：APP 和 DMG
+
+在 **Mac** 上打开项目目录：
+
+```sh
+sh build.sh --check
+sh build.sh
+```
+
+输出：
+
+```text
+src-tauri/target/release/bundle/macos/LightEdit.app
+src-tauri/target/release/bundle/dmg/LightEdit_*.dmg
+```
+
+脚本显式选择 `app,dmg`，覆盖基础配置中 Windows 的 nsis 默认目标；复用当前图标 PNG，通过现有 Tauri icon 命令在 Cargo 生成目录派生 ICNS，不覆盖源图标。
+
+需要 Node/pnpm、Rust 和 Xcode Command Line Tools：`xcode-select --install`。默认按当前 Rust 工具链的架构构建；Apple Silicon 和 Intel 的包应分别在相应工具链环境构建，本脚本不自动安装其他 Rust target，不承诺通用双架构包。[Tauri DMG 构建](https://v2.tauri.app/distribute/dmg/)
+
+脚本不生成签名证书。对外分发需要按实际需要配置 Apple 签名和公证环境变量；已有签名变量会保留。不具备签名/公证条件时的构建不等于已通过其他用户机器上的 Gatekeeper 验收。[macOS 签名说明](https://v2.tauri.app/distribute/sign/macos/)
+
+## Linux：DEB 和 AppImage
+
+在 Linux 上打开项目目录：
+
+```sh
+sh build.sh --check
+sh build.sh
+```
+
+默认输出：
+
+```text
+src-tauri/target/release/bundle/deb/*.deb
+src-tauri/target/release/bundle/appimage/*.AppImage
+```
+
+Ubuntu/Debian 环境除 Node/pnpm/Rust 外，需要系统开发依赖，例如：
+
+```sh
+sudo apt update
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config
+```
+
+脚本不会自动运行 sudo 或修改系统软件包。不同发行版使用各自的软件包名称，见 [官方 Linux 前置依赖](https://v2.tauri.app/start/prerequisites/#linux)。AppImage 构建建议使用准备支持的较旧兼容基线，例如 Ubuntu 22.04/Debian 12；实际兼容性还需在目标发行版验收。[AppImage 构建与兼容性](https://v2.tauri.app/distribute/appimage/)
+
+## 平台、输出与错误处理
+
+- **BAT 不能在 Windows 上直接生成 Mac DMG 或 Linux 原生包。** 本脚本采用对应系统本机构建，跨平台请求会明确报错。没有相应机器时，可将同一项目放到对应系统的 VM 或 CI runner，再运行相同入口；本轮不配置或触发云端构建。
+- 可以显式指定本机平台：`build.bat --platform windows`、`sh build.sh --platform macos`、`sh build.sh --platform linux`。
+- 复用现有 NSIS 配置、Cargo.lock、pnpm-lock.yaml 和签名/代理变量；不引入新依赖。移除继承的 `TAURI_CONFIG` 和开发启动覆盖变量，避免测试数据目录混入生产包。若需要额外生产配置，应编辑仓库配置或直接运行明确配置的 Tauri 命令。
+- `CARGO_TARGET_DIR` 通过 Cargo metadata 识别；环境中的 `CARGO_BUILD_TARGET` 必须匹配本机系统，输出会增加其 target 子目录。自定义 `.cargo/config.toml` 中的 `build.target` 应与构建环境保持一致；如果改了该设置，按 Tauri/Cargo 日志核对输出路径。
+- 工具缺失、依赖安装失败、编译或打包失败都会停止并返回错误码。脚本不会删除旧安装包；只有当前构建成功才打印完成消息，目录里可能仍有不同版本的历史包，请按文件名和修改时间区分。
+- Cargo 网络错误时使用你自己的有效代理；脚本继承 `CARGO_HTTP_PROXY` 等变量，不硬编码端口。不要关闭 TLS 校验。Windows 环境变量在 CMD 使用 `set`，在 PowerShell 使用 `$env:`。
+- Windows 下无法更新 release 程序时，先自行保存并关闭正在运行的对应程序，再重试；脚本不会强制结束用户进程。
+
+## 本轮验证与范围
+
+范围：打包入口、环境检查、平台选择、输出提示与文档；没有修改编辑器业务功能，没有重新生成或安装软件包。运行证据见 `docs/PHASE_PROGRESS.md`。
+
+实际完整 Windows NSIS 构建及安装、macOS APP/DMG 构建/签名/安装、Linux DEB/AppImage 构建/运行均未在本轮执行（NOT RUN）。脚本模型测试及 Windows BAT 的实际 `--check` 结果单独记录，不能替代这些打包验收。

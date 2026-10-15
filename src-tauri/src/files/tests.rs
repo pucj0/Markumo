@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn window_grants_do_not_cross_windows_and_closing_one_keeps_the_other() {
+    let (_dir,path,mut files,initial)=fixture(b"original");
+    files.set_owner("main");let main=files.open_selected(path.clone(),None).unwrap();
+    files.set_owner("file-1");let other=files.open_selected(path.clone(),None).unwrap();
+    assert!(files.revealed_path(&main.metadata.token).is_err());
+    assert!(files.session_path(&main.metadata.token).is_err());
+    assert!(files.save(&main.metadata.token,"wrong",Some(&main.metadata.version),"UTF-8",false).is_err());
+    files.release(&main.metadata.token);files.release_owner("file-1");
+    assert!(files.revealed_path(&other.metadata.token).is_err());
+    files.set_owner("main");assert!(files.revealed_path(&main.metadata.token).is_ok());
+    assert_eq!(fs::read(path).unwrap(),b"original");
+    files.set_owner("");assert!(files.revealed_path(&initial.metadata.token).is_ok());
+}
+
+#[test]
 fn explorer_reveal_requires_a_live_validated_file_grant() {
     let (_dir, path, mut service, file) = fixture(b"source");
     assert!(service.revealed_path(path.to_str().unwrap()).is_err());
@@ -30,6 +45,125 @@ fn fixture(bytes: &[u8]) -> (tempfile::TempDir, PathBuf, FileService, OpenFile) 
 }
 
 #[test]
+fn unknown_extensions_and_text_class_files_are_editable_and_saveable() {
+    for name in ["script.bat", "script.cmd", "notes.class", "data.unknown", "no-extension"] {
+        let dir = tempfile::tempdir().unwrap(); let path = dir.path().join(name);
+        let source = "中文\r\nunknown extension";
+        fs::write(&path, codec::encode(source, "UTF-8", true).unwrap()).unwrap();
+        let mut service = FileService::default();
+        let opened = service.open_selected(path.clone(), None).unwrap();
+        assert_eq!(opened.kind, FileKind::Text); assert!(!opened.metadata.read_only);
+        assert_eq!(opened.text, source); assert_eq!(opened.metadata.encoding, "UTF-8");
+        let edited = format!("{source}\r\n修改");
+        service.save(&opened.metadata.token, &edited, Some(&opened.metadata.version), "UTF-8", true).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), codec::encode(&edited, "UTF-8", true).unwrap());
+        let recent = service.open_recent(&opened.metadata.path, None).unwrap();
+        assert_eq!(recent.text, edited);
+        let target_path = dir.path().join("copy.class");
+        let target = service.prepare_target(target_path.clone(), Some(&opened.metadata.token)).unwrap();
+        service.save(&target.token, &edited, None, "UTF-8", true).unwrap();
+        assert_eq!(fs::read(target_path).unwrap(), fs::read(path).unwrap());
+    }
+}
+
+#[test]
+fn binary_class_and_unknown_binary_edit_bytes_without_text_conversion() {
+    let mut bytes = vec![0xca, 0xfe, 0xba, 0xbe];
+    bytes.extend(0..=255);
+    for name in ["Sample.class", "unknown.bin", "without-extension"] {
+        let dir = tempfile::tempdir().unwrap(); let path = dir.path().join(name);
+        fs::write(&path, &bytes).unwrap(); let mut service = FileService::default();
+        let opened = service.open_selected(path.clone(), None).unwrap();
+        assert_eq!(opened.kind, FileKind::Text); assert_eq!(opened.metadata.encoding, "Hex");
+        assert!(!opened.metadata.read_only); assert!(opened.text.starts_with("CA FE BA BE"));
+        let saved = service.save(&opened.metadata.token, &opened.text, Some(&opened.metadata.version), "Hex", false).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        // A dangling nibble or arbitrary text must never truncate the original.
+        for invalid in ["CA F", "这是文本", "0xCA", "GG"] {
+            assert_eq!(service.save(&opened.metadata.token, invalid, Some(&saved.version), "Hex", false).unwrap_err().code, "hex");
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+        assert_eq!(service.save(&opened.metadata.token, &opened.text, Some(&saved.version), "UTF-8", false).unwrap_err().code, "encoding_loss");
+        let edited = opened.text.replacen("CA FE BA BE", "CA FE BA BF", 1);
+        let saved = service.save(&opened.metadata.token, &edited, Some(&saved.version), "Hex", false).unwrap();
+        let mut expected = bytes.clone(); expected[3] = 0xbf;
+        assert_eq!(fs::read(&path).unwrap(), expected);
+        let target_path = dir.path().join("copy.class");
+        let target = service.prepare_target(target_path.clone(), Some(&opened.metadata.token)).unwrap();
+        service.save(&target.token, &edited, None, "Hex", false).unwrap();
+        assert_eq!(fs::read(target_path).unwrap(), expected);
+        assert_eq!(service.open_recent(&saved.path, None).unwrap().metadata.encoding, "Hex");
+        fs::write(&path, b"external").unwrap();
+        assert_eq!(service.save(&opened.metadata.token, &edited, Some(&saved.version), "Hex", false).unwrap_err().code, "conflict");
+        assert_eq!(fs::read(path).unwrap(), b"external");
+    }
+}
+
+#[test]
+fn text_save_cannot_accidentally_replace_existing_class_bytecode() {
+    let dir = tempfile::tempdir().unwrap(); let path = dir.path().join("Sample.class");
+    fs::write(&path, classfile::MAGIC).unwrap(); let mut service = FileService::default();
+    assert_eq!(service.prepare_target(path.clone(), None).unwrap_err().code, "read_only_binary");
+    assert_eq!(fs::read(path).unwrap(), classfile::MAGIC);
+}
+
+#[test]
+fn class_structure_is_optional_and_can_switch_back_to_editing() {
+    let bytes = [0xca,0xfe,0xba,0xbe,0,0,0,52,0,5,1,0,6,b'S',b'a',b'm',b'p',b'l',b'e',7,0,1,1,0,16,b'j',b'a',b'v',b'a',b'/',b'l',b'a',b'n',b'g',b'/',b'O',b'b',b'j',b'e',b'c',b't',7,0,3,0,33,0,2,0,4,0,0,0,0,0,0,0,0];
+    let dir = tempfile::tempdir().unwrap(); let path = dir.path().join("Sample.class");
+    fs::write(&path, bytes).unwrap(); let mut service = FileService::default();
+    let opened = service.open_selected(path.clone(), None).unwrap();
+    assert_eq!(opened.metadata.encoding, "Hex");
+    let inspected = service.reopen(&opened.metadata.token, "ClassInfo").unwrap();
+    assert_eq!(inspected.kind, FileKind::JavaClass);
+    assert_eq!(inspected.class_info.as_ref().unwrap().class_name, "Sample");
+    assert_eq!(service.save(&inspected.metadata.token, "displayed summary", Some(&inspected.metadata.version), "UTF-8", false).unwrap_err().code, "read_only_binary");
+    let edited = service.reopen(&inspected.metadata.token, "Hex").unwrap();
+    assert_eq!(edited.kind, FileKind::Text);
+    service.save(&edited.metadata.token, &edited.text, Some(&edited.metadata.version), "Hex", false).unwrap();
+    assert_eq!(fs::read(path).unwrap(), bytes);
+}
+
+#[test]
+fn markdown_images_require_live_document_and_workspace_or_explicit_file_scope() {
+    let (dir, _, mut service, opened) = fixture(b"![pixel](pixel.png)");
+    let mut png=b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();png.extend_from_slice(&1u32.to_be_bytes());png.extend_from_slice(&1u32.to_be_bytes());
+    let path=dir.path().join("中文 图片.png");fs::write(&path,&png).unwrap();
+    assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[]).unwrap_err().code,"image_scope");
+    assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[dir.path().to_path_buf()]).unwrap(),png);
+    for source in ["../outside.png","file:///secret.png","https://example.com/a.png","/absolute.png","C:\\secret.png"] { assert!(service.markdown_image(&opened.metadata.token,source,&[dir.path().to_path_buf()]).is_err()); }
+    // An image selected independently is an explicit file grant, not a directory grant.
+    let image=service.open_selected(path.clone(),Some("Hex")).unwrap();
+    assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[]).unwrap(),png);
+    service.release(&image.metadata.token);
+    assert!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[]).is_err());
+    fs::write(&path,b"<svg onload='bad()'>").unwrap();assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[dir.path().to_path_buf()]).unwrap_err().code,"image_format");
+    png[16..20].copy_from_slice(&100000u32.to_be_bytes());fs::write(&path,&png).unwrap();
+    assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[dir.path().to_path_buf()]).unwrap_err().code,"image_size");
+    service.release(&opened.metadata.token);assert_eq!(service.markdown_image(&opened.metadata.token,"中文 图片.png",&[dir.path().to_path_buf()]).unwrap_err().code,"scope");
+}
+
+#[test]
+fn markdown_image_parent_paths_stay_inside_authorized_roots_and_large_files_are_rejected() {
+    let dir=tempfile::tempdir().unwrap();let root=dir.path().join("workspace");let nested=root.join("docs");fs::create_dir_all(&nested).unwrap();
+    let document=nested.join("readme.md");fs::write(&document,b"source").unwrap();let mut service=FileService::default();let opened=service.open_selected(document,None).unwrap();
+    let image=root.join("pixel.gif");let gif=b"GIF89a\x01\x00\x01\x00";fs::write(&image,gif).unwrap();
+    assert_eq!(service.markdown_image(&opened.metadata.token,"../pixel.gif",&[root.clone()]).unwrap(),gif);
+    fs::write(dir.path().join("outside.gif"),gif).unwrap();assert_eq!(service.markdown_image(&opened.metadata.token,"../../outside.gif",&[root.clone()]).unwrap_err().code,"image_scope");
+    fs::File::create(&image).unwrap().set_len(4*1024*1024+1).unwrap();assert_eq!(service.markdown_image(&opened.metadata.token,"../pixel.gif",&[root]).unwrap_err().code,"image_size");
+}
+
+#[test]
+fn markdown_raster_dimension_headers_are_bounded_and_do_not_accept_svg() {
+    assert_eq!(images::dimensions(b"GIF89a\x03\0\x02\0"),Some((3,2)));
+    let jpeg=[0xff,0xd8,0xff,0xc0,0,11,8,0,2,0,3,1,1,0x11,0];
+    assert_eq!(images::dimensions(&jpeg),Some((3,2)));
+    let mut webp=b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0".to_vec();webp.extend_from_slice(&[0,0,0,0,2,0,0,1,0,0]);
+    assert_eq!(images::dimensions(&webp),Some((3,2)));
+    for bytes in [&jpeg[..5],&webp[..15],b"<svg width='1' height='1'/>"] { assert!(images::dimensions(bytes).is_none()); }
+}
+
+#[test]
 fn batch_and_cmd_are_never_executed_and_preserve_encoding_bom_crlf_on_save_and_save_as() {
     for extension in ["bat", "cmd"] {
         for (encoding, bom) in [("UTF-8", true), ("UTF-16LE", true), ("GB18030", false), ("windows-1252", false)] {
@@ -39,7 +173,7 @@ fn batch_and_cmd_are_never_executed_and_preserve_encoding_bom_crlf_on_save_and_s
             let bytes = codec::encode(source, encoding, bom).unwrap();
             fs::write(&path, &bytes).unwrap();
             let mut service = FileService::default();
-            if !bom && encoding != "UTF-8" { assert!(service.open_selected(path.clone(), None).is_err()); }
+            if !bom && encoding != "UTF-8" { assert_eq!(service.open_selected(path.clone(), None).unwrap().metadata.encoding, "Hex"); }
             let file = service.open_selected(path.clone(), Some(encoding)).unwrap();
             assert_eq!(file.text, source);
             assert_eq!(file.metadata.eol, "CRLF");
@@ -84,7 +218,7 @@ fn explicit_legacy_encoding_and_lossy_save_rejection() {
     let dir = tempfile::tempdir().unwrap(); let path = dir.path().join("legacy.txt");
     let text = "中文测试"; let bytes = codec::encode(text, "GB18030", false).unwrap();
     fs::write(&path, &bytes).unwrap(); let mut service = FileService::default();
-    assert_eq!(service.open_selected(path.clone(), None).unwrap_err().code, "encoding");
+    assert_eq!(service.open_selected(path.clone(), None).unwrap().metadata.encoding, "Hex");
     let file = service.open_selected(path.clone(), Some("GB18030")).unwrap();
     assert_eq!(file.metadata.encoding, "GB18030"); assert_eq!(file.text, text);
     service.save(&file.metadata.token, text, Some(&file.metadata.version), "GB18030", false).unwrap();

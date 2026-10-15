@@ -12,11 +12,11 @@
       <template v-if="doc?.kind !== 'javaClass'">
         <span class="stat-item position">Ln {{ doc?.line || 1 }}, Col {{ doc?.column || 1 }}</span>
         <span class="stat-item optional">{{ useTabs ? 'Tabs' : 'Spaces' }}: {{ indentSize }}</span>
-        <span class="stat-item" :title="doc?.encoding || 'UTF-8'">{{ doc?.encoding || 'UTF-8' }}{{ doc?.bom ? ' BOM' : '' }}</span>
+        <span class="stat-item" :title="doc?.encoding === 'Hex' ? '可编辑十六进制字节；保存时还原字节，保留原文件格式' : doc?.encoding || 'UTF-8'">{{ doc?.encoding === 'Hex' ? 'HEX 字节' : doc?.encoding || 'UTF-8' }}{{ doc?.bom ? ' BOM' : '' }}</span>
         <span class="stat-item">{{ doc?.eol || 'LF' }}</span>
       </template>
       <span v-if="doc?.kind === 'javaClass'" class="stat-item">JVM ClassFile</span>
-      <select v-else class="stat-item lang-item" aria-label="语言模式" :disabled="!doc" :value="doc?.language || 'Plain Text'"
+      <select v-else class="stat-item lang-item" aria-label="语言模式" :disabled="!doc || doc.encoding === 'Hex'" :value="doc?.language || 'Plain Text'"
         @change="$emit('set-language', ($event.target as HTMLSelectElement).value as LanguageName)">
         <option v-for="language in languageNames" :key="language" :value="language">{{ language }}</option>
       </select>

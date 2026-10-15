@@ -1,13 +1,13 @@
 <template>
   <div class="pane-body" :class="{ 'class-pane': doc?.kind === 'javaClass' }">
-    <div ref="host" class="editor-host" @scroll.capture="onEditorScroll"></div>
-    <SplitPreview v-if="doc?.mode === 'split'" ref="preview" :content="text" :too-large="tooLarge" @scroll-line="onPreviewScroll" />
+    <div v-show="doc" ref="host" class="editor-host" @scroll.capture="onEditorScroll"></div>
+    <SplitPreview v-if="doc?.mode === 'split'" ref="preview" :content="text" :too-large="tooLarge" :resources="resources" :resource-key="`${doc?.fileToken||''}|${doc?.path||''}`" @scroll-line="onPreviewScroll" @edit-image="editImage" />
     <ClassHexPanel v-if="doc?.kind === 'javaClass'" :key="doc.id" :doc="doc" :files="files" />
-    <div v-if="!doc" class="pane-empty">将标签拖到此处，或新建文件</div>
+    <EmptyEditorPane v-if="!doc" @new-doc="newDocument" @quick-open="quickOpen" />
   </div>
 </template>
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import SplitPreview from '../../editor/markdown/splitPreview.vue'
 import type { DocumentManager, Pane } from '../../editor/core/DocumentManager'
 import type { EditorDocument } from '../../types'
@@ -15,10 +15,23 @@ import type { Text } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import ClassHexPanel from './ClassHexPanel.vue'
 import type { FileController } from '../../features/files/FileController'
+import { markdownResources } from '../../editor/markdown/images'
+import EmptyEditorPane from './EmptyEditorPane.vue'
 const props = defineProps<{ manager: DocumentManager; pane: Pane; doc: EditorDocument | null; files?: FileController }>()
+const emit = defineEmits<{ (e: 'quick-open'): void }>()
+function newDocument() { props.manager.focusPane(props.pane, false); props.manager.createUntitled() }
+function quickOpen() { props.manager.focusPane(props.pane, false); emit('quick-open') }
 const host = ref<HTMLElement | null>(null), preview = ref<InstanceType<typeof SplitPreview> | null>(null)
 let previousText: Text | undefined, serialized = ''
 const tooLarge = computed(() => !!props.doc && (props.manager.getState(props.doc.id)?.doc.length || 0) > 1024 * 1024)
+const resources=computed(()=>props.doc ? props.manager.getState(props.doc.id)?.facet(markdownResources) : undefined)
+function editImage(from:number,snapshot:string) {
+  const id=props.doc?.id,state=id&&props.manager.getState(id)
+  if(!id||!state||props.manager.isComposing||state.doc.toString()!==snapshot||from<0||from>state.doc.length)return
+  const line=state.doc.lineAt(from)
+  props.manager.focusPane(props.pane,false)
+  props.manager.revealPosition(id,line.number,from-line.from+1)
+}
 const text = computed(() => {
   const doc = props.doc?.mode === 'split' ? props.manager.getState(props.doc.id)?.doc : undefined
   if (!doc || tooLarge.value) { previousText = undefined; serialized = ''; return '' }
@@ -49,12 +62,15 @@ function onPreviewScroll(lineNumber: number) {
   if (Math.abs(next - scroller.scrollTop) > 1) { scroller.scrollTop = next; expectedTop = scroller.scrollTop }
 }
 onMounted(() => { if (host.value) props.pane === 'main' ? props.manager.mount(host.value) : props.manager.mountSecondary(host.value) })
+// A newly bound view may have been created while its host was still v-show hidden.
+watch(() => !!props.doc, (present, previous) => {
+  if (present && !previous && props.manager.activePane === props.pane) props.manager.focusPane(props.pane)
+}, { flush: 'post' })
 onUnmounted(() => props.manager.unmount(props.pane))
 </script>
 <style scoped>
 .pane-body { flex:1;display:flex;min-width:0;min-height:0;position:relative;overflow:hidden }
 .editor-host { flex:1;min-height:0;min-width:0;overflow:hidden;display:flex }
 .editor-host :deep(.cm-editor) { height:100%;width:100% }
-.pane-empty { position:absolute;inset:40px 12px auto;text-align:center;color:var(--muted);pointer-events:none }
 @media(max-width:900px) { .class-pane { flex-direction:column } }
 </style>

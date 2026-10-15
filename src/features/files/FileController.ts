@@ -1,5 +1,5 @@
 import type { DocumentManager } from '../../editor/core/DocumentManager'
-import type { Encoding, FileGateway, OpenBatch, OpenFile } from './contracts'
+import type { Encoding, FileOpenEncoding, FileGateway, OpenBatch, OpenFile } from './contracts'
 
 export function fileError(error: unknown) {
   if (typeof error === 'string') return error
@@ -38,11 +38,11 @@ export class FileController {
     for (const file of batch.files) this.accept(file)
     if (batch.errors.length) this.notify(batch.errors.join('\n'))
   }
-  async open(encoding?: Encoding) {
+  async open(encoding?: FileOpenEncoding) {
     try { this.acceptBatch(await this.gateway.openDialog(encoding)) }
     catch (error) { this.notify(fileError(error)) }
   }
-  async recent(path: string, encoding?: Encoding) {
+  async recent(path: string, encoding?: FileOpenEncoding) {
     try { this.accept(await this.gateway.openRecent(path, encoding)) }
     catch (error) { this.notify(fileError(error)) }
   }
@@ -56,6 +56,9 @@ export class FileController {
   }
   private async performSave(id: string, saveAs: boolean, encoding: Encoding | undefined, automatic: boolean): Promise<'saved' | 'changed' | 'failed' | 'skipped'> {
     if (this.manager.metadata(id)?.kind === 'javaClass') { if (!automatic) this.notify('ClassFile 仅供只读查看，不能作为文本保存或另存为。'); return 'skipped' }
+    if (this.manager.metadata(id)?.encoding === 'Hex' && encoding && encoding !== 'Hex') {
+      this.notify('字节编辑内容请直接保存或另存为；不能把十六进制显示文字作为原文件的文本编码保存。'); return 'skipped'
+    }
     if (this.workspaceBusy) { if (!automatic) this.notify('工作区文件操作进行中，请稍后保存。'); return 'skipped' }
     if (this.disposed || this.saving.has(id)) return 'skipped'
     const snapshot = this.manager.saveSnapshot(id)
@@ -89,9 +92,9 @@ export class FileController {
       this.saving.delete(id)
     }
   }
-  async reopen(encoding: Encoding) {
+  async reopen(encoding: FileOpenEncoding) {
     const doc = this.manager.activeDocument
-    if (doc?.kind === 'javaClass') { this.notify('ClassFile 是二进制字节码，不支持按文本编码重开。'); return }
+    if (doc?.kind === 'javaClass' && encoding !== 'Hex') { this.notify('请使用“编辑文件字节”切回可编辑内容。'); return }
     if (!doc?.fileToken) { this.notify('请先打开真实文件。'); return }
     if (doc.dirty || this.manager.isComposing || this.saving.has(doc.id)) {
       this.notify('请先保存修改并完成输入，再用其他编码重开。'); return

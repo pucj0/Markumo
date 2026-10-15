@@ -24,7 +24,8 @@
             @move-other="manager.moveTab($event,'main','secondary')"
             @close-others="$emit('close-others',{id:$event,pane:'main'})" @split-tab="splitTab($event,'main')" @close-split="manager.closeSplit()" />
           <Breadcrumb :doc="mainDoc" />
-          <EditorPane :manager="manager" pane="main" :doc="mainDoc" :files="files" />
+          <WelcomePage v-if="welcome && !mainDoc && !manager.isSplit" :loading="startupLoading" @new-doc="$emit('new-doc')" @open-file="$emit('open-file')" @open-workspace="$emit('open-workspace')" />
+          <EditorPane v-else :manager="manager" pane="main" :doc="mainDoc" :files="files" @quick-open="$emit('open-palette', 'file')" />
         </div>
 
         <div v-if="manager.isSplit" class="pane-divider" role="separator" aria-label="调整编辑窗格宽度" aria-orientation="vertical" tabindex="0" :aria-valuenow="Math.round(ratio * 100)" :aria-valuemin="Math.round(minimum * 100)" :aria-valuemax="Math.round((1 - minimum) * 100)" @pointerdown="startResize" @keydown="resizeKey" />
@@ -46,17 +47,10 @@
             @move-other="manager.moveTab($event,'secondary','main')"
             @close-others="$emit('close-others',{id:$event,pane:'secondary'})" @split-tab="splitTab($event,'secondary')" @close-split="manager.closeSplit()" />
           <Breadcrumb :doc="secondaryDoc" />
-          <EditorPane :manager="manager" pane="secondary" :doc="secondaryDoc" :files="files" />
+          <EditorPane :manager="manager" pane="secondary" :doc="secondaryDoc" :files="files" @quick-open="$emit('open-palette', 'file')" />
         </div>
       </div>
 
-      <!-- 空状态引导 -->
-      <div v-if="!mainDoc && !manager.isSplit" class="empty-state">
-        <div class="empty-actions">
-          <button class="primary-btn" @click="$emit('new-doc')">新建文件</button>
-          <button class="secondary-btn" @click="$emit('open-palette', 'file')">快速打开</button>
-        </div>
-      </div>
     </div>
 
     <!-- 右侧大纲容器（Phase 6 真实 Lezer AST 大纲接入） -->
@@ -88,6 +82,7 @@ import EditorPane from './EditorPane.vue'
 import TabBar from './TabBar.vue'
 import Breadcrumb from './Breadcrumb.vue'
 import OutlineView from './OutlineView.vue'
+import WelcomePage from './WelcomePage.vue'
 import { extractOutline, type OutlineItem } from '../../editor/outline/outlineService'
 import type { EditorDocument, MarkdownMode } from '../../types'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
@@ -100,10 +95,14 @@ const props = defineProps<{
   desktop: boolean
   wordWrap?: boolean
   files?: FileController
+  welcome?: boolean
+  startupLoading?: boolean
 }>()
 
 defineEmits<{
   (e: 'new-doc'): void
+  (e: 'open-file'): void
+  (e: 'open-workspace'): void
   (e: 'open-palette', cat: 'action' | 'file' | 'all'): void
   (e: 'close-outline'): void
   (e: 'close-secondary', id: string): void

@@ -10,7 +10,8 @@ fn encoding(label: &str) -> Result<&'static Encoding> {
 }
 
 pub fn decode(bytes: &[u8], selected: Option<&str>) -> Result<(String, String, bool)> {
-    if bytes.starts_with(super::classfile::MAGIC) { return fail("binary", "JVM ClassFile 是二进制字节码，只能通过只读查看器打开。"); }
+    if selected == Some("Hex") { return Ok((hex_text(bytes), "Hex".into(), false)); }
+    if bytes.starts_with(super::classfile::MAGIC) { return fail("binary", "JVM ClassFile 不是所选文本编码，请直接打开为可编辑字节内容。"); }
     let detected = Encoding::for_bom(bytes);
     let enc = match selected { Some(label) => encoding(label)?, None => detected.map(|(enc, _)| enc).unwrap_or(UTF_8) };
     // An explicit incompatible encoding is never allowed to reinterpret a BOM.
@@ -26,6 +27,19 @@ pub fn decode(bytes: &[u8], selected: Option<&str>) -> Result<(String, String, b
 }
 
 pub fn encode(text: &str, label: &str, bom: bool) -> Result<Vec<u8>> {
+    if label == "Hex" {
+        if bom { return fail("encoding", "十六进制字节模式不额外添加 BOM。"); }
+        let mut bytes = Vec::new();
+        let mut high = None;
+        for ch in text.chars() {
+            if ch.is_ascii_whitespace() { continue; }
+            let digit = ch.to_digit(16).filter(|_| ch.is_ascii()).ok_or_else(|| FileError::new("hex", "十六进制内容只能包含 0–9、A–F 和空白；原文件未修改。"))? as u8;
+            if let Some(value) = high.take() { bytes.push(value * 16 + digit); }
+            else { high = Some(digit); }
+        }
+        if high.is_some() { return fail("hex", "十六进制字节缺少一位；原文件未修改。"); }
+        return Ok(bytes);
+    }
     let enc = encoding(label)?;
     let mut bytes = Vec::new();
     match label {
@@ -47,6 +61,18 @@ pub fn encode(text: &str, label: &str, bom: bool) -> Result<Vec<u8>> {
         }
     }
     Ok(bytes)
+}
+
+// A reversible byte representation, never a replacement-character text decode.
+pub fn hex_text(bytes: &[u8]) -> String {
+    const HEX: &[u8] = b"0123456789ABCDEF";
+    let mut text = String::with_capacity(bytes.len() * 3);
+    for (index, byte) in bytes.iter().enumerate() {
+        if index > 0 { text.push(if index % 32 == 0 { '\n' } else { ' ' }); }
+        text.push(HEX[(byte >> 4) as usize] as char);
+        text.push(HEX[(byte & 15) as usize] as char);
+    }
+    text
 }
 
 pub fn eol(text: &str) -> String {

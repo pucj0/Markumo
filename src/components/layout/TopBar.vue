@@ -62,12 +62,12 @@ const props = defineProps<{
 
 async function windowAction(action: 'minimize' | 'maximize' | 'close') {
   if (!props.desktop) return
+  if (action === 'close') { emit('request-close'); return }
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window')
     const window = getCurrentWindow()
     if (action === 'minimize') await window.minimize()
     else if (action === 'maximize') await window.toggleMaximize()
-    else await window.close()
   } catch { globalThis.window.dispatchEvent(new CustomEvent('editor-notice', { detail: '窗口操作失败，请重试。' })) }
 }
 async function dragWindow(event: MouseEvent) {
@@ -78,7 +78,8 @@ function maximizeFromHeader(event: MouseEvent) {
   if (event.target instanceof Element && !event.target.closest('button,input,select,[role=menu]')) void windowAction('maximize')
 }
 
-defineEmits<{
+const emit = defineEmits<{
+  (e: 'request-close'): void
   (e: 'set-mode', mode: AppMode): void
   (e: 'toggle-theme'): void
   (e: 'toggle-focus'): void

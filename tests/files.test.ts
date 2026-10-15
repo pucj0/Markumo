@@ -27,6 +27,52 @@ function applyHistory(manager: DocumentManager, id: string, action = undo) {
 const deferred = <T>() => { let resolve!: (value: T) => void; return { promise: new Promise<T>(done => { resolve = done }), resolve } }
 
 describe('真实 CodeMirror 文件状态（gateway 为显式单元测试替身，不验证磁盘）', () => {
+  it.each(['script.bat', 'script.cmd', 'text.class', 'notes.unknown', 'no-extension'])('未知后缀走真实编辑、撤销与保存流程 %s', async name => {
+    const {manager,files,gateway}=setup()
+    files.accept(fixture({name,path:`E:\\fixtures\\${name}`,text:'one\r\ntwo',bom:false}))
+    const id=manager.activeId!
+    expect(manager.metadata(id)!.language).toBe('Plain Text')
+    manager.dispatch(id,{changes:{from:0,to:3,insert:'changed'},annotations:isolateHistory.of('full')})
+    expect(manager.metadata(id)!.dirty).toBe(true)
+    expect(applyHistory(manager,id)).toBe(true)
+    expect(manager.saveSnapshot(id)!.text).toBe('one\r\ntwo')
+    applyHistory(manager,id,redo)
+    expect(await files.save(id)).toBe(true)
+    expect(gateway.save).toHaveBeenCalledWith('file-1','changed\r\ntwo','disk-1','UTF-8',false)
+    expect(manager.metadata(id)!.dirty).toBe(false)
+    manager.dispose()
+  })
+  it('二进制字节可编辑、双Pane共享，保存传递Hex而不保存展示为UTF-8', async () => {
+    const {manager,files,gateway}=setup()
+    files.accept(fixture({name:'Sample.class',path:'E:\\fixtures\\Sample.class',encoding:'Hex',text:'CA FE BA BE 00 0D 0A FF',bom:false,eol:'LF'}))
+    const id=manager.activeId!; manager.splitEditor()
+    manager.dispatch(id,{changes:{from:9,to:11,insert:'BF'},annotations:isolateHistory.of('full')})
+    expect(manager.metadata(id)).toMatchObject({kind:'text',language:'Plain Text',dirty:true,readOnly:false})
+    expect(manager.mainOpenedDocuments[0].id).toBe(manager.secondaryOpenedDocuments[0].id)
+    expect(await files.save(id)).toBe(true)
+    expect(gateway.save).toHaveBeenCalledWith('file-1','CA FE BA BF 00 0D 0A FF','disk-1','Hex',false)
+    manager.dispose()
+  })
+  it('二进制即使命名Markdown也不会开启排版或语言渲染', async () => {
+    const {manager,files}=setup()
+    files.accept(fixture({name:'binary.md',encoding:'Hex',text:'00 FF',bom:false}))
+    const id=manager.activeId!
+    expect(manager.metadata(id)!.mode).toBeUndefined()
+    expect(manager.setMarkdownMode(id,'live')).toBe(false)
+    expect(manager.formatMarkdown('bold')).toBe(false)
+    await manager.setLanguage(id,'Markdown')
+    expect(manager.metadata(id)!.language).toBe('Plain Text')
+    manager.dispose()
+  })
+  it('字节编辑不允许把显示内容另存为UTF-8，未保存修改继续保留', async () => {
+    const {manager,files,gateway}=setup()
+    files.accept(fixture({name:'Sample.class',encoding:'Hex',text:'CA FE BA BE',bom:false}))
+    const id=manager.activeId!;manager.dispatch(id,{changes:{from:0,to:2,insert:'CB'}})
+    expect(await files.save(id,true,'UTF-8')).toBe(false)
+    expect(gateway.saveTarget).not.toHaveBeenCalled();expect(gateway.save).not.toHaveBeenCalled()
+    expect(manager.metadata(id)!.dirty).toBe(true)
+    manager.dispose()
+  })
   it('前端 dispose 释放两个窗格的文件授权，重复 dispose 不重复释放', () => {
     const {manager,files,gateway}=setup();files.accept(fixture());manager.splitEditor();manager.focusPane('secondary',false)
     files.accept(fixture({token:'file-2',path:'E:\\fixtures\\second.txt',name:'second.txt'}))

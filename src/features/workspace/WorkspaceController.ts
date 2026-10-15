@@ -95,6 +95,12 @@ export class WorkspaceController {
     } finally { this.operationBusy = false; this.fileController.workspaceBusy = false }
   }
 
+  restoreSession(roots: WorkspaceInfo[]) {
+    if (this.disposed || this.rootPath || !roots.length) return
+    this.applyWorkspace(roots[0])
+    for (const root of roots.slice(1)) this.addWorkspace(root)
+  }
+
   async openWorkspaceDialog(add = false): Promise<boolean> {
     if (this.operationBusy || this.fileController.saving.size || this.documentManager.isComposing) {
       this.notify('请等待文件操作和输入完成，再切换工作区。'); return false

@@ -14,8 +14,9 @@ import { classSummary } from '../../features/files/classSummary'
 import { livePreviewExtension } from '../markdown/livePreview'
 import { markdownFormatTransaction, type MarkdownFormat } from '../markdown/formatCommands'
 import { captureLineBaseline, savedLineBaseline } from './changeGutter'
+import { createMarkdownResources, markdownResources, refreshMarkdownResources } from '../markdown/images'
 
-export interface DocumentSeed { id: string; name: string; path: string; text: string; pinned?: boolean; mode?: MarkdownMode; kind?: 'text' | 'javaClass'; classInfo?: ClassInfo }
+export interface DocumentSeed { id: string; name: string; path: string; text: string; pinned?: boolean; mode?: MarkdownMode; kind?: 'text' | 'javaClass'; classInfo?: ClassInfo; encoding?: string }
 export type Pane = 'main' | 'secondary'
 const sharedConfiguration = Annotation.define<boolean>()
 interface CachedDocument {
@@ -47,6 +48,8 @@ export class DocumentManager {
   private readonly deferred = new Map<string, StateEffect<unknown>[]>()
   private view: EditorView | null = null
   private secondaryView: EditorView | null = null
+  // Hosts may outlive their documents, but an editable view never may.
+  private readonly hosts = new Map<Pane, HTMLElement>()
   private timer: ReturnType<typeof setTimeout> | null = null
   private nextUntitled = 1
   private wordWrap = false
@@ -70,7 +73,12 @@ export class DocumentManager {
   get activeDocument() { return this.activeId ? this.metadata(this.activeId) : null }
   get activeEditorView() { return this.paneView(this.activePane) }
   get hasDirtyDocuments() { return [...this.records.values()].some(record => record.meta.dirty) }
-  get isComposing() { return this.view?.compositionStarted || this.secondaryView?.compositionStarted || false }
+  get isComposing() {
+    return (['main', 'secondary'] as const).some(pane => {
+      const id = this.paneGroup(pane).activeId
+      return !!id && this.records.has(id) && !!this.paneView(pane)?.compositionStarted
+    })
+  }
   get catalog() { return [...this.seeds.values()].map(({ id, name, path }) => ({ id, name, path })) }
   get openedDocuments() { return [...new Set([...this.group.tabs, ...this.secondaryGroup.tabs].map(t => t.documentId))].map(id => this.metadata(id)!) }
   get mainOpenedDocuments() { return this.group.tabs.map(tab => this.metadata(tab.documentId)!) }
@@ -90,13 +98,15 @@ export class DocumentManager {
     const language = new Compartment(), wrap = new Compartment(), theme = new Compartment(), markdownMode = new Compartment(), indent = new Compartment()
     const endings = lineEndings(seed.text)
     const binary = seed.kind === 'javaClass'
-    const isMd = !binary && /\.(md|markdown)$/i.test(seed.name)
+    const byteEditor = seed.encoding === 'Hex'
+    const isMd = !binary && !byteEditor && /\.(md|markdown)$/i.test(seed.name)
     const initialMdMode: MarkdownMode | undefined = isMd ? (seed.mode || this.defaultMarkdownMode) : undefined
 
     const state = EditorState.create({
       doc: seed.text,
       extensions: [
         coreExtensions,
+        markdownResources.of(createMarkdownResources(() => this.records.get(seed.id)?.meta.fileToken,()=>{const meta=this.records.get(seed.id)?.meta;return `${meta?.fileToken||''}|${meta?.path||''}`})),
         binary ? [EditorState.readOnly.of(true), EditorView.editable.of(false), EditorState.transactionFilter.of(tr => tr.docChanged ? [] : tr)] : [],
         indent.of([EditorState.tabSize.of(this.indentSize), indentUnit.of(this.useTabs ? '\t' : ' '.repeat(this.indentSize))]),
         Prec.highest(keymap.of([
@@ -108,7 +118,15 @@ export class DocumentManager {
           { key: 'Mod-u', run: () => { this.historyCommand(false, true); return true } },
           { key: 'Alt-u', mac: 'Mod-Shift-u', run: () => { this.historyCommand(true, true); return true } },
         ])),
-        Prec.highest(EditorView.domEventHandlers({ beforeinput: event => {
+        Prec.highest(EditorView.domEventHandlers({ compositioncancel: (_event, view) => {
+          // Some hosts expose cancellation separately. End it through CM's public
+          // event route, including Chromium EditContext, without touching internals.
+          if (view.compositionStarted) {
+            const target = (view.contentDOM as HTMLElement & { editContext?: EventTarget }).editContext || view.contentDOM
+            target.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '' }))
+          }
+          return false
+        }, beforeinput: event => {
           if (!['historyUndo','historyRedo'].includes(event.inputType)) return false
           event.preventDefault(); this.command(event.inputType === 'historyUndo' ? 'undo' : 'redo'); return true
         } })),
@@ -129,8 +147,8 @@ export class DocumentManager {
       meta: {
         id: seed.id, uri: seed.id.startsWith('untitled-') ? `untitled:${seed.id}` : `sample:${seed.id}`, name: seed.name, path: seed.path,
         kind: seed.kind || 'text', classInfo: seed.classInfo,
-        language: binary ? 'Plain Text' : detectLanguage(seed.name), languageStatus: binary ? 'ready' : 'loading', dirty: false, pinned: seed.pinned ?? true,
-        encoding: 'UTF-8', eol: /\r\n/.test(seed.text) ? 'CRLF' : 'LF', bom: false, readOnly: false, lastDiskVersion: null,
+        language: binary || byteEditor ? 'Plain Text' : detectLanguage(seed.name), languageStatus: binary ? 'ready' : 'loading', dirty: false, pinned: seed.pinned ?? true,
+        encoding: seed.encoding || 'UTF-8', eol: /\r\n/.test(seed.text) ? 'CRLF' : 'LF', bom: false, readOnly: false, lastDiskVersion: null,
         charCount: state.doc.length, line: 1, column: 1, mode: initialMdMode,
       },
       state, baseline: state.doc, baselineEndings: endings.snapshot(state), endings, language, wrap, theme, markdownMode, indent, languageGeneration: 0, readyLanguageGeneration: null, scroll: { top: 0, left: 0 },
@@ -148,7 +166,7 @@ export class DocumentManager {
     if (existing) { this.open(existing.meta.id, preview); return existing.meta.id }
     const id = `file:${file.token}`
     const seed: DocumentSeed = { id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text, pinned: !preview,
-      kind: file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined }
+      kind: file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined, encoding: file.encoding }
     this.seeds.set(id, seed)
     const record = this.create(seed)
     this.attachMetadata(record, file)
@@ -158,13 +176,15 @@ export class DocumentManager {
   }
 
   private attachMetadata(record: CachedDocument, file: FileMetadata) {
+    const previousToken=record.meta.fileToken,previousPath=record.meta.path
     Object.assign(record.meta, { path: file.path, name: file.name, uri: `file:${file.path}`, fileToken: file.token,
       encoding: file.encoding, bom: file.bom, eol: file.eol, readOnly: record.meta.kind === 'javaClass' || file.readOnly, lastDiskVersion: file.version })
+    if(previousToken!==file.token||previousPath!==file.path)this.effects(record,[refreshMarkdownResources.of(null)])
     // File seeds must not retain a second full text copy after closing.
     this.seeds.delete(record.meta.id)
   }
   private restoreFileMode(record: CachedDocument) {
-    if (record.meta.kind === 'javaClass') return
+    if (record.meta.kind === 'javaClass' || record.meta.encoding === 'Hex') return
     const mode = this.fileModes[record.meta.path]
     if (mode && /\.(md|markdown)$/i.test(record.meta.name) && record.meta.mode !== mode) {
       record.meta.mode = mode
@@ -200,7 +220,7 @@ export class DocumentManager {
     if (!record || record.meta.dirty || this.isComposing || this.disposed) return false
     this.deferred.delete(id)
     const seed: DocumentSeed = { id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text,
-      kind: file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined }
+      kind: file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined, encoding: file.encoding }
     const next = this.create(seed)
     this.attachMetadata(next, file)
     this.restoreFileMode(next)
@@ -217,6 +237,7 @@ export class DocumentManager {
     record.meta.name = newName
     record.meta.uri = `file:${newPath}`
     this.updateMarkdownType(record, previousName)
+    this.effects(record,[refreshMarkdownResources.of(null)])
     void this.setLanguage(record.meta.id, detectLanguage(newName))
     this.notify()
     return true
@@ -293,6 +314,7 @@ export class DocumentManager {
   private paneView(pane: Pane) { return pane === 'main' ? this.view : this.secondaryView }
   focusPane(pane: Pane, focus = true) {
     if (pane === 'secondary' && !this.isSplit) return
+    if (pane !== this.activePane && this.isComposing) return
     this.activePane = pane
     if (focus) this.paneView(pane)?.focus()
     this.notify()
@@ -305,41 +327,46 @@ export class DocumentManager {
     }
   }
   private showActive(pane: Pane = this.activePane) {
-    const view = this.paneView(pane), targetId = this.paneGroup(pane).activeId
-    if (!view) return
+    let view = this.paneView(pane)
+    const targetId = this.paneGroup(pane).activeId
     const record = targetId && this.records.get(targetId)
-    if (!record) { view.setState(EditorState.create()); return }
-    view.setState(record.state.update({ selection: record.panes[pane].selection, annotations: Transaction.addToHistory.of(false) }).state)
+    if (!record) { this.destroyView(pane); return }
+    if (!view) {
+      const parent = this.hosts.get(pane)
+      if (!parent || this.disposed) return
+      view = new EditorView({ parent, state: record.state, dispatchTransactions: trs => this.applyTransactions(pane, trs) })
+      if (pane === 'main') this.view = view
+      else this.secondaryView = view
+    }
+    const shownView = view
+    shownView.setState(record.state.update({ selection: record.panes[pane].selection, annotations: Transaction.addToHistory.of(false) }).state)
     const scroll = { ...record.panes[pane] }
-    view.requestMeasure({
+    shownView.requestMeasure({
       read: () => scroll,
       write: saved => {
-        if (this.paneView(pane) === view && this.paneGroup(pane).activeId === targetId) {
-          view.scrollDOM.scrollTop = saved.top
-          view.scrollDOM.scrollLeft = saved.left
+        if (this.paneView(pane) === shownView && this.paneGroup(pane).activeId === targetId) {
+          shownView.scrollDOM.scrollTop = saved.top
+          shownView.scrollDOM.scrollLeft = saved.left
         }
       },
     })
   }
 
   mount(parent: HTMLElement) {
-    if (this.disposed || this.view) return
-    const id = this.group.activeId, record = id && this.records.get(id)
-    this.view = new EditorView({ parent, state: record ? record.state : EditorState.create(), dispatchTransactions: trs => this.applyTransactions('main', trs) })
-    this.showActive('main')
-    if (record) this.view.focus()
+    this.mountPane(parent, 'main')
+    this.view?.focus()
   }
 
   mountSecondary(parent: HTMLElement) {
-    if (this.disposed || this.secondaryView) return
-    const id = this.secondaryGroup.activeId
-    const record = id && this.records.get(id)
-    this.secondaryView = new EditorView({
-      parent,
-      state: record ? record.state : EditorState.create(),
-      dispatchTransactions: trs => this.applyTransactions('secondary', trs),
-    })
-    this.showActive('secondary')
+    this.mountPane(parent, 'secondary')
+  }
+
+  private mountPane(parent: HTMLElement, pane: Pane) {
+    if (this.disposed || this.hosts.get(pane) === parent) return
+    this.captureScroll(pane)
+    this.destroyView(pane)
+    this.hosts.set(pane, parent)
+    this.showActive(pane)
   }
 
   splitEditor(): boolean {
@@ -350,6 +377,8 @@ export class DocumentManager {
     if (currentId) {
       this.secondaryGroup.open(currentId, false)
     }
+    // A collapse/reopen can be batched by Vue without remounting the host.
+    this.showActive('secondary')
     this.notify()
     return true
   }
@@ -364,8 +393,7 @@ export class DocumentManager {
     }
     if (!this.group.activeId) this.group.activeId = this.secondaryGroup.activeId
     this.isSplit = false
-    this.secondaryView?.destroy()
-    this.secondaryView = null
+    this.destroyView('secondary')
     this.secondaryGroup.tabs.length = 0
     this.secondaryGroup.activeId = null
     this.activePane = 'main'
@@ -414,6 +442,11 @@ export class DocumentManager {
 
   unmount(pane: Pane = 'main') {
     this.captureScroll(pane)
+    this.destroyView(pane)
+    this.hosts.delete(pane)
+  }
+
+  private destroyView(pane: Pane) {
     this.paneView(pane)?.destroy()
     if (pane === 'main') this.view = null
     else this.secondaryView = null
@@ -436,7 +469,7 @@ export class DocumentManager {
 
   formatMarkdown(format: MarkdownFormat) {
     const id = this.activeId, record = id && this.records.get(id), view = this.paneView(this.activePane)
-    if (!id || !record || this.isComposing || !/\.(md|markdown)$/i.test(record.meta.name)) return false
+    if (!id || !record || record.meta.encoding === 'Hex' || this.isComposing || !/\.(md|markdown)$/i.test(record.meta.name)) return false
     const state = view?.state || record.state
     if (state.readOnly) return false
     this.dispatch(id, markdownFormatTransaction(state, format))
@@ -556,7 +589,7 @@ export class DocumentManager {
 
   async setLanguage(id: string, language: LanguageName) {
     const record = this.records.get(id)
-    if (!record || record.meta.kind === 'javaClass' || this.disposed) return
+    if (!record || record.meta.kind === 'javaClass' || (record.meta.encoding === 'Hex' && language !== 'Plain Text') || this.disposed) return
     const generation = ++record.languageGeneration
     record.readyLanguageGeneration = null
     record.meta.language = language
@@ -578,7 +611,7 @@ export class DocumentManager {
   }
   setMarkdownMode(id: string, mode: MarkdownMode): boolean {
     const record = this.records.get(id)
-    if (!record || record.meta.kind === 'javaClass' || !/\.(md|markdown)$/i.test(record.meta.name) || !['live', 'source', 'split'].includes(mode) || this.disposed || this.isComposing) return false
+    if (!record || record.meta.kind === 'javaClass' || record.meta.encoding === 'Hex' || !/\.(md|markdown)$/i.test(record.meta.name) || !['live', 'source', 'split'].includes(mode) || this.disposed || this.isComposing) return false
     record.meta.mode = mode
     const extension = mode === 'live' ? livePreviewExtension() : []
     this.effects(record, [record.markdownMode.reconfigure(extension)])
@@ -588,7 +621,7 @@ export class DocumentManager {
   setDefaultMarkdownMode(mode: MarkdownMode) { this.defaultMarkdownMode = mode }
   setFileModes(modes: Record<string, MarkdownMode>) { this.fileModes = { ...modes } }
   private updateMarkdownType(record: CachedDocument, previousName: string) {
-    if (record.meta.kind === 'javaClass') return
+    if (record.meta.kind === 'javaClass' || record.meta.encoding === 'Hex') return
     const wasMarkdown = /\.(md|markdown)$/i.test(previousName)
     const isMarkdown = /\.(md|markdown)$/i.test(record.meta.name)
     if (wasMarkdown === isMarkdown) return
@@ -622,6 +655,7 @@ export class DocumentManager {
     this.secondaryView?.destroy()
     this.secondaryView = null
     this.view = null
+    this.hosts.clear()
     this.records.clear(); this.seeds.clear(); this.deferred.clear(); this.listeners.clear()
   }
 }

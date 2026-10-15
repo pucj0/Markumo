@@ -14,6 +14,7 @@
       @execute-command="executeCommand"
       @open-file="openFile()"
       @save-file="saveActive()"
+      @request-close="quitApp('titlebar')"
       @set-mode="setMode"
       @toggle-theme="toggleTheme"
       @toggle-focus="toggleFocus"
@@ -60,6 +61,10 @@
           :desktop="desktop"
           :word-wrap="wordWrap"
           :files="files"
+          :welcome="!openedDocuments.length && !workspace.rootPath"
+          :startup-loading="startupLoading"
+          @open-file="openFile()"
+          @open-workspace="workspace.openWorkspaceDialog()"
           @set-md-mode="setMarkdownMode"
           @toggle-wrap="wordWrap = !wordWrap"
           @toggle-outline="showOutline = !showOutline"
@@ -140,7 +145,7 @@ const { appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, f
   setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
   createNewDoc, closeDocById,closeOtherTabs,cancelPendingClose, discardPending, savePending, setLanguage, setMarkdownMode,
   gotoLineRef, handleGotoLine, toggleSplitPane,
-  desktop, fileBusy, recentFiles, openFile, openRecent, saveActive } = useAppShell()
+  desktop, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading } = useAppShell()
 
 const activeDocLineCount = computed(() => {
   if (!activeDoc.value) return 1

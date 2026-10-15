@@ -1,5 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { OpenFile } from '../files/contracts'
 import type {
   SearchDonePayload,
@@ -48,7 +48,7 @@ function mapNode(raw: RawWorkspaceNode): WorkspaceNode {
   }
 }
 
-function mapInfo(raw: RawWorkspaceInfo): WorkspaceInfo {
+export function mapInfo(raw: RawWorkspaceInfo): WorkspaceInfo {
   return {
     rootPath: raw.root_path,
     name: raw.name,
@@ -60,7 +60,7 @@ function mapInfo(raw: RawWorkspaceInfo): WorkspaceInfo {
 function subscribe<T>(name: string, listener: (payload: T) => void): () => void {
   if (!isTauri()) return () => {}
   let disposed = false, unlistenFn: (() => void) | undefined
-  void listen<T>(name, event => { if (!disposed) listener(event.payload) }).then(unlisten => {
+  void getCurrentWindow().listen<T>(name, event => { if (!disposed) listener(event.payload) }).then(unlisten => {
     if (disposed) unlisten(); else unlistenFn = unlisten
   }).catch(error => console.error(`工作区事件注册失败: ${String(error)}`))
   return () => { disposed = true; unlistenFn?.() }

@@ -1,6 +1,7 @@
 pub(crate) mod atomic;
 mod codec;
 pub mod classfile;
+pub mod images;
 #[cfg(test)] mod tests;
 
 use serde::{Deserialize, Serialize};
@@ -55,12 +56,12 @@ pub struct Preferences {
     #[serde(skip_serializing_if = "Option::is_none")] pub warning: Option<String>,
 }
 #[derive(Clone)]
-struct Grant { selected: PathBuf, canonical: PathBuf, writable: bool }
+struct Grant { selected: PathBuf, canonical: PathBuf, writable: bool, hex: bool, owner: String }
 #[derive(Default)]
 pub struct FileService {
     grants: HashMap<String, Grant>, next_token: u64,
-    pending: Vec<PathBuf>, pub preferences: Preferences, prefs_path: Option<PathBuf>,
-    pending_overflow: bool,
+    pub preferences: Preferences, prefs_path: Option<PathBuf>,
+    current_owner: String,
 }
 
 pub(crate) fn checked_path(path: &Path, allow_missing: bool) -> Result<PathBuf> {
@@ -123,6 +124,12 @@ pub fn disk_version(path: &Path) -> Result<Option<String>> {
 }
 
 impl FileService {
+    pub fn set_owner(&mut self, owner: &str) { self.current_owner=owner.to_owned(); }
+    pub fn release_owner(&mut self, owner: &str) { self.grants.retain(|_,grant|grant.owner!=owner); }
+    pub fn session_path(&self, token: &str) -> Result<PathBuf> {
+        let grant=self.grants.get(token).filter(|grant|grant.owner==self.current_owner).ok_or_else(||FileError::new("scope","此窗口没有该文件授权"))?;
+        Ok(grant.canonical.clone())
+    }
     pub fn configure(&mut self, prefs_path: PathBuf) {
         match fs::File::open(&prefs_path) {
             Ok(file) => {
@@ -166,26 +173,41 @@ impl FileService {
         // A new generation avoids late release responses revoking a reopened file.
         // The frontend deduplicates by canonical path and releases extra grants.
         self.next_token += 1; let token = format!("document-{}", self.next_token);
-        self.grants.insert(token.clone(), Grant { selected, canonical, writable }); token
+        self.grants.insert(token.clone(), Grant { selected, canonical, writable, hex: false, owner: self.current_owner.clone() }); token
     }
     fn validate(&self, token: &str, missing: bool) -> Result<PathBuf> {
         let grant = self.grants.get(token).ok_or_else(|| FileError::new("scope", "文件授权已经释放或无效。"))?;
+        if grant.owner!=self.current_owner { return fail("scope","此窗口没有该文件授权"); }
         if checked_path(&grant.selected, missing)? != grant.canonical { return fail("scope", "文件路径或符号链接目标已变化，拒绝访问。" ); }
         Ok(grant.canonical.clone())
     }
     pub fn open_selected(&mut self, selected: PathBuf, encoding: Option<&str>) -> Result<OpenFile> {
         let path = checked_path(&selected, false)?;
         let (bytes, version, read_only) = read_disk(&path)?;
-        if is_class_path(&path) || bytes.starts_with(classfile::MAGIC) {
+        // Keep structural inspection as an explicit view; opening is editable by default.
+        if encoding == Some("ClassInfo") {
             let class_info = classfile::parse(&bytes)?;
             let token = self.grant(selected, path.clone(), false);
             let warning = self.recent(&path);
             return Ok(OpenFile { metadata: FileMetadata { token, path:path.to_string_lossy().into_owned(), name:path.file_name().unwrap().to_string_lossy().into_owned(),
                 encoding:"Binary".into(),bom:false,eol:"LF".into(),read_only:true,version,warning },kind:FileKind::JavaClass,text:String::new(),class_info:Some(class_info) });
         }
-        let (text, encoding, bom) = codec::decode(&bytes, encoding)?;
+        if encoding == Some("Hex") && bytes.len() > MAX_BYTES as usize / 3 { return fail("size", "文件的十六进制显示超过 16 MiB，请使用专用二进制编辑器。"); }
+        // Extensions select highlighting only. Binary bytes use an editable,
+        // reversible representation instead of a lossy UTF-8 conversion.
+        let decoded = codec::decode(&bytes, encoding);
+        let (text, encoding, bom) = match decoded {
+            Ok(decoded) => decoded,
+            Err(error) if encoding.is_none() && byte_fallback_allowed(&bytes, &error) => {
+                // Keep the expanded representation within existing editor limits.
+                if bytes.len() > MAX_BYTES as usize / 3 { return fail("size", "文件的十六进制显示超过 16 MiB，请使用专用二进制编辑器。"); }
+                (codec::hex_text(&bytes), "Hex".into(), false)
+            },
+            Err(error) => return Err(error),
+        };
         guard_text(&text)?;
         let token = self.grant(selected, path.clone(), true);
+        self.grants.get_mut(&token).unwrap().hex = encoding == "Hex";
         let warning = self.recent(&path);
         Ok(OpenFile { metadata: FileMetadata { token, path: path.to_string_lossy().into_owned(), name: path.file_name().unwrap().to_string_lossy().into_owned(),
             eol: codec::eol(&text), encoding, bom, read_only, version, warning }, kind:FileKind::Text,text,class_info:None })
@@ -195,37 +217,45 @@ impl FileService {
         self.open_selected(PathBuf::from(path), encoding)
     }
     pub fn reopen(&mut self, token: &str, encoding: &str) -> Result<OpenFile> {
-        self.require_text_grant(token)?;
+        if encoding != "Hex" { self.require_text_grant(token)?; }
         let path = self.validate(token, false)?;
         self.open_selected(path, Some(encoding))
     }
     pub fn prepare_target(&mut self, selected: PathBuf, source: Option<&str>) -> Result<SaveTarget> {
         if let Some(source)=source { self.require_text_grant(source)?; }
+        let hex = source.and_then(|token| self.grants.get(token)).is_some_and(|grant| grant.hex);
         let path = checked_path(&selected, true)?;
-        guard_text_target(&path)?;
+        if !hex { guard_text_target(&path)?; }
         if let Some((token, _)) = self.grants.iter().find(|(_, grant)| grant.canonical == path) {
             if Some(token.as_str()) != source { return fail("already_open", "目标文件已在其他标签打开，请保存那个标签或选择其他文件名。" ); }
         }
         let version = disk_version(&path)?;
         let token = self.grant(selected, path.clone(), true);
+        self.grants.get_mut(&token).unwrap().hex = hex;
         Ok(SaveTarget { token, path: path.to_string_lossy().into_owned(), version })
     }
     pub fn save(&mut self, token: &str, text: &str, expected: Option<&str>, encoding: &str, bom: bool) -> Result<FileMetadata> {
         self.require_text_grant(token)?;
         let path = self.validate(token, true)?;
-        guard_text_target(&path)?;
+        if self.grants.get(token).is_some_and(|grant| grant.hex) && encoding != "Hex" {
+            return fail("encoding_loss", "字节编辑内容必须按 Hex 保存，不能把十六进制显示文字转换成原文件内容。");
+        }
+        if encoding != "Hex" { guard_text_target(&path)?; }
         guard_text(text)?;
         let bytes = codec::encode(text, encoding, bom)?;
+        if encoding == "Hex" && bytes.len() > MAX_BYTES as usize / 3 { return fail("size", "字节内容超过当前十六进制编辑容量（约 5.33 MiB），已阻止写入。"); }
         if bytes.len() as u64 > MAX_BYTES { return fail("size", "编码后的文件超过 16 MiB，已阻止写入。" ); }
         atomic::write_checked(&path, &bytes, expected)?;
         let (written, version, read_only) = read_disk(&path)?;
         if written != bytes { return fail("conflict", "写入后检测到外部修改；磁盘状态未确认，编辑内容保留。" ); }
+        self.grants.get_mut(token).unwrap().hex = encoding == "Hex";
         let warning = self.recent(&path);
         Ok(FileMetadata { token: token.into(), path: path.to_string_lossy().into_owned(), name: path.file_name().unwrap().to_string_lossy().into_owned(),
             encoding: encoding.into(), bom, eol: codec::eol(text), read_only, version, warning })
     }
-    pub fn release(&mut self, token: &str) { self.grants.remove(token); }
+    pub fn release(&mut self, token: &str) { if self.grants.get(token).is_some_and(|grant|grant.owner==self.current_owner){self.grants.remove(token);} }
     fn require_text_grant(&self, token: &str) -> Result<()> {
+        self.session_path(token)?;
         match self.grants.get(token) {
             Some(grant) if !grant.writable => fail("read_only_binary", "ClassFile 仅供只读查看，不能作为文本保存或另存为。"),
             Some(_) => Ok(()),
@@ -265,18 +295,6 @@ impl FileService {
     pub fn has_grants_under(&self, path: &Path) -> bool {
         self.grants.values().any(|g| g.canonical.starts_with(path))
     }
-    pub fn queue(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
-        for path in paths {
-            if self.pending.len() >= 100 { self.pending_overflow = true; break; }
-            self.pending.push(path);
-        }
-    }
-    pub fn drain(&mut self) -> OpenBatch {
-        let paths = std::mem::take(&mut self.pending);
-        let mut batch = self.open_batch(paths, None);
-        if std::mem::take(&mut self.pending_overflow) { batch.errors.push("待打开文件超过 100 个，请分批重新选择。".into()); }
-        batch
-    }
     pub fn open_batch(&mut self, paths: Vec<PathBuf>, encoding: Option<&str>) -> OpenBatch {
         let mut batch = OpenBatch::default();
         let mut total = 0;
@@ -305,13 +323,17 @@ fn guard_text(text: &str) -> Result<()> {
     }
     Ok(())
 }
-fn is_class_path(path: &Path) -> bool { path.extension().is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("class")) }
 fn guard_text_target(path: &Path) -> Result<()> {
-    if is_class_path(path) { return fail("read_only_binary", "不能使用文本保存覆盖 .class 文件。"); }
     match fs::File::open(path) {
         Ok(file) => { let mut magic = Vec::with_capacity(4); file.take(4).read_to_end(&mut magic).map_err(FileError::io)?; if magic.as_slice() == classfile::MAGIC { return fail("read_only_binary", "目标是 JVM ClassFile，已阻止文本覆盖。"); } },
         Err(error) if error.kind()==std::io::ErrorKind::NotFound => {},
         Err(error) => return Err(FileError::io(error)),
     }
     Ok(())
+}
+
+fn byte_fallback_allowed(bytes: &[u8], error: &FileError) -> bool {
+    // A malformed BOM-bearing text file still requires explicit correction.
+    (error.code == "binary" || error.code == "encoding") &&
+        (bytes.starts_with(classfile::MAGIC) || encoding_rs::Encoding::for_bom(bytes).is_none())
 }

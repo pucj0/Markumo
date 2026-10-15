@@ -13,7 +13,7 @@ import { markdownFormats } from '../editor/markdown/formatCommands'
 import { FileController, fileError } from '../features/files/FileController'
 import { AutoSaveController } from '../features/files/AutoSaveController'
 import { tauriFiles } from '../features/files/tauriFiles'
-import type { Encoding, Preferences } from '../features/files/contracts'
+import type { Encoding, FileOpenEncoding, Preferences } from '../features/files/contracts'
 import { WorkspaceController } from '../features/workspace/WorkspaceController'
 import { tauriWorkspace } from '../features/workspace/tauriWorkspace'
 import { defaultShortcuts, eventShortcut, fontFamilies, loadEditorSettings, saveEditorSettings, validateShortcuts, relativeFilePath, type EditorSettings, type ShortcutAction } from '../features/shell/editorSettings'
@@ -24,6 +24,9 @@ import { shortcutLabel } from '../features/shell/editorSettings'
 import { textClipboard } from '../features/shell/clipboard'
 import { editorClipboard, inputClipboard, type ClipboardOperation } from '../editor/commands/clipboard'
 import { EditorView } from '@codemirror/view'
+import { WindowCloseGuard, type CloseSource } from '../features/shell/WindowCloseGuard'
+import { initializeLaunch, sessionInput, SessionWriter } from '../features/shell/launchSession'
+import { invoke } from '@tauri-apps/api/core'
 
 export function useAppShell() {
   const desktop = isTauri()
@@ -69,8 +72,6 @@ export function useAppShell() {
       manager.open(id, sampleDocuments.find(doc => doc.id === id)?.pinned === false)
     }
     manager.select('rust-doc')
-  } else {
-    manager.createUntitled()
   }
   const openedDocuments = computed(() => { revision.value; return manager.openedDocuments })
   const mainOpenedDocuments = computed(() => { revision.value; return manager.mainOpenedDocuments })
@@ -86,6 +87,26 @@ export function useAppShell() {
   let pendingDrain = false
   let draining = false
   let alive = true
+  const startupLoading=ref(desktop)
+  let sessionWriter:SessionWriter|undefined
+  let launchReady=false
+  let closeSource: CloseSource = 'native'
+  const windowClose = new WindowCloseGuard({
+    status: () => ({ fileBusy: fileBusy.value || files.workspaceBusy, savingCount: files.saving.size,
+      composing: manager.isComposing, dirtyCount: manager.openedDocuments.filter(doc => doc.dirty).length,
+      documentCount: manager.openedDocuments.length, activePane: manager.activePane, hasActiveDocument: !!manager.activeId }),
+    flush: async()=>{await flushSettings();scheduleSession();await sessionWriter?.flush()},
+    confirmDirty: () => {
+      if (pendingClose?.kind === 'window' && discardRef.value?.visible) return
+      pendingClose = { kind: 'window' }
+      paletteRef.value?.close(); settingsRef.value?.close()
+      discardRef.value?.open('当前窗口中的文档')
+    },
+    destroy: async () => { if (alive) await (await import('@tauri-apps/api/window')).getCurrentWindow().destroy() },
+    blocked: reason => toast(reason === 'composing' ? '请先完成当前输入法输入，再关闭窗口。' : '请等待当前文件操作完成后再关闭。'),
+    failed: () => toast('关闭窗口失败，编辑内容仍保留在当前窗口。'),
+    diagnose: data => console.info('[LightEdit close]', data),
+  })
   let wasNarrow = window.innerWidth < 900
   function adaptWindowWidth() {
     const narrow = window.innerWidth < 900
@@ -99,16 +120,16 @@ export function useAppShell() {
     try { const prefs = await tauriFiles.preferences(); if (alive) recentFiles.value = prefs.recent }
     catch (error) { toast(fileError(error)) }
   }
-  async function openFile(encoding?: Encoding) {
+  async function openFile(encoding?: FileOpenEncoding) {
     if (!desktop) { toast('浏览器仅支持内存编辑；请使用 Tauri 桌面版打开或保存磁盘文件。'); return }
     if (fileBusy.value || manager.isComposing) { composingHint(); return }
     fileBusy.value = true
-    try { await files.open(encoding); if (!workspace.rootPath) setMode('single'); await refreshRecent() } finally { fileBusy.value = false; void drainPending() }
+    try { await files.open(encoding); await refreshRecent() } finally { fileBusy.value = false; void drainPending() }
   }
   async function openRecent(path: string) {
     if (fileBusy.value || manager.isComposing) { composingHint(); return }
     fileBusy.value = true
-    try { await files.recent(path); if (!workspace.rootPath) setMode('single'); await refreshRecent() } finally { fileBusy.value = false; void drainPending() }
+    try { await files.recent(path); await refreshRecent() } finally { fileBusy.value = false; void drainPending() }
   }
   async function saveDoc(id: string, saveAs = false, encoding?: Encoding) {
     if (!desktop) { toast('浏览器仅支持内存编辑；请使用 Tauri 桌面版打开或保存磁盘文件。'); return false }
@@ -118,12 +139,13 @@ export function useAppShell() {
     finally { fileBusy.value = false; void drainPending() }
   }
   function saveActive(saveAs = false, encoding?: Encoding) { if (manager.activeId) return saveDoc(manager.activeId, saveAs, encoding); return Promise.resolve(false) }
-  async function quitApp() {
+  async function quitApp(source: CloseSource = 'command') {
     if (!desktop) return
+    closeSource = source
     try { await (await import('@tauri-apps/api/window')).getCurrentWindow().close() }
-    catch (error) { toast(`退出失败：${fileError(error)}`) }
+    catch (error) { closeSource = 'native'; toast(`退出失败：${fileError(error)}`) }
   }
-  async function reopenEncoding(encoding: Encoding) {
+  async function reopenEncoding(encoding: FileOpenEncoding) {
     if (fileBusy.value) return
     fileBusy.value = true
     try { await files.reopen(encoding) } finally { fileBusy.value = false; void drainPending() }
@@ -131,7 +153,7 @@ export function useAppShell() {
   async function drainPending() {
     if (!desktop || !alive) return
     pendingDrain = true
-    if (draining || fileBusy.value || manager.isComposing || discardRef.value?.visible) return
+    if (!launchReady || draining || fileBusy.value || manager.isComposing || discardRef.value?.visible) return
     draining = true
     fileBusy.value = true
     try {
@@ -154,7 +176,7 @@ export function useAppShell() {
   function selectDocById(id: string) { if (!manager.select(id, 'main') && manager.isComposing) composingHint() }
   function handleSelectDoc(id: string, preview = true) { if (!manager.open(id, preview) && manager.isComposing) composingHint() }
   function pinDocById(id: string) { manager.pin(id) }
-  function createNewDoc() { if (!manager.createUntitled()) composingHint() }
+  function createNewDoc() { if (startupLoading.value) return; if (!manager.createUntitled()) composingHint() }
   function closeDocById(id: string, pane: 'main' | 'secondary' = 'main',queued=false) {
     if(!queued)tabCloseQueue=[]
     if (fileBusy.value) { toast('文件操作进行中，请稍后关闭。'); return }
@@ -183,12 +205,17 @@ export function useAppShell() {
   }
   function cancelPendingClose(){pendingClose=null;tabCloseQueue=[]}
   async function discardPending() {
-    if (fileBusy.value || manager.isComposing) { composingHint(); return }
+    if (fileBusy.value || files.saving.size || files.workspaceBusy || manager.isComposing) { composingHint(); return }
     const pending = pendingClose
     pendingClose = null
     if (pending?.kind === 'document') files.close(pending.id, true, pending.pane)
     else if (pending?.kind === 'window') {
-      try { await flushSettings(); await (await import('@tauri-apps/api/window')).getCurrentWindow().destroy() }
+      try {
+        await flushSettings()
+        await sessionWriter?.flush()
+        if (fileBusy.value || files.saving.size || files.workspaceBusy || manager.isComposing) { pendingClose = pending; return }
+        await (await import('@tauri-apps/api/window')).getCurrentWindow().destroy()
+      }
       catch { toast('关闭窗口失败，编辑内容仍保留在当前窗口。') }
     }
     advanceTabCloseQueue()
@@ -301,7 +328,7 @@ export function useAppShell() {
       { id: 'open', title: '打开文件', detail: desktop ? 'Ctrl+O' : '需要 Tauri 桌面版', category: 'file', disabled: !desktop || fileBusy.value, action: () => void openFile() },
       { id: 'save', title: '保存文件', detail: 'Ctrl+S', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass', action: () => void saveActive() },
       { id: 'save-as', title: '另存为', detail: 'Ctrl+Shift+S', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass', action: () => void saveActive(true) },
-      { id: 'save-utf8', title: '另存为 UTF-8', detail: '转换编码，无 BOM', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass', action: () => void saveActive(true, 'UTF-8') },
+      { id: 'save-utf8', title: '另存为 UTF-8', detail: '转换编码，无 BOM', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass' || activeDoc.value?.encoding === 'Hex', action: () => void saveActive(true, 'UTF-8') },
       { id: 'find', title: '查找当前文档', detail: 'Ctrl+F', category: 'action', action: () => manager.command('find') },
       { id: 'replace', title: '替换当前文档', detail: 'Ctrl+R', category: 'action', disabled: activeDoc.value?.kind === 'javaClass', action: () => manager.command('replace') },
       { id: 'find-next', title: '查找下一个', detail: 'F3', category: 'action', action: () => manager.command('find-next') },
@@ -332,6 +359,9 @@ export function useAppShell() {
     const encodings: Encoding[] = ['UTF-8', 'UTF-16LE', 'UTF-16BE', 'GB18030', 'windows-1252']
     for (const action of actions) if (action.id in shortcuts.value) action.detail = shortcutLabel(shortcuts.value[action.id as ShortcutAction])
     return [...actions,
+      { id:'open-file-bytes',title:'以字节方式打开文件',detail:'可编辑十六进制',category:'action' as const,disabled:!desktop||fileBusy.value,action:()=>void openFile('Hex') },
+      { id:'edit-file-bytes',title:'编辑文件字节',detail:'可编辑十六进制',category:'action' as const,disabled:!desktop||!activeDoc.value?.fileToken||fileBusy.value,action:()=>void reopenEncoding('Hex') },
+      { id:'inspect-class',title:'查看 JVM ClassFile 结构',detail:'只读结构信息',category:'action' as const,disabled:!desktop||!activeDoc.value?.fileToken||activeDoc.value.encoding!=='Hex'||fileBusy.value,action:()=>void reopenEncoding('ClassInfo') },
       ...encodings.map(encoding => ({ id: `open-${encoding}`, title: `按 ${encoding} 编码打开文件`, detail: '原生文件选择', category: 'action' as const, disabled: !desktop || fileBusy.value, action: () => void openFile(encoding) })),
       ...encodings.map(encoding => ({ id: `reopen-${encoding}`, title: `用 ${encoding} 编码重新打开`, detail: '需要先保存修改', category: 'action' as const, disabled: !desktop || !activeDoc.value?.fileToken || fileBusy.value, action: () => void reopenEncoding(encoding) })),
       ...workspace.recentWorkspaces.map(path => ({ id: recentWorkspaceCommand(path), title: `打开工作区：${path.split(/[\\/]/).pop()}`, detail: readablePath(path), category: 'action' as const, disabled: !desktop || fileBusy.value, action: () => void workspace.openWorkspacePath(path) })),
@@ -364,6 +394,7 @@ export function useAppShell() {
   const menuGroups = computed(() => {revision.value;return mainMenu({sidebar:sidebarVisible.value,outline:showOutline.value,wrap:wordWrap.value,split:manager.isSplit,focus:focusMode.value,
     markdown:!!activeDoc.value?.mode,markdownMode:activeDoc.value?.mode,composing:manager.isComposing,recentFiles:recentFiles.value,recentWorkspaces:workspace.recentWorkspaces})})
   function executeCommand(id:string) {
+    if(startupLoading.value)return
     try {const result=commandRegistry.value.execute(id);if(result instanceof Promise)void result.catch(error=>toast(fileError(error)))}catch(error){toast(fileError(error))}
   }
   async function clipboardAction(operation:ClipboardOperation) {
@@ -379,6 +410,7 @@ export function useAppShell() {
   }
 
   function handleGlobalKeydown(event: KeyboardEvent) {
+    if(startupLoading.value){if(event.ctrlKey||event.metaKey)event.preventDefault();return}
     const alreadyHandled = event.defaultPrevented
     // Never let the WebView reload, including dialogs and customized bindings.
     if (eventShortcut(event) === 'Mod+R') event.preventDefault()
@@ -407,6 +439,11 @@ export function useAppShell() {
   function beforeUnload(event: BeforeUnloadEvent) {
     if (manager.hasDirtyDocuments || manager.isComposing || fileBusy.value || files.saving.size) { event.preventDefault(); event.returnValue = '' }
   }
+  function scheduleSession() {
+    if (!launchReady || !sessionWriter) return
+    sessionWriter.schedule(sessionInput(manager,workspace.roots,{mode:appMode.value,sidebarVisible:sidebarVisible.value,sidebarWidth:sidebarWidth.value}))
+  }
+  watch([revision,appMode,sidebarVisible,sidebarWidth],scheduleSession)
   function editorNotice(event: Event) { toast((event as CustomEvent<string>).detail) }
   watch(resolvedTheme, value => {
     document.body.classList.toggle('light', value === 'light')
@@ -466,11 +503,13 @@ export function useAppShell() {
   function resumePending() { setTimeout(() => { if (pendingDrain) void drainPending() }, 0) }
   watch(() => discardRef.value?.visible, value => { if (!value) resumePending() })
   onMounted(async () => {
+    if (desktop) fileBusy.value=true
     window.addEventListener('editor-notice', editorNotice)
     window.addEventListener('resize', adaptWindowWidth)
     window.addEventListener('keydown', handleGlobalKeydown, true)
     window.addEventListener('beforeunload', beforeUnload)
     window.addEventListener('compositionend', resumePending)
+    window.addEventListener('compositioncancel', resumePending)
     window.addEventListener('wheel', handleEditorWheel, { passive: false, capture: true })
     try {
       const settings = await loadEditorSettings()
@@ -483,31 +522,43 @@ export function useAppShell() {
       await nextTick()
     } catch (error) { toast(`首选项读取失败，使用默认值：${fileError(error)}`) }
     settingsReady = true
-    autoSaver.configure(desktop && autoSave.value, autoSaveDelay.value)
     if (desktop) {
-      try { await workspace.restoreCurrent() } catch (error) { toast(`工作区恢复失败：${fileError(error)}`) }
+      try {
+        const launch=await initializeLaunch()
+        if (!alive) return
+        workspace.restoreSession(launch.roots)
+        files.acceptBatch(launch.files)
+        const selected=manager.openedDocuments.find(doc=>doc.path===launch.activePath)||manager.openedDocuments[0]
+        if(selected)manager.select(selected.id,'main')
+        appMode.value=launch.kind==='file'?'single':launch.layout.mode
+        sidebarWidth.value=launch.layout.sidebarWidth
+        sidebarVisible.value=launch.kind==='app'&&!!workspace.rootPath&&launch.layout.sidebarVisible&&!wasNarrow
+        if(launch.warnings.length)toast(launch.warnings.join('\n'))
+        if(launch.ownsSession){
+          sessionWriter=new SessionWriter(input=>invoke('persist_session',{input}),error=>toast(`会话记录失败：${fileError(error)}`))
+          sessionWriter.prime(sessionInput(manager,workspace.roots,{mode:appMode.value,sidebarVisible:sidebarVisible.value,sidebarWidth:sidebarWidth.value}))
+        }
+        await nextTick()
+        launchReady=true
+        // Preserve an unreadable/partly restored session until a real user change.
+      } catch(error){toast(`启动文件/会话恢复失败：${fileError(error)}`)}
+      finally {fileBusy.value=false;startupLoading.value=false}
       try {
         const unlisten = await (await import('@tauri-apps/api/window')).getCurrentWindow().onCloseRequested(async event => {
-          if (fileBusy.value || files.saving.size || manager.isComposing) { event.preventDefault(); toast('请等待文件操作和输入完成后再关闭。'); return }
-          await flushSettings()
-          if (fileBusy.value || files.saving.size || manager.isComposing) { event.preventDefault(); return }
-          if (manager.hasDirtyDocuments) {
-            event.preventDefault()
-            pendingClose = { kind: 'window' }
-            paletteRef.value?.close(); settingsRef.value?.close()
-            discardRef.value?.open('当前窗口中的文档')
-          }
+          event.preventDefault()
+          const source = closeSource
+          closeSource = 'native'
+          await windowClose.request(source)
         })
         if (alive) unlistenWindow = unlisten
         else unlisten()
       } catch { toast('窗口关闭保护注册失败；请勿关闭含未保存修改的窗口。') }
       try {
-        const unlisten = await (await import('@tauri-apps/api/event')).listen('files-pending', () => void drainPending())
+        const unlisten = await (await import('@tauri-apps/api/window')).getCurrentWindow().listen('files-pending', () => void drainPending())
         if (alive) unlistenPending = unlisten; else unlisten()
         const prefs = await tauriFiles.preferences()
         if (alive) {
           recentFiles.value = prefs.recent
-          appMode.value = workspace.rootPath ? prefs.layout.mode : 'single'; sidebarWidth.value = prefs.layout.sidebarWidth; sidebarVisible.value = !!workspace.rootPath && prefs.layout.sidebarVisible && !wasNarrow
           if (prefs.warning) toast(prefs.warning)
           // Let layout watchers observe restored values before persisting changes.
           await nextTick(); preferencesReady = true
@@ -515,6 +566,7 @@ export function useAppShell() {
         }
       } catch (error) { toast(fileError(error)) }
     }
+    autoSaver.configure(desktop && autoSave.value, autoSaveDelay.value)
   })
   onUnmounted(() => {
     systemTheme.removeEventListener('change', updateSystemTheme)
@@ -528,7 +580,9 @@ export function useAppShell() {
     window.removeEventListener('keydown', handleGlobalKeydown, true)
     window.removeEventListener('beforeunload', beforeUnload)
     window.removeEventListener('compositionend', resumePending)
+    window.removeEventListener('compositioncancel', resumePending)
     window.removeEventListener('wheel', handleEditorWheel, true)
+    sessionWriter?.dispose()
     autoSaver.dispose(); files.dispose(); workspace.destroy(); unsubscribeWorkspace(); unsubscribe(); manager.dispose()
   })
   return { appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay,
@@ -536,5 +590,5 @@ export function useAppShell() {
     setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, selectDocById, handleSelectDoc,
     pinDocById, createNewDoc, closeDocById,closeOtherTabs,cancelPendingClose, discardPending, savePending, setLanguage, setMarkdownMode,
     gotoLineRef, openGotoLine, handleGotoLine, toggleSplitPane, copyFullPath, copyRelativePath, revealInExplorer, zoomIn, zoomOut, resetZoom,
-    desktop, demo, fileBusy, recentFiles, openFile, openRecent, saveActive }
+    desktop, demo, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading }
 }

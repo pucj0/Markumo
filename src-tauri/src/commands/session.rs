@@ -1,0 +1,152 @@
+use crate::{
+    commands::{files::FileStore, workspace::WorkspaceStore},
+    files::{Layout, OpenBatch},
+    session::{LaunchKind, LaunchStore, SessionInput, SessionStore},
+    workspace::WorkspaceInfo,
+};
+use serde::Serialize;
+use tauri::{State, Window};
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Startup {
+    kind: LaunchKind,
+    files: OpenBatch,
+    roots: Vec<WorkspaceInfo>,
+    active_path: Option<String>,
+    layout: Layout,
+    warnings: Vec<String>,
+    owns_session: bool,
+}
+
+#[tauri::command]
+pub async fn initialize_launch(
+    window: Window,
+    launches: State<'_, LaunchStore>,
+    sessions: State<'_, SessionStore>,
+    files: State<'_, FileStore>,
+    workspaces: State<'_, WorkspaceStore>,
+) -> Result<Startup, String> {
+    let label = window.label().to_owned();
+    let launch = launches
+        .lock()
+        .map_err(|e| e.to_string())?
+        .windows
+        .get(&label)
+        .cloned()
+        .ok_or("窗口启动请求尚未注册")?;
+    let session = if launch.kind == LaunchKind::App {
+        sessions.lock().map_err(|e| e.to_string())?.load()
+    } else {
+        Ok(None)
+    };
+    let files = files.inner().clone();
+    let workspaces = workspaces.for_window(&label)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut result = Startup {
+            kind: launch.kind,
+            files: OpenBatch::default(),
+            roots: Vec::new(),
+            active_path: None,
+            layout: Layout::default(),
+            warnings: Vec::new(),
+            owns_session: launch.kind == LaunchKind::App,
+        };
+        let session = match session {
+            Ok(session) => session,
+            Err(error) => {
+                result.warnings.push(error);
+                None
+            }
+        };
+        if let Some(session) = session.as_ref() {
+            result.layout = session.layout.clone();
+            result.active_path = session.active_path.clone();
+            if session.kind == "workspace" {
+                let mut ws = workspaces.lock().map_err(|e| e.to_string())?;
+                for root in &session.roots {
+                    match ws.add_workspace(root.into()) {
+                        Ok(info) => result.roots.push(info),
+                        Err(error) => result
+                            .warnings
+                            .push(format!("工作区恢复失败：{root}：{error}")),
+                    }
+                }
+            }
+        }
+        let mut service = files.lock().map_err(|e| e.to_string())?;
+        service.set_owner(&label);
+        if launch.kind == LaunchKind::File {
+            result.files = service.open_batch(launch.paths, None)
+        } else if let Some(session) = session {
+            let mut bytes = 0;
+            for tab in session.tabs {
+                if bytes >= 48 * 1024 * 1024 {
+                    result
+                        .warnings
+                        .push("恢复文件总量超过48 MiB，剩余标签已跳过".into());
+                    break;
+                }
+                let path = std::path::PathBuf::from(&tab.path);
+                if crate::files::checked_path(&path, false).is_ok_and(|canonical| canonical != path)
+                {
+                    result
+                        .files
+                        .errors
+                        .push(format!("路径目标发生变化，已跳过 {}", tab.path));
+                    continue;
+                }
+                match service.open_selected(path, Some(&tab.encoding)) {
+                    Ok(file) => {
+                        bytes += file.text.len();
+                        result.files.files.push(file)
+                    }
+                    Err(error) => result
+                        .files
+                        .errors
+                        .push(format!("无法恢复 {}：{}", tab.path, error)),
+                }
+            }
+        }
+        // Failed roots degrade to a safe single-file/empty view.
+        if result.roots.is_empty() {
+            result.layout.mode = "single".into();
+            result.layout.sidebar_visible = false;
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn persist_session(
+    window: Window,
+    input: SessionInput,
+    launches: State<'_, LaunchStore>,
+    sessions: State<'_, SessionStore>,
+    files: State<'_, FileStore>,
+    workspaces: State<'_, WorkspaceStore>,
+) -> Result<(), String> {
+    let label = window.label();
+    if launches
+        .lock()
+        .map_err(|e| e.to_string())?
+        .owner()
+        .as_deref()
+        != Some(label)
+    {
+        return Err("文件关联临时窗口不能写入主会话".into());
+    }
+    let roots = workspaces
+        .for_window(label)?
+        .lock()
+        .map_err(|e| e.to_string())?
+        .roots();
+    let mut file_service = files.lock().map_err(|e| e.to_string())?;
+    file_service.set_owner(label);
+    let session = crate::session::capture(input, &file_service, roots)?;
+    drop(file_service);
+    // Bounded atomic JSON write, serialized independently of editor input.
+    sessions.lock().map_err(|e| e.to_string())?.save(&session)
+}

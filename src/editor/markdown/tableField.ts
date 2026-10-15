@@ -5,6 +5,7 @@ import { tableModel } from './tableModel'
 import { TableWidget } from './tableWidget'
 
 const composing = StateEffect.define<boolean>()
+export const blockComposing = composing
 function build(state: EditorState): DecorationSet {
   if (state.doc.length > 1024 * 1024) return Decoration.none
   const ranges: ReturnType<Decoration['range']>[] = []

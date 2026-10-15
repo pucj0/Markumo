@@ -1,5 +1,29 @@
 # LightEdit 阶段进度与验收台账
 
+### 2026-10-15 本地打包脚本专项
+- 仅增加打包入口/文档与针对性脚本测试：Windows `build.bat` 生成 NSIS EXE；macOS/Linux 的 `build.sh` 调用同一个 `scripts/package.mjs`，分别选择 APP/DMG 与 DEB/AppImage。对应系统本机构建，跨系统请求明确失败；不引入依赖、不改编辑器业务、不提交/推送/发布。
+- 默认锁定依赖安装后复用 Tauri 生产构建，可 `--skip-install`；`--check` 不安装/编译。补齐 Cargo PATH，保留代理/签名环境，清除继承的开发配置，mac 图标在生成目录派生，使用 Cargo metadata 定位输出，失败返回非零码，无强制结束进程或自动安装行为。
+- 实测PASS：`node --check scripts/package.mjs`、7个针对性 Vitest 用例、Windows CMD 实际 `build.bat --check`（Node/pnpm/Rust/Cargo基础检查）；`build.bat --platform macos --check` 按预期退出1。`git diff --check` PASS。完整构建/安装/签名和macOS/Linux运行均NOT RUN；本轮只交付脚本，不宣称安装包已生成或跨平台验收通过。REVIEW，使用说明及文件用途见 `PACKAGING.md`。
+
+### 2026-10-15 启动模式与会话恢复专项
+- 本轮仅修改启动/文件关联分流/欢迎空状态/Last Session 与必要的窗口授权隔离。Rust先分类App/File Launch；无参数恢复真实会话或欢迎页，有参数只开本批文件；不创建Untitled。已运行时外部文件进入独立file-N窗口，不打扰主工作区；Ctrl+O保留当前模式。
+- 新增独立schema v1 last-session.json，记录根、真实文件标签顺序/编码、活动标签和侧栏布局；不使用Recents代替标签，不记录正文。前端去重合并写入，Rust只接受本窗口授权token；临时窗口无会话写权限。工作区/搜索/队列/grant按窗口隔离，销毁只回收自身授权。保留原安全读写、脏文档与保存/IME关闭保护。
+- 实测PASS：typecheck、前端186/186、build、cargo check与Rust49/49；浏览器2组、真实Windows启动/单实例/多窗口/关闭重启10组。证据 `test-results/launch-session-native/1792030774965/`，逐项范围/文件/测试/限制见 `STARTUP_SESSION_UPDATE.md`。
+- REVIEW：Explorer实际关联/双击、系统选择器、真实系统IME和跨平台仍NOT RUN；没有安装、修改系统关联、提交、推送或发布。旧版无真实标签快照时不从Recents猜测会话。
+- 上一多分栏专项按用户新范围停止；仅保留Phase A已改基础修复，B–D未开始。旧原生专项后两组未完成及复现证据如实记录于 `EDITOR_LAYOUT_REFACTOR.md`。
+
+### 2026-10-15 Markdown 专项阶段 A — 核心审查与基础所见即所得
+- 用户最后要求停止回归，已停止后续测试并清理本轮测试进程。保留已完成的真实结果，最后重复typecheck因该指示被自动审批拒绝，NOT RUN且未重试；不再补跑或推进阶段B。
+- 范围仅为既有Phase 5/6增量：按Typora官方公开文档建立Live/Source/Split三模式差距矩阵；复用原表格Widget；实现授权相对栅格图片/失败路径/受控网络/精确源码点击，围栏语言复用/安全高亮/复制，列表与任务续写/空项退出、引用逐级退出与条件Tab/Shift+Tab，共享GFM/换行/链接/标点策略。
+- CM源码/Transaction仍唯一数据，块图片直接StateField测量；图片不开放file协议，Rust token+当前工作区根范围检查，4MiB/16MP/单边16384及全局保留字节/像素预算，迟到响应/BlobURL/计时器销毁。无新依赖，保留本轮前未知后缀和字节编辑未提交修改。
+- 最终实测PASS：typecheck/build、前端175/175、Rust45/45及cargo check；新Markdown UI11组（含另存为/移动资源刷新及24次长文图片布局真实点击）、既有40次点击、表格18组、基础9组/双Pane8组；原生图片4组及完整编辑13组（含40次点击/BOM/CRLF/保存冲突/关闭保护/三模式/表格）。证据与逐文件用途见 `MARKDOWN_PARITY.md`。
+- 状态REVIEW；真实系统中文IME、系统剪贴板新专项、原生DPI/触控板、跨平台和长时RSS仍NOT RUN。公式/脚注/TOC/YAML元数据语义/Mermaid/GFM Alert及高级图片/表格工作流不冒称完成。阶段B仅列建议，未开始；不提交、推送、发布或更新安装包。
+
+### 2026-10-15 未知后缀与可编辑 ClassFile 字节
+- Phase 3/6 既有文件链路增量。遵循用户最新指示，覆盖此前“.class 默认只读”的要求：后缀只决定语法高亮，不限制文本打开、编辑、保存与另存为；文本 `.class`、`.bat/.cmd`、未知后缀和无后缀均进入普通编辑器。
+- 真正的 ClassFile/NUL/默认编码无法解码的非 BOM 数据以可逆 Hex 进入同一 CodeMirror 标签，可编辑、撤销/重做、手动/自动保存与分栏。Rust 严格解析字节并继续使用授权 token、版本冲突校验及原子保存；禁止把 Hex 展示文字转 UTF-8 覆盖原文件。可选“查看 JVM ClassFile 结构”和“编辑文件字节”保留原有结构查看能力。
+- 实测PASS：typecheck/build、前端157/157、Rust42/42及cargo check，浏览器基础9组/分栏与搜索8组、Windows原生真实文件7组（含bat/cmd、文本class、未知/无后缀、二进制class编辑保存与失败保护、最近重开）。原生证据 `test-results/file-types-native/1792026785582/`；限制及修改清单见 `FILE_TYPES_EDITING_UPDATE.md`。状态REVIEW，不提交/推送/发布或开始下一Phase。
+
 ### 2026-10-14 工作区工具栏、Batch 与行标记专项
 - 明确授权的 Phase 4/5/6 增量，五项工作区工具/合并新建/真实懒加载定位/有预算展开和取消、全高度虚拟树、Batch/CMD纯文本保留编码BOM/CRLF、标签隐藏滚动条及活动定位、真实CM行身份/历史/成功保存基线的3px橙绿gutter。没有新依赖，不替换现有文件服务或保存语义。
 - 实测最终 PASS：typecheck/build，前端149/149，Rust38/38与cargo check；新UI8组、主菜单8、基础9、选区5、双Pane8、Markdown40次真实点击和编辑体验18组；Windows原生编辑13、工作区13（含万文件/双根/定位、UTF-8与UTF-16LE Batch手动/自动保存字节及失败保留）。证据与完整修改清单/预算见 `WORKSPACE_EDITOR_UPDATE.md`。
