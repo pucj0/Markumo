@@ -1,5 +1,11 @@
 # LightEdit 阶段进度与验收台账
 
+### 2026-10-15 WYSIWYG 后续无用文件清理
+- 用户要求删除多余无用文件；本轮仅清理，不推进 Phase，不修改生产编辑行为。先检查规则/PRD/进度、Git 状态与引用，再校验每个删除目标的绝对路径位于仓库且不是重解析点，使用 PowerShell 原生 LiteralPath 删除。
+- 删除 `tests/legacy/` 两份已被当前产品测试替换的浏览器驱动备份；删除本专项过期生成的 TS fixture、失败/重复截图、两轮旧原生测试目录、最新原生隔离 profile 缓存和空 `test-results/rust-temp/`。合计 **1095 个文件、63,471,720 字节（60.53 MiB）**。同步移除当前架构/差距/验收文档与测试入口注释中的旧备份保留说明。
+- 保留有效源码/模型与产品测试、最新浏览器 fixture/结果/性能/完整文档截图、最新原生 `1792050176892` 的结果/日志/截图/fixture、安装包、依赖、构建目录及 `.lightedit-dev` 开发会话。旧 Markdown 源码模块仍被模型测试或 PM 表格序列化器引用，本轮没有为清理而删掉安全回归或改写生产逻辑。
+- PASS：`pnpm typecheck`、`git -c core.safecrlf=false diff --check`、最新浏览器 fixture 引用及浏览器/原生证据/安装包/开发会话存在性检查。Rust/原生/安装验收本轮 NOT RUN（未改对应生产代码），既有专项仍 REVIEW，人工 IME/DPI/跨平台等门槛未改变。本轮未执行提交、推送或发布；检查时仓库 HEAD 已由外部更新为 `9401be3`，未改写该提交或用户改动。
+
 ### 2026-10-15 Markdown WYSIWYG 编辑内核专项（六内部阶段连续授权）
 - **状态 REVIEW**。用户明确覆盖旧同区 CM Live/禁止 ProseMirror/逐阶段审批约束，保留其余安全和 Git 规则；已按六个内部阶段连续实现，不推进通用 Phase 7/8。开始/结束 HEAD `25d1a64`，原 Logo/菜单/视觉/打包改动保留，无提交、推送、安装或发布。
 - 普通文本及 Markdown Source/Split 编辑侧保留 CM；Live 动态加载原生 ProseMirror，GFM 表格真实单元格模型，代码为嵌入 CM NodeView（从 1 行号/语言/复制/边界键）。每文档仍经 canonical CM 历史与原 FileController/Rust 保存；未修改块/普通表格单元格保留源码、过期补丁拒绝。YAML/复杂 HTML/未知扩展保护，公式/图表按需安全渲染，目录/脚注/Callout 基础适配。独立排版设置，移除标签图钉，固定右键保留。

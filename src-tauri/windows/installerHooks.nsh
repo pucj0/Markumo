@@ -32,18 +32,34 @@
   DeleteRegKey SHCTX `Software\Classes\${FILECLASS}`
 !macroend
 
-; Macro to register one file extension with Windows Shell Open With, Capabilities, and Context Menu
-!macro LightEdit_RegisterExt EXT
-  ; Open With registration
-  WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\SupportedTypes" ".${EXT}" ""
-
-  ; Windows Default Apps capability mapping
-  WriteRegStr SHCTX "Software\LightEdit\Capabilities\FileAssociations" ".${EXT}" "LightEdit.Document"
-
+; Editing a Windows executable script must not change its double-click execution.
+!macro LightEdit_RegisterEditVerb EXT
   ; Windows Context Menu: "使用 LightEdit 打开" (Windows 10 standard & Windows 11 Show More Options)
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit" "" "使用 LightEdit 打开"
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit" "Icon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
+!macroend
+
+; Macro to register a document extension with Open With, Capabilities, and Context Menu
+!macro LightEdit_RegisterExt EXT
+  WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\SupportedTypes" ".${EXT}" ""
+  WriteRegStr SHCTX "Software\LightEdit\Capabilities\FileAssociations" ".${EXT}" "LightEdit.Document"
+  !insertmacro LightEdit_RegisterEditVerb "${EXT}"
+!macroend
+
+; Remove only our legacy candidates, then let the machine's batfile/cmdfile
+; association take effect. Never write a default or remove another app's values.
+!macro LightEdit_RegisterExecutableScript EXT
+  ReadRegStr $R0 SHCTX "Software\Classes\Source Code File" ""
+  ${If} $R0 == "源代码文件 (LightEdit)"
+    DeleteRegValue SHCTX "Software\Classes\.${EXT}\OpenWithProgids" "Source Code File"
+  ${EndIf}
+  DeleteRegValue SHCTX "Software\Classes\.${EXT}\OpenWithProgids" "LightEdit.Document"
+  DeleteRegKey /ifempty SHCTX "Software\Classes\.${EXT}\OpenWithProgids"
+  DeleteRegKey /ifempty SHCTX "Software\Classes\.${EXT}"
+  DeleteRegValue SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\SupportedTypes" ".${EXT}"
+  DeleteRegValue SHCTX "Software\LightEdit\Capabilities\FileAssociations" ".${EXT}"
+  !insertmacro LightEdit_RegisterEditVerb "${EXT}"
 !macroend
 
 ; Macro to unregister one file extension
@@ -83,7 +99,7 @@
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit" "Icon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
 
-  ; 5. Register all 29 supported extensions
+  ; 5. Register 27 document extensions; executable scripts get an edit verb only
   !insertmacro LightEdit_RegisterExt "txt"
   !insertmacro LightEdit_RegisterExt "md"
   !insertmacro LightEdit_RegisterExt "markdown"
@@ -111,8 +127,8 @@
   !insertmacro LightEdit_RegisterExt "conf"
   !insertmacro LightEdit_RegisterExt "properties"
   !insertmacro LightEdit_RegisterExt "sh"
-  !insertmacro LightEdit_RegisterExt "bat"
-  !insertmacro LightEdit_RegisterExt "cmd"
+  !insertmacro LightEdit_RegisterExecutableScript "bat"
+  !insertmacro LightEdit_RegisterExecutableScript "cmd"
 
   ; 6. Notify Windows Shell of association updates
   System::Call 'Shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'

@@ -76,7 +76,7 @@
         "mimeType": "text/plain"
       },
       {
-        "ext": ["java", "py", "go", "rs", "sql", "sh", "bat", "cmd"],
+        "ext": ["java", "py", "go", "rs", "sql", "sh"],
         "name": "Source Code File",
         "description": "源代码文件 (LightEdit)",
         "role": "Editor",

@@ -86,6 +86,6 @@ Edge headless，1280×900，开发服务单次本机样本。`performance.json` 
 
 未实现/限制：Live 没有多光标；查找/替换明确转 Source；字符级模式位置映射是近似；脚注自动编号/回链、完整 Callout 内联富格式、完整相对单文件链接授权对话框、复杂 HTML/合并表格没有完整富文本实现。修改一个受支持顶层子树可能规范化该子树的语法，保真保证不扩张为“所有修改都全字节保留”。
 
-旧 CM decoration 的模型测试保留；原 `editor-browser`/`markdown-click-ui` 产品入口已迁移，历史 DOM 驱动留在 `tests/legacy`。其他历史专项端到端脚本（如旧图片/UX/native 综合脚本）仍含旧 Live DOM 选择器，本轮未将其结果冒充新内核验收；应继续迁移或改为 Source/隔离模块回归，不能把它们的历史 PASS 当成当前 PASS。
+旧 CM decoration 的模型测试保留；原 `editor-browser`/`markdown-click-ui` 产品入口已迁移，两份已替换的旧 DOM 驱动备份已按后续用户清理要求删除。其他历史专项端到端脚本（如旧图片/UX/native 综合脚本）仍含旧 Live DOM 选择器，本轮未将其结果冒充新内核验收；应继续迁移或改为 Source/隔离模块回归，不能把它们的历史 PASS 当成当前 PASS。
 
 综合结论：可以评审真正的正文、表格和代码原位编辑；当前仍为 REVIEW，**不是全部需求 DONE**。后续优先完成真实中文 IME、系统图片入口和键盘/选区人工矩阵，再解决更细的内嵌来源保真与扩展富格式，不擅自推进产品 Phase 7/8。

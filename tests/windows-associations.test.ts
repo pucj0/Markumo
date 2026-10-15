@@ -6,8 +6,9 @@ const REQUIRED_EXTENSIONS = [
   'txt', 'md', 'markdown', 'json', 'jsonc', 'xml', 'yaml', 'yml',
   'js', 'jsx', 'ts', 'tsx', 'vue', 'html', 'css', 'scss',
   'java', 'py', 'go', 'rs', 'sql', 'log', 'ini', 'cfg', 'conf', 'properties',
-  'sh', 'bat', 'cmd'
+  'sh'
 ]
+const EXECUTABLE_SCRIPTS = ['bat', 'cmd']
 
 describe('Windows File Associations & Context Menu Configuration', () => {
   const projectRoot = process.cwd()
@@ -17,7 +18,7 @@ describe('Windows File Associations & Context Menu Configuration', () => {
   const tauriConf = JSON.parse(readFileSync(tauriConfPath, 'utf8'))
   const hooksContent = readFileSync(hooksPath, 'utf8')
 
-  it('declares all 29 supported file extensions under bundle.fileAssociations in tauri.conf.json', () => {
+  it('declares 27 document extensions and excludes Windows executable scripts from file associations', () => {
     expect(tauriConf.bundle?.fileAssociations).toBeInstanceOf(Array)
     const declaredExts = new Set<string>()
     for (const assoc of tauriConf.bundle.fileAssociations) {
@@ -31,6 +32,7 @@ describe('Windows File Associations & Context Menu Configuration', () => {
     for (const reqExt of REQUIRED_EXTENSIONS) {
       expect(declaredExts.has(reqExt), `Extension .${reqExt} must be declared`).toBe(true)
     }
+    for (const ext of EXECUTABLE_SCRIPTS) expect(declaredExts.has(ext)).toBe(false)
   })
 
   it('configures windows.nsis.installerHooks pointing to windows/installerHooks.nsh', () => {
@@ -51,7 +53,7 @@ describe('Windows File Associations & Context Menu Configuration', () => {
     expect(hooksContent).not.toMatch(/WriteRegStr\s+SHELL_CONTEXT\s+"Software\\Classes\\\.\$\{EXT\}"\s+""/)
   })
 
-  it('NSIS_HOOK_POSTINSTALL registers Applications\\lightedit.exe and SupportedTypes for all 29 extensions', () => {
+  it('NSIS_HOOK_POSTINSTALL registers Applications\\lightedit.exe and SupportedTypes for document extensions', () => {
     expect(hooksContent).toContain('!macro NSIS_HOOK_POSTINSTALL')
     expect(hooksContent).toContain('Software\\Classes\\Applications\\${MAINBINARYNAME}.exe')
     expect(hooksContent).toContain('FriendlyAppName')
@@ -59,6 +61,22 @@ describe('Windows File Associations & Context Menu Configuration', () => {
 
     for (const ext of REQUIRED_EXTENSIONS) {
       expect(hooksContent).toContain(`!insertmacro LightEdit_RegisterExt "${ext}"`)
+    }
+  })
+
+  it('keeps BAT/CMD as edit-only verbs and removes only LightEdit legacy candidates on upgrade', () => {
+    const scriptMacro = hooksContent.match(/!macro LightEdit_RegisterExecutableScript EXT([\s\S]*?)!macroend/)?.[1]
+    expect(scriptMacro).toBeDefined()
+    expect(scriptMacro).not.toContain('WriteRegStr')
+    expect(scriptMacro).toContain('!insertmacro LightEdit_RegisterEditVerb "${EXT}"')
+    expect(scriptMacro).toContain('DeleteRegValue SHCTX "Software\\Classes\\.${EXT}\\OpenWithProgids" "Source Code File"')
+    expect(scriptMacro).toContain('DeleteRegValue SHCTX "Software\\Classes\\.${EXT}\\OpenWithProgids" "LightEdit.Document"')
+    expect(scriptMacro).toContain('DeleteRegKey /ifempty SHCTX "Software\\Classes\\.${EXT}"')
+    expect(scriptMacro).toContain('DeleteRegValue SHCTX "Software\\Classes\\Applications\\${MAINBINARYNAME}.exe\\SupportedTypes" ".${EXT}"')
+    expect(scriptMacro).toContain('DeleteRegValue SHCTX "Software\\LightEdit\\Capabilities\\FileAssociations" ".${EXT}"')
+    for (const ext of EXECUTABLE_SCRIPTS) {
+      expect(hooksContent).toContain(`!insertmacro LightEdit_RegisterExecutableScript "${ext}"`)
+      expect(hooksContent).not.toContain(`!insertmacro LightEdit_RegisterExt "${ext}"`)
     }
   })
 
@@ -90,7 +108,7 @@ describe('Windows File Associations & Context Menu Configuration', () => {
     expect(hooksContent).toContain('DeleteRegKey SHCTX "Software\\Classes\\Applications\\${MAINBINARYNAME}.exe"')
     expect(hooksContent).toContain('DeleteRegKey SHCTX "Software\\Classes\\SystemFileAssociations\\text\\shell\\LightEdit"')
 
-    for (const ext of REQUIRED_EXTENSIONS) {
+    for (const ext of [...REQUIRED_EXTENSIONS, ...EXECUTABLE_SCRIPTS]) {
       expect(hooksContent).toContain(`!insertmacro LightEdit_UnregisterExt "${ext}"`)
     }
 

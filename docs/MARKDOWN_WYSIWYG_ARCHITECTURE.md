@@ -64,7 +64,7 @@ Mermaid/KaTeX 只在对应块明确点击渲染时动态 import，普通 TXT 和
 | `tests/markdown-wysiwyg.test.ts` | 来源保真、结构事务、围栏、表格、扩展、设置/相对路径 |
 | `tests/markdown-wysiwyg-{ui,native,performance}.mjs` | 实际浏览器、Windows/Rust/磁盘、性能 |
 | `tests/fixtures/markdown-wysiwyg.md` | 中英文、基础/复杂扩展综合人工文档 |
-| `tests/editor-browser.mjs`、`tests/markdown-click-ui.mjs` | 原验收命令迁移至新产品行为（含 40 字形点击）；旧 DOM 脚本留在 `tests/legacy` |
+| `tests/editor-browser.mjs`、`tests/markdown-click-ui.mjs` | 原验收命令迁移至新产品行为（含 40 字形点击）；两份已替换的旧 DOM 备份已按用户清理要求删除 |
 | `tests/markdown-stage-a.test.ts` | 将资源身份断言从旧 decoration field 迁移至每文档资源，保留另存为/移动安全断言 |
 | `AGENTS.md`、`docs/PRD.md`、`docs/PHASE_PROGRESS.md`、`docs/MARKDOWN_PARITY.md` | 授权覆盖、当前状态/差距；历史记录不冒充本轮验收 |
 

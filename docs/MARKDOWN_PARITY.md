@@ -22,7 +22,7 @@
 | Live 多光标 / 搜索 | PARTIAL | CM 完整能力保留 | Live 单选区；查找替换明确切 Source |
 | 真 Windows IME / DPI / 长时 RSS | UNVERIFIED | UNVERIFIED | 不用合成事件/浏览器样本冒充 |
 
-新测试：模型 13 项，全仓 258/258，浏览器 9/9（含 40 字形点击），原生 6/6（5 组真实磁盘/图片 + 1 组受控剪贴板路由），Rust 84/84。原 `editor-browser` 与 `markdown-click-ui` 命令迁移到新产品驱动，历史 DOM 脚本留 `tests/legacy`；其他旧专项 E2E 不沿用其历史 PASS。无提交/推送/发布。
+新测试：模型 13 项，全仓 258/258，浏览器 9/9（含 40 字形点击），原生 6/6（5 组真实磁盘/图片 + 1 组受控剪贴板路由），Rust 84/84。原 `editor-browser` 与 `markdown-click-ui` 命令迁移到新产品驱动，两份旧 DOM 驱动备份已按后续用户清理要求删除；其他旧专项 E2E 不沿用其历史 PASS。无提交/推送/发布。
 
 ---
 
