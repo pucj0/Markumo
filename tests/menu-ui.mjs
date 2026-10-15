@@ -14,21 +14,28 @@ async function menu(name){await category(name).click();await page.locator('[data
 async function command(group,name,role='menuitem'){await menu(group);await item(name,role).click();await page.locator('[data-menu-popup]').waitFor({state:'hidden'})}
 async function mode(name){await menu('视图');await item('Markdown 编辑模式').click();await item(name,'menuitemradio').click()}
 async function theme(name){await page.getByTitle('设置',{exact:true}).click();await page.getByLabel('颜色主题',{exact:true}).selectOption(name);await page.getByRole('button',{name:'完成',exact:true}).click();await page.locator('.settingsoverlay').waitFor({state:'hidden'})}
-async function contextTab(name,action){await page.getByRole('tab',{name,exact:true}).click({button:'right'});await item(action).click()}
+async function contextTab(name,action){await page.getByRole('tab',{name,exact:true}).click({button:'right'});if(['向右拆分','向下拆分','向左拆分','向上拆分'].includes(action))await item('拆分分栏').click();await item(action).click()}
 async function source(text){await page.evaluate(text=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;m.dispatch(m.activeId,{changes:{from:0,to:m.getState(m.activeId).doc.length,insert:text},selection:{anchor:0,head:Math.min(4,text.length)}})},text)}
 const activeName=()=>page.evaluate(()=>document.querySelector('#app').__vue_app__._instance.setupState.manager.activeDocument.name)
 const pass=name=>results.push({name,result:'PASS'})
 try{
- await page.goto(process.env.LIGHTEDIT_TEST_URL||'http://localhost:1422');await editor().waitFor()
+ await page.goto(process.env.LIGHTEDIT_TEST_URL||'http://localhost:1422');await category('文件').waitFor()
+ if(!await editor().count())await command('文件','新建文件')
+ await editor().waitFor()
  assert.deepEqual(await page.getByRole('menubar').getByRole('menuitem').allTextContents(),['文件','编辑','格式','视图'])
  assert.equal(await page.locator('.sidebar-wrapper').count(),0);assert.equal(await page.locator('.toolrow').count(),0)
  await editor().focus();await page.keyboard.insertText('plain');const focus=await page.evaluate(()=>document.activeElement?.className)
- await category('格式').hover();await item('加粗').waitFor();assert.equal(await page.evaluate(()=>document.activeElement?.className),focus)
+ for(const name of ['文件','编辑','格式','视图']){await category(name).hover();assert.equal(await page.locator('[data-menu-popup]').count(),0);assert.equal(await category(name).getAttribute('aria-expanded'),'false')}
+ assert.equal(await page.evaluate(()=>document.activeElement?.className),focus)
+ await menu('文件');await category('编辑').hover();await item('撤销').waitFor();assert.equal(await category('文件').getAttribute('aria-expanded'),'false');assert.equal(await category('编辑').getAttribute('aria-expanded'),'true')
+ await category('视图').hover();await item('自动换行','menuitemcheckbox').waitFor();await category('格式').hover();await item('加粗').waitFor()
  assert.equal(await item('加粗').isDisabled(),true);assert.equal(await item('标题').isDisabled(),true)
- await page.keyboard.press('Space');await page.keyboard.insertText('text');assert.equal(await raw(),'plain text');assert.equal(await page.locator('[data-menu-popup]').count(),0)
+ await page.keyboard.press('Escape');await category('编辑').hover();assert.equal(await page.locator('[data-menu-popup]').count(),0)
+ await editor().focus();await page.keyboard.press('Space');await page.keyboard.insertText('text');assert.equal(await raw(),'plain text')
+ await menu('文件');await editor().click();assert.equal(await page.locator('[data-menu-popup]').count(),0);await category('格式').hover();assert.equal(await page.locator('[data-menu-popup]').count(),0)
  await menu('文件');assert.equal(await item('打开文件…').isDisabled(),true);assert.equal(await item('最近打开').isDisabled(),true)
  assert.equal(await page.locator('[data-menu-popup]').getByRole('menuitem',{name:/已打开：|UTF-16|转为大写/}).count(),0);await page.keyboard.press('Escape')
- pass('四组菜单、非MD禁用、历史折叠、悬停不抢焦点')
+ pass('关闭时悬停不展开、点击后跨菜单悬停切换、Esc/外部点击关闭后恢复、非MD禁用与历史折叠')
  await page.evaluate(()=>{const s=document.querySelector('#app').__vue_app__._instance.setupState;s.recentFiles.push({path:'C:/甲/同名.md',name:'同名.md'},{path:'C:/乙/同名.md',name:'同名.md'});s.workspace.recentWorkspaces=['C:/中文项目 A','C:/项目 B']})
  await menu('文件');assert.equal(await item('同名.md — 甲').count(),0);await item('最近打开').hover();await item('同名.md — 甲').waitFor();assert.equal(await item('同名.md — 甲').getAttribute('title'),'C:/甲/同名.md')
  const child=await item('同名.md — 甲').boundingBox(),parent=await item('最近打开').boundingBox()
@@ -63,9 +70,9 @@ try{
   await page.locator('.secondary-pane [role=tab]').first().click({button:'right'});await item('移动到另一分栏').click();assert.equal(await page.locator('.secondary-pane [role=tab]').count(),0)
   // The emptied pane is reclaimed automatically; the document must stay in the main pane.
   assert.equal(await page.locator('.secondary-pane').count(),0);assert.equal(await page.locator('.main-pane [role=tab]').count()>=1,true)
- const keep=await activeName(),count=await page.getByRole('tab').count();await contextTab(keep,'关闭其他标签');await page.getByRole('dialog',{name:'未保存修改确认'}).waitFor();await page.getByRole('button',{name:'继续编辑',exact:true}).click();assert.equal(await page.getByRole('tab').count(),count)
+ const keep=await activeName(),keptText=await raw(),count=await page.getByRole('tab').count();await contextTab(keep,'关闭其他标签');await page.getByRole('dialog',{name:'未保存修改确认'}).waitFor();await page.getByRole('button',{name:'继续编辑',exact:true}).click();assert.equal(await page.getByRole('tab').count(),count)
  await contextTab(keep,'关闭其他标签');for(let i=0;i<count-1;i++){await page.getByRole('button',{name:'放弃修改并关闭',exact:true}).click();if(i<count-2)await page.getByRole('dialog',{name:'未保存修改确认'}).waitFor()}
- assert.equal(await page.getByRole('tab').count(),1);assert.equal(await raw(),'dirty keep');await editor().press('Control+w');await page.getByRole('dialog',{name:'未保存修改确认'}).waitFor();await page.keyboard.press('Escape');assert.equal(await raw(),'dirty keep')
+ assert.equal(await page.getByRole('tab').count(),1);assert.equal(await raw(),keptText);await editor().press('Control+w');await page.getByRole('dialog',{name:'未保存修改确认'}).waitFor();await page.keyboard.press('Escape');assert.equal(await raw(),keptText)
  pass('标签右键打开/移动/关闭分栏、关闭其他逐个脏确认/取消和Ctrl+W保护')
  await page.evaluate(()=>{const s=document.querySelector('#app').__vue_app__._instance.setupState;s.appMode='workspace';s.sidebarVisible=true;s.sidebarPanel='files';const node={id:'a',name:'长中文 folder 文件.md',path:'C:/fixture/长中文 folder 文件.md',relativePath:'长中文 folder 文件.md',isDirectory:false,isSymlink:false,isReadOnly:false,size:0,mtime:null,hasChildren:false};s.workspace.rootPath='C:/fixture';s.workspace.rootName='Fixture';s.workspace.roots=[{rootPath:'C:/fixture',name:'Fixture',entries:[node]}];s.workspace.entries=[node]})
  await page.locator('.tree-node-wrapper .treenode').first().click({button:'right'});await item('重命名…').waitFor();assert.equal(await page.locator('.workspace-operation-dialog').count(),0);assert.equal(await item('在文件管理器中显示').isDisabled(),true)

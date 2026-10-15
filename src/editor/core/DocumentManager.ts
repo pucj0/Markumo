@@ -13,7 +13,7 @@ import type { EditorDocument, Theme, MarkdownMode } from '../../types'
 import { lineEndings, type LineEndingSnapshot } from './lineEndings'
 import type { FileMetadata, OpenFile, ClassInfo } from '../../features/files/contracts'
 import { classSummary } from '../../features/files/classSummary'
-import { livePreviewExtension } from '../markdown/livePreview'
+import { defaultMarkdownTypography, type MarkdownTypography, type LiveEditor } from '../markdown/wysiwyg/contracts'
 import { markdownFormatTransaction, type MarkdownFormat } from '../markdown/formatCommands'
 import { captureLineBaseline, savedLineBaseline } from './changeGutter'
 import { createMarkdownResources, markdownResources, refreshMarkdownResources } from '../markdown/images'
@@ -44,6 +44,10 @@ export class DocumentManager {
   readonly layout = new EditorLayoutManager()
   private readonly views = new Map<string, EditorView>()
   private readonly hosts = new Map<string, HTMLElement>()
+  private readonly liveViews = new Map<string, {id:string; editor:LiveEditor}>()
+  private readonly liveLoads = new Map<string, object>()
+  private liveOrigin: {pane:string;update:unknown}|null = null
+  private markdownTypography = defaultMarkdownTypography()
   private readonly records = new Map<string, CachedDocument>()
   private readonly seeds = new Map<string, DocumentSeed>()
   private readonly listeners = new Set<() => void>()
@@ -80,6 +84,7 @@ export class DocumentManager {
   get activeId() { return this.layout.getPane(this.layout.activePaneId)?.group.activeId || null }
   get activeDocument() { return this.activeId ? this.metadata(this.activeId) : null }
   get activeEditorView() { return this.views.get(this.layout.activePaneId) || null }
+  get activeLiveEditor() { return this.liveViews.get(this.layout.activePaneId)?.editor || null }
   get view() { return this.views.get('main') || this.views.get(this.layout.activePaneId) || null }
   get secondaryView() {
     const leaves = this.layout.getAllLeafIds()
@@ -90,7 +95,7 @@ export class DocumentManager {
   get isComposing() {
     return this.layout.getAllLeafIds().some(pane => {
       const id = this.paneGroup(pane).activeId
-      return !!id && this.records.has(id) && !!this.paneView(pane)?.compositionStarted
+      return !!id && this.records.has(id) && (!!this.paneView(pane)?.compositionStarted || !!this.liveViews.get(pane)?.editor.composing)
     })
   }
   get catalog() { return [...this.seeds.values()].map(({ id, name, path }) => ({ id, name, path })) }
@@ -161,7 +166,7 @@ export class DocumentManager {
         endings.field,
         endings.history,
         language.of([]),
-        markdownMode.of(isMd && initialMdMode === 'live' ? livePreviewExtension() : []),
+        markdownMode.of([]),
         wrap.of(this.wordWrap ? EditorView.lineWrapping : []),
         theme.of(editorTheme(this.theme)),
         EditorView.contentAttributes.of({ 'aria-label': '文本编辑器', spellcheck: 'false' }),
@@ -218,7 +223,7 @@ export class DocumentManager {
     const mode = this.fileModes[record.meta.path]
     if (mode && /\.(md|markdown)$/i.test(record.meta.name) && record.meta.mode !== mode) {
       record.meta.mode = mode
-      this.effects(record, [record.markdownMode.reconfigure(mode === 'live' ? livePreviewExtension() : [])])
+      this.effects(record, [record.markdownMode.reconfigure([])])
     }
   }
 
@@ -249,6 +254,7 @@ export class DocumentManager {
     const record = this.records.get(id)
     if (!record || (!force && record.meta.dirty) || this.isComposing || this.disposed) return false
     this.deferred.delete(id)
+    for(const pane of this.layout.getAllLeafIds())if(this.paneGroup(pane).activeId===id)this.destroyView(pane)
     const seed: DocumentSeed = { id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text,
       kind: file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined, encoding: file.encoding }
     const next = this.create(seed)
@@ -281,6 +287,8 @@ export class DocumentManager {
     const line = doc.line(targetLine)
     const col = Math.min(Math.max(1, columnNumber), line.length + 1)
     const pos = line.from + (col - 1)
+    const live=this.liveViews.get(this.activePane)
+    if(live?.id===id){live.editor.reveal(pos);live.editor.focus();return}
     this.dispatch(id, {
       selection: { anchor: pos, head: pos },
       scrollIntoView: true,
@@ -383,12 +391,18 @@ export class DocumentManager {
     const resolved = this.resolvePaneId(pane)
     if (resolved !== this.activePane && this.isComposing) return
     this.layout.focusPane(resolved)
-    if (focus) this.views.get(resolved)?.focus()
+    if (focus) { this.views.get(resolved)?.focus();this.liveViews.get(resolved)?.editor.focus() }
     this.notify()
   }
   private captureScroll(pane: Pane = this.activePane) {
     const resolved = this.resolvePaneId(pane)
     const id = this.paneGroup(resolved).activeId, record = id && this.records.get(id), view = this.paneView(resolved)
+    const live=this.liveViews.get(resolved)
+    if(record&&live&&live.id===id){
+      const selection=live.editor.selection,root=this.hosts.get(resolved)?.querySelector('.markdown-live')
+      record.panes[resolved]={selection:EditorSelection.single(selection.anchor,selection.head),top:root?.scrollTop||0,left:root?.scrollLeft||0}
+      return
+    }
     if (record && view) {
       record.panes[resolved] = { selection: view.state.selection, top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
       if (resolved === 'main') record.scroll = { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
@@ -401,6 +415,37 @@ export class DocumentManager {
     const record = targetId && this.records.get(targetId)
     if (!record) { this.destroyView(resolved); return }
     if (!record.panes[resolved]) record.panes[resolved] = { selection: record.state.selection, top: 0, left: 0 }
+    if(record.meta.mode==='live' && record.state.doc.length<=1024*1024){
+      const existing=this.liveViews.get(resolved)
+      if(existing?.id===record.meta.id){existing.editor.sync(record.state.doc.toString());return}
+      this.destroyView(resolved)
+      const parent=this.hosts.get(resolved)
+      if(!parent||this.disposed)return
+      const load={};this.liveLoads.set(resolved,load)
+      void import('../markdown/wysiwyg/MarkdownEditorController').then(({MarkdownEditorController})=>{
+        if(this.disposed||this.liveLoads.get(resolved)!==load||this.paneGroup(resolved).activeId!==record.meta.id||record.meta.mode!=='live'||this.hosts.get(resolved)!==parent)return
+        const source=record.state.doc.toString(),saved=record.panes[resolved]
+        const editor=new MarkdownEditorController(parent,{
+          source,anchor:saved.selection.main.anchor,head:saved.selection.main.head,resources:record.state.facet(markdownResources),typography:this.markdownTypography,
+          publish:(expected,patch,update,isolated)=>{
+            if(this.records.get(record.meta.id)!==record||record.state.doc.toString()!==expected||record.state.readOnly)return false
+            this.liveOrigin={pane:resolved,update}
+            try{this.dispatch(record.meta.id,{changes:patch,userEvent:'input.markdown',...(isolated?{annotations:isolateHistory.of('full')}:{})})}finally{this.liveOrigin=null}
+            return true
+          },
+          selected:(anchor,head)=>{const selection=EditorSelection.single(Math.min(anchor,record.state.doc.length),Math.min(head,record.state.doc.length));record.panes[resolved].selection=selection;if(this.activePane===resolved)record.state=record.state.update({selection,annotations:Transaction.addToHistory.of(false)}).state;this.notify()},
+          history:forward=>{this.focusPane(resolved,false);this.historyCommand(forward)},focus:()=>this.focusPane(resolved,false),
+          openRelative:href=>window.dispatchEvent(new CustomEvent('markdown-open-relative',{detail:{id:record.meta.id,href}})),
+          readOnly:()=>record.state.readOnly,
+        })
+        this.liveViews.set(resolved,{id:record.meta.id,editor})
+        this.liveLoads.delete(resolved)
+        const root=parent.querySelector('.markdown-live');if(root){root.scrollTop=saved.top;root.scrollLeft=saved.left}
+        this.notify()
+      }).catch(error=>{if(this.liveLoads.get(resolved)===load){this.liveLoads.delete(resolved);parent.querySelector('.markdown-live')?.remove();record.meta.mode='source';this.showActive(resolved);window.dispatchEvent(new CustomEvent('editor-notice',{detail:`Markdown Live 加载失败，已切到源码：${String(error)}`}))}})
+      return
+    }
+    if(this.liveViews.has(resolved)||this.liveLoads.has(resolved)){this.destroyView(resolved);view=null}
     if (!view) {
       const parent = this.hosts.get(resolved)
       if (!parent || this.disposed) return
@@ -596,6 +641,7 @@ export class DocumentManager {
     const resolved = this.resolvePaneId(pane)
     this.views.get(resolved)?.destroy()
     this.views.delete(resolved)
+    this.liveViews.get(resolved)?.editor.destroy();this.liveViews.delete(resolved);this.liveLoads.delete(resolved)
   }
 
   setIndent(size: number, tabs: boolean) {
@@ -616,6 +662,8 @@ export class DocumentManager {
   formatMarkdown(format: MarkdownFormat) {
     const id = this.activeId, record = id && this.records.get(id), view = this.paneView(this.activePane)
     if (!id || !record || record.meta.encoding === 'Hex' || this.isComposing || !/\.(md|markdown)$/i.test(record.meta.name)) return false
+    const live=this.liveViews.get(this.activePane)
+    if(live?.id===id)return live.editor.format(format)
     const state = view?.state || record.state
     if (state.readOnly) return false
     this.dispatch(id, markdownFormatTransaction(state, format))
@@ -693,6 +741,10 @@ export class DocumentManager {
     const line = state.doc.lineAt(position)
     record.meta.line = line.number
     record.meta.column = position - line.from + 1
+    for(const [pane,live]of this.liveViews)if(live.id===record.meta.id){
+      if(docChanged&&pane!==this.liveOrigin?.pane)live.editor.sync(state.doc.toString(),this.liveOrigin?.update)
+      live.editor.refreshResources()
+    }
     this.notify()
   }
   dispatch(id: string, spec: TransactionSpec) {
@@ -764,9 +816,11 @@ export class DocumentManager {
   setMarkdownMode(id: string, mode: MarkdownMode): boolean {
     const record = this.records.get(id)
     if (!record || record.meta.kind === 'javaClass' || record.meta.encoding === 'Hex' || !/\.(md|markdown)$/i.test(record.meta.name) || !['live', 'source', 'split'].includes(mode) || this.disposed || this.isComposing) return false
+    if(mode==='live'&&record.state.doc.length>1024*1024){window.dispatchEvent(new CustomEvent('editor-notice',{detail:'Markdown 超过 1 Mi 字符安全预算，请使用源码或双栏模式。'}));return false}
+    for(const pane of this.layout.getAllLeafIds())if(this.paneGroup(pane).activeId===id)this.captureScroll(pane)
     record.meta.mode = mode
-    const extension = mode === 'live' ? livePreviewExtension() : []
-    this.effects(record, [record.markdownMode.reconfigure(extension)])
+    this.effects(record, [record.markdownMode.reconfigure([])])
+    for(const pane of this.layout.getAllLeafIds())if(this.paneGroup(pane).activeId===id){this.destroyView(pane);this.showActive(pane)}
     this.notify()
     return true
   }
@@ -778,7 +832,8 @@ export class DocumentManager {
     const isMarkdown = /\.(md|markdown)$/i.test(record.meta.name)
     if (wasMarkdown === isMarkdown) return
     record.meta.mode = isMarkdown ? this.defaultMarkdownMode : undefined
-    this.effects(record, [record.markdownMode.reconfigure(record.meta.mode === 'live' ? livePreviewExtension() : [])])
+    this.effects(record, [record.markdownMode.reconfigure([])])
+    for(const pane of this.layout.getAllLeafIds())if(this.paneGroup(pane).activeId===record.meta.id){this.destroyView(pane);this.showActive(pane)}
   }
   setWrap(wrap: boolean) {
     this.wordWrap = wrap
@@ -790,7 +845,9 @@ export class DocumentManager {
     for (const record of this.records.values()) this.effects(record, [record.theme.reconfigure(editorTheme(theme))])
   }
   refreshTypography() { this.setTheme(this.theme) }
+  setMarkdownTypography(settings:MarkdownTypography){this.markdownTypography={...settings};for(const live of this.liveViews.values())live.editor.typography(settings)}
   command(command: 'undo' | 'redo' | 'find' | 'replace' | 'find-next' | 'find-previous') {
+    if(!['undo','redo'].includes(command)&&this.activeLiveEditor&&this.activeId){this.setMarkdownMode(this.activeId,'source');window.dispatchEvent(new CustomEvent('editor-notice',{detail:'查找与替换已切换到 Markdown 源码模式。'}))}
     const view = this.paneView(this.activePane)
     if (!this.activeId || this.isComposing) return
     view?.focus()
@@ -805,6 +862,8 @@ export class DocumentManager {
     this.disposed = true
     if (this.timer) clearTimeout(this.timer)
     for (const view of this.views.values()) view.destroy()
+    for(const live of this.liveViews.values())live.editor.destroy()
+    this.liveViews.clear();this.liveLoads.clear()
     this.views.clear()
     this.hosts.clear()
     this.records.clear(); this.seeds.clear(); this.deferred.clear(); this.listeners.clear()

@@ -14,7 +14,7 @@
         role="tab" tabindex="0" :aria-label="doc.name" :aria-selected="doc.id === activeId"
         @keydown.enter.prevent="$emit('select-tab', doc.id)"
         @keydown.space.prevent="$emit('select-tab', doc.id)"
-        @auxclick.middle.prevent="!doc.pinned && $emit('close-tab', doc.id)"
+        @auxclick.middle.prevent="$emit('close-tab', doc.id)"
         :class="{
           active: doc.id === activeId,
           temp: !doc.pinned,
@@ -32,7 +32,6 @@
         <span class="filename">{{ doc.name }}</span>
         <span v-if="doc.dirty" class="unsaved" title="未保存修改"></span>
         <button
-          v-if="!doc.pinned"
           class="tinyclose"
           :title="`关闭 ${doc.name}`"
           :aria-label="`关闭 ${doc.name}`"
@@ -40,7 +39,6 @@
         >
           ✕
         </button>
-        <span v-else class="pin-icon" title="已固定标签">📌</span>
       </div>
     </div>
 
@@ -318,10 +316,6 @@ function dropEmptySpace(event: DragEvent) {
 
 .tab.temp .filename {
   font-style: italic;
-}
-
-.tab.pinned {
-  border-bottom: 2px solid var(--accent);
 }
 
 .tab.drop-before::before {

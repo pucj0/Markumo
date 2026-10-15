@@ -8,6 +8,7 @@ import { coreExtensions } from '../src/editor/core/extensions'
 import { loadLanguage } from '../src/editor/languages'
 import { livePreviewExtension,buildLiveDecorationsForState } from '../src/editor/markdown/livePreview'
 import { imageField } from '../src/editor/markdown/imageField'
+import { markdownResources } from '../src/editor/markdown/images'
 import { imageDestination } from '../src/editor/markdown/images'
 import { createMarkdownRenderer } from '../src/editor/markdown/rendering'
 import { DocumentManager } from '../src/editor/core/DocumentManager'
@@ -97,14 +98,16 @@ describe('阶段 A：真实解析/事务与渲染语义',()=>{
     const manager=new DocumentManager(),file={token:'old',name:'doc.md',path:'E:\\old\\doc.md',text:'![x](pixel.png)\n\nend',encoding:'UTF-8' as const,bom:false,eol:'LF' as const,readOnly:false,version:'v1'}
     const id=manager.openFile(file)!
     await manager.setLanguage(id,'Markdown')
-    const identity=()=>{const keys:string[]=[];manager.getState(id)!.field(imageField).decorations.between(0,file.text.length,(_f,_t,value)=>{if(value.spec.widget)keys.push(value.spec.widget.resourceKey)});return keys}
+    // Live now owns PM NodeViews; resource identity belongs to the document,
+    // independently of the legacy CM decoration field.
+    const identity=()=>manager.getState(id)!.facet(markdownResources).identity()
     manager.dispatch(id,{selection:{anchor:file.text.length}})
-    expect(identity()).toEqual([expect.stringMatching(/^old\|E:\\old\\doc\.md\|\d+$/)])
+    expect(identity()).toBe('old|E:\\old\\doc.md')
     manager.saveSnapshot(id)!.complete({...file,token:'new',path:'E:\\new\\doc.md',version:'v2'})
-    expect(identity()).toEqual([expect.stringMatching(/^new\|E:\\new\\doc\.md\|\d+$/)]);expect(manager.saveSnapshot(id)!.text).toBe(file.text)
+    expect(identity()).toBe('new|E:\\new\\doc.md');expect(manager.saveSnapshot(id)!.text).toBe(file.text)
     manager.renamePath('E:\\new\\doc.md','E:\\moved\\doc.md','doc.md')
     await manager.setLanguage(id,'Markdown')
-    expect(identity()).toEqual([expect.stringMatching(/^new\|E:\\moved\\doc\.md\|\d+$/)])
+    expect(identity()).toBe('new|E:\\moved\\doc.md')
     manager.dispose()
   })
 })

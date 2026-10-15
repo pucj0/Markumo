@@ -13,6 +13,8 @@ export const markdownResources = Facet.define<MarkdownResources, MarkdownResourc
   combine: values => values[values.length - 1] || createMarkdownResources(() => undefined),
 })
 export function createMarkdownResources(token: () => string | undefined,identity:()=>string=()=>token()||''): MarkdownResources {
+  const pending=new Map<string,Promise<Uint8Array>>()
+  let previousIdentity=identity(),cachedBytes=0
   return {
     allowedRemote: new Set(),
     identity,
@@ -24,8 +26,19 @@ export function createMarkdownResources(token: () => string | undefined,identity
     async loadLocal(path) {
       const grant = token()
       if (!isTauri() || !grant) throw new Error('请先保存 Markdown 文档。')
-      const bytes = await invoke<ArrayBuffer>('read_markdown_image', { token: grant, relative: path })
-      return new Uint8Array(bytes)
+      const current=identity()
+      if(current!==previousIdentity){pending.clear();cachedBytes=0;previousIdentity=current}
+      const existing=pending.get(path)
+      if(existing)return existing
+      // Deduplicate concurrent panes. Keep at most 8 MiB of original bytes in
+      // addition to the existing decoded-image and Blob budgets.
+      const request=invoke<ArrayBuffer>('read_markdown_image', { token: grant, relative: path }).then(buffer=>{
+        const bytes=new Uint8Array(buffer)
+        if(identity()===current){if(cachedBytes+bytes.length>8*1024*1024){pending.clear();cachedBytes=0}else cachedBytes+=bytes.length}
+        return bytes
+      }).catch(error=>{pending.delete(path);throw error})
+      pending.set(path,request)
+      return request
     },
   }
 }

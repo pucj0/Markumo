@@ -5,6 +5,7 @@ import { searchKeymap } from '@codemirror/search'
 import { foldKeymap } from '@codemirror/language'
 import { defaultImageRules, imageRulesFrom, type ImageRules } from '../../editor/markdown/imageImport'
 import { completionKeymap, closeBracketsKeymap } from '@codemirror/autocomplete'
+import { defaultMarkdownTypography, type MarkdownTypography } from '../../editor/markdown/wysiwyg/contracts'
 export const defaultShortcuts = {
   new: 'Mod+N', open: 'Mod+O', save: 'Mod+S', 'save-as': 'Mod+Shift+S',
   palette: 'Mod+Shift+P', 'quick-open': 'Mod+P', find: 'Mod+F', replace: 'Mod+R',
@@ -28,6 +29,7 @@ export const shortcutLabels: Record<ShortcutAction, string> = {
  * default, so that value cannot prove intent. */
 export const currentSettingsVersion = 4
 export interface EditorSettings {
+  markdownTypography:MarkdownTypography
   theme: ThemePreference; fontSize: number; fontFamily: 'system' | 'consolas' | 'cascadia'
   wordWrap: boolean; showOutline: boolean; indentSize: number; useTabs: boolean; defaultMdMode: MarkdownMode
   autoSave: boolean; autoSaveDelay: number
@@ -42,7 +44,7 @@ export interface EditorSettings {
 }
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
 export function defaultSettings(): EditorSettings {
-  return { theme: 'system', fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
+  return { markdownTypography:defaultMarkdownTypography(), theme: 'system', fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
 }
 /** Drop the transient migration notice before writing preferences to disk. */
 export function persistedSettings(settings: EditorSettings) {
@@ -87,6 +89,15 @@ export function settingsFrom(raw: unknown): EditorSettings {
   const defaults = defaultSettings()
   if (!raw || typeof raw !== 'object') return defaults
   const s = raw as Partial<EditorSettings>
+  if(s.markdownTypography&&typeof s.markdownTypography==='object'){
+    const md=s.markdownTypography,target=defaults.markdownTypography
+    if(Number.isFinite(md.width)&&md.width>=480&&md.width<=1400)target.width=md.width
+    if(Number.isFinite(md.fontSize)&&md.fontSize>=12&&md.fontSize<=28)target.fontSize=md.fontSize
+    if(Number.isFinite(md.lineHeight)&&md.lineHeight>=1.2&&md.lineHeight<=2.4)target.lineHeight=md.lineHeight
+    if(['system','serif','mono'].includes(md.fontFamily))target.fontFamily=md.fontFamily
+    if(typeof md.codeLineNumbers==='boolean')target.codeLineNumbers=md.codeLineNumbers
+    if(typeof md.codeWrap==='boolean')target.codeWrap=md.codeWrap
+  }
   defaults.imageRules = imageRulesFrom(s.imageRules)
   if (s.documentImageRules && typeof s.documentImageRules === 'object') for (const [path,rules] of Object.entries(s.documentImageRules).slice(-100)) {
     if (path && path.length <= 4096 && !['__proto__','constructor','prototype'].includes(path)) Object.defineProperty(defaults.documentImageRules,path,{value:imageRulesFrom(rules),enumerable:true,configurable:true,writable:true})

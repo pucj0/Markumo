@@ -6,16 +6,16 @@
 
 - 产品：面向 Windows 首发，面向 macOS/Linux 保留跨平台设计的轻量通用文本编辑器；参考 JetBrains Fleet 的紧凑 UI 与工作流，Markdown 具备 Typora/Obsidian 风格 Live Preview。不是 Markdown 专用应用，也不是 IDE。
 - 固定技术栈：**Rust + Tauri 2 + Vue 3 + TypeScript + Vite + CodeMirror 6**。
-- Markdown: `@codemirror/lang-markdown` / Lezer + CodeMirror 6 Decorations / StateField / ViewPlugin / WidgetType。`markdown-it` 仅用于只读预览面板。
-- 文件编辑操作在 CodeMirror 的 EditorState / Transaction 中完成，禁止每次输入都跨 Tauri IPC 或将全文放入全局响应式 `v-model`；Rust 负责文件 I/O、工作区目录与搜索、监控、桌面集成。
-- 禁止无请求增加 Electron、Monaco、ProseMirror、TipTap、Ace、LSP、AI 助手、Git 面板、终端、云端账号和大型 UI 框架。
+- Markdown Live 使用按需加载的原生 ProseMirror；Source 与 Split 编辑侧使用 CodeMirror 6 / Lezer；Live 代码块使用嵌入式 CodeMirror NodeView。markdown-it 提供共享 Markdown 解析及安全只读预览，不从任意 HTML 反推磁盘全文。
+- 普通文本操作在 CodeMirror Transaction 中完成；Markdown Live 使用 ProseMirror Transaction，通过源码保真桥接进入 DocumentManager 的每文档共享历史。禁止每次输入跨 Tauri IPC 或将全文放入全局响应式 `v-model`；Rust 负责文件 I/O、工作区目录与搜索、监控、桌面集成。
+- 禁止无请求增加 Electron、Monaco、TipTap、Milkdown、Ace、LSP、AI 助手、Git 面板、终端、云端账号和大型 UI 框架。ProseMirror 核心及必要官方模块已获 Markdown 重构专项授权。
 
 ## 2. 模式与不可妥协的功能边界
 
 - 单文件模式：无需项目；文件打开后直接编辑、保存，侧边栏可默认隐藏。
 - 工作区模式：打开文件夹、目录树按需加载、快速打开、全文搜索、文件管理；与单文件模式共用文档模型。
-- 对任意可识别文本文件统一使用 CodeMirror 6；代码、配置、日志文件默认纯文本/语法高亮，不应用 Markdown 排版。
-- 仅 `.md/.markdown` 默认 Live Preview；同时可选 Source、Split。Live 是**同一个 CodeMirror 编辑区**内进行即时排版，而不是旁边渲染的 HTML；光标进入时能够恢复可编辑的语法标记。
+- 普通文本、代码、配置、日志与 Markdown Source/Split 编辑侧使用 CodeMirror 6；非 Markdown 不应用文档排版。
+- 仅 `.md/.markdown` 默认 Live；同时可选 Source、Split。Live 是独立 ProseMirror 富文本编辑区；标题、正文、表格、代码块点击后保持原位编辑形态，不恢复整块 Markdown 标记。无法安全表示的扩展使用明确的受保护局部源码块。
 - Markdown 原始源码是唯一真实数据；切换模式或渲染不得改写源码。复杂 Markdown（如表格、数学、Mermaid）可安全降级，但不得假装完全支持。
 - 重要风险：中文 IME、撤销/重做、选择光标、换行/BOM/编码、脏文件关闭确认、外部修改冲突、保存失败、读写权限、超大文件、符号链接路径。
 
@@ -31,6 +31,8 @@
 8. **Git 安全**：改动前后检查 `git diff`；不执行破坏性 `reset --hard`/`clean -fd`；未经指示不要提交、推送、创建 Release；不要覆盖用户已有未提交改动。
 9. **持续记录**：更新 `docs/PHASE_PROGRESS.md`，写下当前 Phase、已实现项目、验证证据、已知问题与下一阶段依赖。验收前不可标记为 DONE。
 10. **停止规则**：本次 Phase 实施和验证完后停止，等待用户评审或批准下一阶段。
+
+2026-10-15 用户授权例外：Markdown WYSIWYG 专项的六个内部阶段可以连续实施，无须逐阶段审批；该授权不推进通用产品的 Phase 7/8，不改变数据保护、验证和 Git 规则。以 `docs/MARKDOWN_WYSIWYG_ACCEPTANCE.md` 的真实证据评审，未满足验收时不得标记 DONE。
 
 ## 4. 每次完成必须输出的报告
 

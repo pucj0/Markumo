@@ -1,5 +1,29 @@
 # LightEdit 阶段进度与验收台账
 
+### 2026-10-15 Markdown WYSIWYG 编辑内核专项（六内部阶段连续授权）
+- **状态 REVIEW**。用户明确覆盖旧同区 CM Live/禁止 ProseMirror/逐阶段审批约束，保留其余安全和 Git 规则；已按六个内部阶段连续实现，不推进通用 Phase 7/8。开始/结束 HEAD `25d1a64`，原 Logo/菜单/视觉/打包改动保留，无提交、推送、安装或发布。
+- 普通文本及 Markdown Source/Split 编辑侧保留 CM；Live 动态加载原生 ProseMirror，GFM 表格真实单元格模型，代码为嵌入 CM NodeView（从 1 行号/语言/复制/边界键）。每文档仍经 canonical CM 历史与原 FileController/Rust 保存；未修改块/普通表格单元格保留源码、过期补丁拒绝。YAML/复杂 HTML/未知扩展保护，公式/图表按需安全渲染，目录/脚注/Callout 基础适配。独立排版设置，移除标签图钉，固定右键保留。
+- 最终前端 unit **258/258**、专属模型 **13**、typecheck/build、cargo check、Rust **84/84** PASS。浏览器 **9/9**（含 40 字形精确点击、30 次模式切换、真实表格/代码/链接/任务、跨 Pane/模式、HTML/剪贴板、合成组合保护、只读、扩展、主题与销毁），Windows Tauri/WebView2 **6/6** PASS（5 组真实磁盘/图片：BOM/CRLF no-op/编辑保存、跨模式历史/脏关闭、授权图片、外部冲突；1 组受控剪贴板 provider 验证代码块真实应用粘贴路由）。合成 composition 不代表系统 IME，受控 provider 不代表系统剪贴板验收。证据、环境中间失败与命令见 [验收报告](MARKDOWN_WYSIWYG_ACCEPTANCE.md)。
+- 实测 112996 字节混合 Markdown 加载约 129.9 ms、事务中位 2.0/P95 4.8 ms；1000 行代码事务 5.4 ms；101 行表格 100 次连续事务中位 0.7/P95 1.5 ms。1200000 字符明确 Source 回退；60 次标签切换后 dispose PM/CM=0，GC 堆下降。普通 TXT 未加载 PM/数学/图表。数据是本机样本，不是跨平台承诺。
+- 最终本地 NSIS 约 **5.26 MiB**（实际字节与体积增量见验收报告），新增依赖为必要 ProseMirror 官方模块及延迟 KaTeX/Mermaid/DOMPurify；markdown-it/KaTeX 已去重。安装/卸载、真实中文 IME、系统图片入口、高 DPI/触控板、跨平台、长时 RSS NOT RUN；无独立 lint。部分旧专项 E2E 的旧 Live DOM 驱动仍需后续迁移，未冒称旧历史 PASS 为当前证据。
+- 完整设计/文件清单：[架构](MARKDOWN_WYSIWYG_ARCHITECTURE.md)、[源码保真](MARKDOWN_SOURCE_PRESERVATION.md)、[逐条验收与人工步骤](MARKDOWN_WYSIWYG_ACCEPTANCE.md)。Live 多光标、精确字符级模式映射、完整脚注编号/回链/Callout 富格式、单文件相对目标授权等仍有边界；没有将专项标记 DONE。
+
+### 2026-10-15 移除编辑区装饰色条
+- 现有 Phase 6 视觉修订：按用户截图移除 `src/components/layout/EditorPaneItem.vue` 活动分栏标签栏的顶部 accent 内阴影，以及 `src/components/layout/TabBar.vue` 固定标签的 accent 底边；当前标签继续以背景/中性边框识别，固定状态保留图钉。仅删除两条 CSS 规则，无新增依赖或编辑行为变更；本文件记录验证。
+- PASS：`pnpm build`（含 vue-tsc 类型检查）；本地 Edge 真实生产组件浏览器验证 4/4（明暗主题 × 单/双分栏），确认标签栏无顶部阴影、固定标签无 2px 彩色底边、图钉及选中背景保留，console/page errors=0。证据 `test-results/editor-chrome/results.json` 和四张截图。
+- REVIEW，人工复验：打开多个文件并固定标签，切换当前标签/分栏及明暗主题，确认两处色条消失。Windows Tauri/DPI、macOS/Linux、Rust check/tests、安装包重打 NOT RUN（本轮仅 CSS）；无独立 lint 配置，无新增单元测试。未满足完整 Phase 原生验收门槛，不推进下一 Phase；图片原生验收继续暂停。未提交、推送或发布。
+
+### 2026-10-15 顶栏菜单点击展开与悬停切换
+- 现有 Phase 6 菜单交互增量，按用户最新确认覆盖早期“关闭时悬停即展开”的行为：`src/components/layout/AppMenu.vue` 仅在已有菜单展开时响应悬停切换；初始、Esc 或点击外部关闭后，必须再次点击才能展开。保留展开态跨分类切换、键盘方向键/Enter 与多级菜单逻辑，无新增依赖或编辑器改动。
+- `tests/menu-ui.mjs` 更新真实鼠标/键盘交互验收，并适配当前欢迎页的新建入口、已有“拆分分栏”层级及脏文档操作前后源码比较；本文件记录状态。未覆盖原有 Logo/构建等未提交修改。
+- PASS：`pnpm typecheck`、`pnpm build`、菜单模型 Vitest 10/10；真实浏览器完整菜单 UI **8/8**，覆盖关闭态四分类悬停不展开、点击开启后的文件→编辑→视图→格式切换、Esc/点击外部后不误展开、键盘导航、子菜单、编辑事务和脏文档保护，console/page errors=0。证据 `test-results/main-menu/results.json` 及明暗/窄窗截图。首次完整回归发现两个旧脚本前提不符，修正测试选择器/基线后完整通过，未为此更改生产行为。
+- REVIEW，待用户实际确认；人工复验：关闭态悬停→点击文件→移到编辑→Esc→再次悬停，并重复外部点击关闭。Windows 原生/DPI、macOS/Linux NOT RUN；Rust check/tests、安装包重打 NOT RUN（仅前端事件条件修改，无 Rust 变更），独立 lint 未配置。未提交、推送、发布或推进下一 Phase；图片原生验收保持暂停。
+
+### 2026-10-15 简约 Logo 重绘
+- 用户追加视觉修改：手工 SVG 几何 L + 插入光标，深墨色/暖白/低饱和绿，替换渐变纸笔图形。`public/logo.svg` 为母版，标题栏使用 SVG；同步 `public/logo.png`、32px favicon、Tauri PNG 和包含 16/24/32/48/64/256 的 Windows ICO。无新增依赖，不改编辑功能。
+- PASS：Tauri CLI 实际图标派生、PNG/ICO 格式与尺寸/同源哈希检查、512px/32px目视、`pnpm typecheck`。发现 Cargo 曾复用旧 ICO 的 Windows resource，已在 `src-tauri/build.rs` 增加 ICO/PNG 监听；再次完整打包并读取 PE 资源，六种 EXE 内嵌图标与新 ICO 逐帧字节相同。最终安装包 3695344 字节（3.52 MiB）。保留 NSIS 宏修复，实际未安装、未运行应用或修改系统图标缓存。
+- REVIEW，文件用途/人工验收见 [LOGO_REFRESH.md](LOGO_REFRESH.md)；系统桌面/DPI与跨平台运行 NOT RUN。未提交、推送或发布，未开始新 Phase，图片原生验收继续暂停。
+
 ### 2026-10-15 NSIS 重复宏打包修复
 - 仅修复用户报错的打包单点，不推进完整 Phase 8：Tauri 先包含 `FileAssociation.nsh`，钩子的 `!ifdef/!undef` 只处理 define 符号，无法删除已有宏；两处改为 `!ifmacrodef/!macroundef`，保留原有安全关联逻辑，不改生成脚本或编辑器业务。
 - PASS：关联/打包针对性 Vitest 14/14；`node scripts/package.mjs --skip-install` 全链路（Vue typecheck/build、Rust release、makensis）通过，产出 `src-tauri/target/release/bundle/nsis/LightEdit_0.1.0_x64-setup.exe`，3813757 字节（3.64 MiB）。变更文件：`src-tauri/windows/installerHooks.nsh` 宏替换、`docs/PACKAGING.md` 故障说明、本进度记录。

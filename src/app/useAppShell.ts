@@ -10,6 +10,8 @@ import type SettingsModal from '../components/modals/SettingsModal.vue'
 import type DiscardDialog from '../components/modals/DiscardDialog.vue'
 import type Toast from '../components/common/Toast.vue'
 import { markdownFormats } from '../editor/markdown/formatCommands'
+import { relativeMarkdownLink } from '../editor/markdown/links'
+import { defaultMarkdownTypography } from '../editor/markdown/wysiwyg/contracts'
 import { FileController, fileError } from '../features/files/FileController'
 import { sameFilePath } from '../features/files/pathKey'
 import { AutoSaveController } from '../features/files/AutoSaveController'
@@ -43,6 +45,7 @@ export function useAppShell() {
   const fontSize = ref(14), wordWrap = ref(false), showOutline = ref(false), defaultMdMode = ref<MarkdownMode>('live')
   const fontFamily = ref<EditorSettings['fontFamily']>('system'), indentSize = ref(2), useTabs = ref(false)
   const autoSave = ref(false), autoSaveDelay = ref(1500)
+  const markdownTypography=ref(defaultMarkdownTypography())
   const imageRules = ref(defaultImageRules()), documentImageRules = ref<Record<string, ImageRules>>({})
   const shortcuts = ref<EditorSettings['shortcuts']>({ ...defaultShortcuts }), fileModes = ref<Record<string, MarkdownMode>>({})
   const customShortcuts = ref<ShortcutAction[]>([])
@@ -113,11 +116,24 @@ export function useAppShell() {
     }catch(error){toast(fileError(error))}
     finally{fileBusy.value=false;await refreshRecent();void drainPending()}
   }
+  async function openRelativeLink(event:Event){
+    const detail=(event as CustomEvent<{id:string;href:string}>).detail,doc=detail&&manager.metadata(detail.id)
+    if(!desktop||!doc?.fileToken||fileBusy.value||manager.isComposing)return
+    const target=relativeMarkdownLink(doc.path,detail.href)
+    if(!target){toast('链接路径无效，未打开文件。');return}
+    fileBusy.value=true
+    try{
+      const file=await tauriWorkspace.openWorkspaceFile(target.path)
+      files.accept(file,false)
+      const id=manager.openedDocuments.find(item=>sameFilePath(item.path,file.path))?.id
+      if(id&&target.anchor){const source=manager.getText(id)||'',lines=source.split('\n');const line=lines.findIndex(text=>text.replace(/^#{1,6}\s+/,'').trim().toLowerCase().replace(/\s+/g,'-')===target.anchor);if(line>=0)manager.revealPosition(id,line+1,1)}
+    }catch(error){toast(`无法打开相对链接：${fileError(error)}。请将目标加入授权工作区。`)}finally{fileBusy.value=false}
+  }
   function imagePaste(event: ClipboardEvent) {
     const target=event.target instanceof Element ? event.target : null
     const view=target?.closest('.cm-editor') ? EditorView.findFromDOM(target.closest('.cm-editor')!) : null
     const doc=manager.activeDocument
-    if (!doc?.mode || !view || !desktop) return
+    if (!doc?.mode || (!view&&!target?.closest('.md-prose')) || !desktop) return
     const images=Array.from(event.clipboardData?.files || []).filter(file=>file.type.startsWith('image/') || isImageFile(file.name))
     if (!images.length)return
     event.preventDefault();event.stopImmediatePropagation();void importImages(doc.id,images)
@@ -565,7 +581,7 @@ export function useAppShell() {
       else {
         const editor=element instanceof HTMLElement ? element.closest<HTMLElement>('.cm-editor') : null
         const view=(editor && EditorView.findFromDOM(editor)) || manager.activeEditorView
-        if(operation==='paste' && manager.activeDocument?.mode && desktop && view) {
+        if(operation==='paste' && manager.activeDocument?.mode && desktop && view && !manager.activeLiveEditor) {
           if(fileBusy.value||manager.isComposing||files.workspaceBusy||files.saving.size)return
           const id=manager.activeId!;manager.pin(id);fileBusy.value=true
           const before=view.state
@@ -574,7 +590,10 @@ export function useAppShell() {
           finally{fileBusy.value=false;void drainPending()}
           if(manager.activeId!==id||manager.activeEditorView!==view||view.state.doc!==before.doc||!view.state.selection.eq(before.selection))throw new Error('读取剪贴板期间文档或选区变化，已取消粘贴。')
         }
-        if(view) await editorClipboard(view,operation,textClipboard)
+        if(manager.activeLiveEditor){
+          if(operation==='paste'&&desktop){const sources=await clipboardImages();if(sources.length){await importImages(manager.activeId!,sources);return}}
+          await manager.activeLiveEditor.clipboard(operation)
+        }else if(view) await editorClipboard(view,operation,textClipboard)
       }
     }catch(error){toast(fileError(error))}
   }
@@ -587,7 +606,7 @@ export function useAppShell() {
     if (document.querySelector('.app-menu-popup') && document.activeElement?.closest('[data-menu-popup],.app-menu') && !(event.ctrlKey||event.metaKey||event.altKey)) return
     if (document.querySelector('.workspace-operation-dialog') || event.isComposing || alreadyHandled || manager.isComposing || paletteRef.value?.visible || settingsRef.value?.visible || discardRef.value?.visible || gotoLineRef.value?.visible) return
     const binding = event.key === '+' && shortcuts.value['zoom-in'] === 'Mod+=' && (event.ctrlKey || event.metaKey) && !event.altKey ? 'Mod+=' : eventShortcut(event)
-    if(desktop && binding==='Mod+V' && event.target instanceof Element && event.target.closest('.cm-content') && manager.activeDocument?.mode){event.preventDefault();event.stopPropagation();void clipboardAction('paste');return}
+    if(desktop && binding==='Mod+V' && event.target instanceof Element && event.target.closest('.cm-content,.md-prose') && manager.activeDocument?.mode){event.preventDefault();event.stopPropagation();void clipboardAction('paste');return}
     const id = (Object.keys(shortcuts.value) as ShortcutAction[]).find(key => shortcuts.value[key] === binding)
     if (!id && Object.values(defaultShortcuts).includes(binding as typeof defaultShortcuts[ShortcutAction])) {
       event.preventDefault(); event.stopPropagation(); return
@@ -632,11 +651,12 @@ export function useAppShell() {
   }, { immediate: true })
   watch(wordWrap, value => manager.setWrap(value), { immediate: true })
   watch(defaultMdMode, value => manager.setDefaultMarkdownMode(value), { immediate: true })
+  watch(markdownTypography,value=>manager.setMarkdownTypography(value),{immediate:true,deep:true})
   watch(fontSize, value => { document.documentElement.style.setProperty('--editor-size', `${value}px`); manager.refreshTypography() }, { immediate: true })
   watch(fontFamily, value => { document.documentElement.style.setProperty('--font-mono', fontFamilies[value]); manager.refreshTypography() }, { immediate: true })
   watch([indentSize,useTabs], () => manager.setIndent(indentSize.value,useTabs.value), { immediate: true })
   function settingsSnapshot(): EditorSettings {
-    return { theme: theme.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value,
+    return { markdownTypography:{...markdownTypography.value},theme: theme.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value,
       defaultMdMode: defaultMdMode.value, indentSize: indentSize.value, useTabs: useTabs.value, imageRules:{...imageRules.value},documentImageRules:{...documentImageRules.value}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[...customShortcuts.value], shortcuts: { ...shortcuts.value }, fileModes: { ...fileModes.value } }
   }
   function flushSettings() {
@@ -654,7 +674,7 @@ export function useAppShell() {
     shortcuts.value = value
   }
   watch([autoSave, autoSaveDelay], () => autoSaver.configure(desktop && settingsReady && autoSave.value, autoSaveDelay.value))
-  watch([theme,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,imageRules,documentImageRules], () => {
+  watch([markdownTypography,theme,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,imageRules,documentImageRules], () => {
     if (!settingsReady) return
     if (settingsTimer) clearTimeout(settingsTimer)
     settingsTimer = setTimeout(() => void flushSettings(),250)
@@ -676,6 +696,7 @@ export function useAppShell() {
   onMounted(async () => {
     if (desktop) fileBusy.value=true
     window.addEventListener('editor-notice', editorNotice)
+    window.addEventListener('markdown-open-relative',openRelativeLink)
     window.addEventListener('paste',imagePaste,true)
     window.addEventListener('resize', adaptWindowWidth)
     window.addEventListener('keydown', handleGlobalKeydown, true)
@@ -688,6 +709,7 @@ export function useAppShell() {
       if (!alive) return
       theme.value = settings.theme; fontSize.value = settings.fontSize; fontFamily.value = settings.fontFamily; wordWrap.value = settings.wordWrap
       autoSave.value = settings.autoSave; autoSaveDelay.value = settings.autoSaveDelay
+      markdownTypography.value=settings.markdownTypography
       imageRules.value=settings.imageRules;documentImageRules.value=settings.documentImageRules
       showOutline.value = settings.showOutline; defaultMdMode.value = settings.defaultMdMode; indentSize.value = settings.indentSize; useTabs.value = settings.useTabs
       shortcuts.value = settings.shortcuts; fileModes.value = settings.fileModes; manager.setFileModes(settings.fileModes)
@@ -753,6 +775,7 @@ export function useAppShell() {
   onUnmounted(() => {
     systemTheme.removeEventListener('change', updateSystemTheme)
     window.removeEventListener('editor-notice', editorNotice)
+    window.removeEventListener('markdown-open-relative',openRelativeLink)
     window.removeEventListener('paste',imagePaste,true)
     window.removeEventListener('resize', adaptWindowWidth)
     alive = false
@@ -770,7 +793,7 @@ export function useAppShell() {
     sessionWriter?.dispose()
     autoSaver.dispose(); files.dispose(); workspace.destroy(); unsubscribeWorkspace(); unsubscribe(); manager.dispose()
   })
-  return { appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay,imageRules,currentDocumentImageRules,updateDocumentImageRules,
+  return { markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay,imageRules,currentDocumentImageRules,updateDocumentImageRules,
     paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, mainOpenedDocuments, mainActiveId, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
     setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, selectDocById, handleSelectDoc,
     pinDocById, createNewDoc, closeDocById,closeOtherTabs,cancelPendingClose, discardPending, savePending, setLanguage, setMarkdownMode,

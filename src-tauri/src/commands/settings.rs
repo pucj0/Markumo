@@ -14,6 +14,7 @@ pub struct EditorSettings {
     indent_size: u8,
     use_tabs: bool,
     default_md_mode: String,
+    markdown_typography: MarkdownTypography,
     auto_save: bool,
     auto_save_delay: u32,
     image_rules: ImageRules,
@@ -25,6 +26,15 @@ pub struct EditorSettings {
     custom_shortcuts: Vec<String>,
     shortcuts: BTreeMap<String, String>,
     file_modes: BTreeMap<String, String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct MarkdownTypography {
+    width: u16, font_size: u8, font_family: String, line_height: f64,
+    code_line_numbers: bool, code_wrap: bool,
+}
+impl Default for MarkdownTypography {
+    fn default() -> Self { Self { width: 860, font_size: 16, font_family: "system".into(), line_height: 1.7, code_line_numbers: true, code_wrap: false } }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -48,6 +58,7 @@ impl Default for EditorSettings {
             indent_size: 2,
             use_tabs: false,
             default_md_mode: "live".into(),
+            markdown_typography: MarkdownTypography::default(),
             auto_save: false,
             auto_save_delay: 1500,
             image_rules: ImageRules::default(),
@@ -70,6 +81,12 @@ fn legacy_shortcut_version() -> u8 {
     1
 }
 fn validate(settings: &EditorSettings) -> Result<(), String> {
+    let md = &settings.markdown_typography;
+    if !(480..=1400).contains(&md.width) || !(12..=28).contains(&md.font_size)
+        || !md.line_height.is_finite() || !(1.2..=2.4).contains(&md.line_height)
+        || !["system", "serif", "mono"].contains(&md.font_family.as_str()) {
+        return Err("Markdown 排版设置超出支持范围".into());
+    }
     if !["dark", "light", "system"].contains(&settings.theme.as_str())
         || !(10..=24).contains(&settings.font_size)
         || !["system", "consolas", "cascadia"].contains(&settings.font_family.as_str())
@@ -151,6 +168,20 @@ pub async fn save_editor_settings(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn markdown_typography_roundtrips_and_rejects_invalid_values_without_enabling_autosave() {
+        let mut settings = super::EditorSettings::default();
+        assert!(!settings.auto_save);
+        assert_eq!(settings.markdown_typography.width, 860);
+        settings.markdown_typography.width = 720;
+        settings.markdown_typography.code_wrap = true;
+        let roundtrip: super::EditorSettings = serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(roundtrip.markdown_typography.width, 720);
+        assert!(roundtrip.markdown_typography.code_wrap);
+        assert!(super::validate(&roundtrip).is_ok());
+        settings.markdown_typography.line_height = f64::NAN;
+        assert!(super::validate(&settings).is_err());
+    }
     #[test]
     fn image_rules_defaults_and_document_overrides_roundtrip_without_touching_markdown() {
         let dir=tempfile::tempdir().unwrap();let path=dir.path().join("settings.json");

@@ -1,7 +1,7 @@
 <template>
   <div class="app-menu" @mousedown.stop @dblclick.stop>
     <div class="menu-categories" role="menubar" aria-label="应用菜单" @keydown.stop="keydown">
-      <button v-for="(group,index) in groups" :key="group.id" :ref="el => { triggers[index] = el as HTMLButtonElement }" role="menuitem" aria-haspopup="menu" :aria-expanded="visible && active === index" :tabindex="active === index ? 0 : -1" :class="{on:visible && active === index}" @focus="focusTrigger(index)" @mousedown.prevent="remember" @click="open(index,true)" @mouseenter="open(index,false)">{{ group.title }}</button>
+      <button v-for="(group,index) in groups" :key="group.id" :ref="el => { triggers[index] = el as HTMLButtonElement }" role="menuitem" aria-haspopup="menu" :aria-expanded="visible && active === index" :tabindex="active === index ? 0 : -1" :class="{on:visible && active === index}" @focus="focusTrigger(index)" @mousedown.prevent="remember" @click="open(index,true)" @mouseenter="visible && open(index,false)">{{ group.title }}</button>
     </div>
     <MenuPopup v-if="visible && groups[active]" :key="groups[active].id" :nodes="groups[active].items" :registry="registry" :anchor="anchor" :title="`${groups[active].title}菜单`" :focus="keyboardFocus" @execute="$emit('execute',$event)" @close="close" @switch-root="switchRoot" />
   </div>

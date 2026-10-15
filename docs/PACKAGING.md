@@ -95,6 +95,6 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
 
 ## 本轮验证与范围
 
-范围：打包入口、环境检查、平台选择、输出提示与文档；没有修改编辑器业务功能，没有重新生成或安装软件包。运行证据见 `docs/PHASE_PROGRESS.md`。
+初始脚本专项范围：打包入口、环境检查、平台选择、输出提示与文档。后续 2026-10-15 已针对 NSIS 宏冲突实际重建 Windows 安装包，见文档开头及 `docs/PHASE_PROGRESS.md`；没有运行安装程序。
 
-实际完整 Windows NSIS 构建及安装、macOS APP/DMG 构建/签名/安装、Linux DEB/AppImage 构建/运行均未在本轮执行（NOT RUN）。脚本模型测试及 Windows BAT 的实际 `--check` 结果单独记录，不能替代这些打包验收。
+Windows 完整 NSIS 构建已 PASS；Windows 安装/卸载、macOS APP/DMG 构建/签名/安装、Linux DEB/AppImage 构建/运行仍 NOT RUN。脚本模型测试及 BAT 的 `--check` 结果不能替代平台运行验收。

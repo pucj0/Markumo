@@ -1,5 +1,6 @@
 <template>
   <div class="pane-body" :class="{ 'class-pane': doc?.kind === 'javaClass' }">
+    <div v-if="doc?.mode === 'live' && tooLarge" class="markdown-budget" role="status">文档超过 Live 安全预算，当前使用源码编辑。</div>
     <div v-show="doc" ref="host" class="editor-host" @scroll.capture="onEditorScroll"></div>
     <SplitPreview v-if="doc?.mode === 'split'" ref="preview" :content="text" :too-large="tooLarge" :resources="resources" :resource-key="`${doc?.fileToken||''}|${doc?.path||''}`" @scroll-line="onPreviewScroll" @edit-image="editImage" />
     <ClassHexPanel v-if="doc?.kind === 'javaClass'" :key="doc.id" :doc="doc" :files="files" />
@@ -61,7 +62,7 @@ function onPreviewScroll(lineNumber: number) {
   const next = block.top + (lineNumber % 1) * block.height + view.documentTop - scroller.getBoundingClientRect().top + scroller.scrollTop
   if (Math.abs(next - scroller.scrollTop) > 1) { scroller.scrollTop = next; expectedTop = scroller.scrollTop }
 }
-onMounted(() => { if (host.value) props.pane === 'main' ? props.manager.mount(host.value) : props.manager.mountSecondary(host.value) })
+onMounted(() => { if (host.value) props.manager.mountPane(host.value, props.pane) })
 // A newly bound view may have been created while its host was still v-show hidden.
 watch(() => !!props.doc, (present, previous) => {
   if (present && !previous && props.manager.activePane === props.pane) props.manager.focusPane(props.pane)
@@ -72,5 +73,6 @@ onUnmounted(() => props.manager.unmount(props.pane))
 .pane-body { flex:1;display:flex;min-width:0;min-height:0;position:relative;overflow:hidden }
 .editor-host { flex:1;min-height:0;min-width:0;overflow:hidden;display:flex }
 .editor-host :deep(.cm-editor) { height:100%;width:100% }
+.markdown-budget {position:absolute;top:0;right:12px;z-index:8;font-size:12px;background:var(--side);padding:5px;color:var(--muted)}
 @media(max-width:900px) { .class-pane { flex-direction:column } }
 </style>

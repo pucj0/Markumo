@@ -1,5 +1,31 @@
 # Markdown 功能差距矩阵 — 阶段 A（2026-10-15）
 
+## 2026-10-15 WYSIWYG 新架构覆盖矩阵
+
+以下为本次 ProseMirror 专项现状，覆盖后文旧 CM 光标展开方案的产品结论；后文完整保留为历史证据。当前 REVIEW，不因历史 SUPPORTED 保留整块源码展开行为。详细证据见 [WYSIWYG 验收](MARKDOWN_WYSIWYG_ACCEPTANCE.md)。
+
+| 能力 | 新 Live | Source / Split | 本轮结论 |
+| --- | --- | --- | --- |
+| 正文、H1–H6、粗斜体/删除线/代码 | SUPPORTED | 保留 CM / 安全预览 | PM 结构节点与 marks，点击不展开整块标记 |
+| GFM 表格 | SUPPORTED（基础） | 原有源码/预览 | 真单元格/Tab/行列/对齐/工具栏/共享 Undo；合并 HTML 表格保留源码 |
+| 围栏代码 | SUPPORTED（基础） | 原始围栏/安全预览 | CM NodeView，独立从 1 行号、语言/复制/缩进，点击无围栏 |
+| 列表/任务/引用 | SUPPORTED（基础） | 原有实现 | 原生结构命令/真实 checkbox；复杂连续边界仍需人工 |
+| 链接/自动/引用式/文内锚点 | PARTIAL | 原有实现 | 点击属性可改；HTTP(S) 安全打开；工作区相对文档入口；键盘浮层和单文件授权目标不足 |
+| 图片 | PARTIAL | 原有服务/安全预览 | 原生授权读取/显示/属性 Undo 通过；导入复用，系统剪贴板/Drop/对话框本轮未验 |
+| YAML/复杂 HTML/未知扩展 | SUPPORTED（保护） | 原文 | 局部折叠源码，不擅自有损转换 |
+| 数学 | PARTIAL | 源码保留 / 原有预览 | 行内节点/局部源码/显式按需 KaTeX；不是所有模式全量数学排版 |
+| Mermaid | PARTIAL | 源码/安全代码预览 | 代码块局部渲染，strict+净化+预算；资源/配置/自定义样式/外链未启用 |
+| 文内 TOC | SUPPORTED（基础） | 源码/原有预览 | Live 标题动态目录与点击定位 |
+| 脚注 / Callout | PARTIAL | 原文 | 引用/定义/安全文本显示；完整编号回链/内联富格式不足 |
+| Typora 文档主题/设置 | SUPPORTED（基础） | 普通编辑主题独立 | 860px、16px/1.7、深浅、宽度字体行高、代码行号换行 |
+| 共享历史/多 Pane/字节保真 | SUPPORTED（限定契约） | 同一文档服务 | 浏览器/原生证据；修改子树可规范化，未修改块与普通表格单元格保留 |
+| Live 多光标 / 搜索 | PARTIAL | CM 完整能力保留 | Live 单选区；查找替换明确切 Source |
+| 真 Windows IME / DPI / 长时 RSS | UNVERIFIED | UNVERIFIED | 不用合成事件/浏览器样本冒充 |
+
+新测试：模型 13 项，全仓 258/258，浏览器 9/9（含 40 字形点击），原生 6/6（5 组真实磁盘/图片 + 1 组受控剪贴板路由），Rust 84/84。原 `editor-browser` 与 `markdown-click-ui` 命令迁移到新产品驱动，历史 DOM 脚本留 `tests/legacy`；其他旧专项 E2E 不沿用其历史 PASS。无提交/推送/发布。
+
+---
+
 审查基线：`1d0a7f3 feat(workspace): 重构主菜单、工作区树与只读 ClassFile 支持` 加开始时已存在的未知后缀/可编辑字节改动。保留所有未提交内容，不提交、推送、发布或进入阶段 B。本次是既有 Phase 5/6 的专项阶段 A，不重新定义 PRD 的 Phase 顺序。
 
 依据为当前真实源码与本轮运行结果；历史报告仅用于定位已有实现。开始前实际 `pnpm test` 为157/157。现有 `tableModel/tableWidget/tableField` 已具备 GFM 单元格源码定位、行列事务与组合输入映射，直接复用，没有重写表格编辑器。

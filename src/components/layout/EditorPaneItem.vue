@@ -266,7 +266,4 @@ function handleDrop(event: DragEvent) {
   flex-direction: column;
 }
 
-.pane.active :deep(.tabs) {
-  box-shadow: inset 0 2px var(--accent);
-}
 </style>

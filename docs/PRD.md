@@ -1,5 +1,7 @@
 # LightEdit（暂定名）——Fleet 风格轻量通用文本编辑器
 
+> **2026-10-15 Markdown 编辑内核决议（覆盖本文旧 Live 技术约束）**：用户明确授权 Markdown Live 改用按需加载的原生 ProseMirror，代码块使用 CodeMirror 6 NodeView，GFM 表格使用 prosemirror-tables。普通文本、代码、Markdown Source/Split 编辑侧仍用 CodeMirror 6；Rust/Tauri/Vue/TS/Vite 保持。源码是持久化权威，Live 事务必须经过 Source Preservation 桥接和既有 DocumentManager/FileController；禁止打开/切模式改写源码、独立保存或独立撤销栈。本专项六个内部阶段连续授权，不推进通用 Phase 7/8。本文后续同区 CM/光标展开/禁止 ProseMirror 的历史条款由本决议取代。实现与限制以 `MARKDOWN_WYSIWYG_ARCHITECTURE.md`、`MARKDOWN_SOURCE_PRESERVATION.md`、`MARKDOWN_WYSIWYG_ACCEPTANCE.md` 为准；测试未通过的能力不能沿用旧 SUPPORTED 结论。
+
 > 项目定位：**本质是通用桌面文本编辑器，不是 Markdown 专用软件。** 参考 JetBrains Fleet 的界面布局、快速导航和工作区体验；参考 Typora/Obsidian Live Preview 的 Markdown 即时排版。技术栈固定：**Rust + Tauri 2 + Vue 3 + TypeScript + Vite + CodeMirror 6**。
 >
 > 该文档可以直接交给编程 AI。每个 Phase 后都必须提供实现摘要、修改文件、测试与风险说明。程序采用本地优先、无服务端、无账户依赖。

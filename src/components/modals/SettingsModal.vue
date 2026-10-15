@@ -34,6 +34,12 @@
             </section>
             <section id="settings-markdown" class="settings-section">
               <h3>Markdown</h3>
+              <div class="settingrow"><label for="settings-md-width">正文宽度</label><input id="settings-md-width" type="number" min="480" max="1400" :value="markdownTypography?.width || 860" @change="updateMd('width', Number(($event.target as HTMLInputElement).value))" /></div>
+              <div class="settingrow"><label for="settings-md-size">正文字号</label><input id="settings-md-size" type="number" min="12" max="28" :value="markdownTypography?.fontSize || 16" @change="updateMd('fontSize', Number(($event.target as HTMLInputElement).value))" /></div>
+              <div class="settingrow"><label for="settings-md-height">正文行高</label><input id="settings-md-height" type="number" min="1.2" max="2.4" step="0.1" :value="markdownTypography?.lineHeight || 1.7" @change="updateMd('lineHeight', Number(($event.target as HTMLInputElement).value))" /></div>
+              <div class="settingrow"><label for="settings-md-font">正文字体</label><select id="settings-md-font" :value="markdownTypography?.fontFamily || 'system'" @change="updateMd('fontFamily', ($event.target as HTMLSelectElement).value)"><option value="system">中英文系统字体</option><option value="serif">衬线字体</option><option value="mono">等宽字体</option></select></div>
+              <div class="settingrow"><label for="settings-md-numbers">代码块行号</label><input id="settings-md-numbers" type="checkbox" :checked="markdownTypography?.codeLineNumbers ?? true" @change="updateMd('codeLineNumbers', ($event.target as HTMLInputElement).checked)" /></div>
+              <div class="settingrow"><label for="settings-md-wrap">代码块自动换行</label><input id="settings-md-wrap" type="checkbox" :checked="markdownTypography?.codeWrap ?? false" @change="updateMd('codeWrap', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><label for="settings-md-mode">Markdown 默认模式</label><select id="settings-md-mode" :value="defaultMdMode" @change="$emit('update:defaultMdMode', ($event.target as HTMLSelectElement).value as MarkdownMode)"><option value="live">即时排版</option><option value="source">源码</option><option value="split">双栏</option></select></div>
               <ImageSettings :global-rules="imageRules" :document-rules="documentImageRules" :document-path="markdownPath" :document-name="markdownName" @global="emit('update:imageRules', $event)" @document="emit('update:documentImageRules', $event)" />
             </section>
@@ -60,13 +66,16 @@ import ImageSettings from './ImageSettings.vue'
 import type { ImageRules } from '../../editor/markdown/imageImport'
 import { normalizeShortcut, validateShortcuts, shortcutLabels, type EditorSettings } from '../../features/shell/editorSettings'
 import type { ThemePreference, MarkdownMode } from '../../types'
+import { defaultMarkdownTypography, type MarkdownTypography } from '../../editor/markdown/wysiwyg/contracts'
 const props = defineProps<{
+  markdownTypography?:MarkdownTypography
   theme: ThemePreference; fontSize: number; wordWrap: boolean; showOutline: boolean; defaultMdMode: MarkdownMode
   fontFamily: EditorSettings['fontFamily']; indentSize: number; useTabs: boolean; shortcuts: EditorSettings['shortcuts']
   autoSave: boolean; autoSaveDelay: number
   imageRules: ImageRules; documentImageRules: ImageRules | null; markdownPath?: string; markdownName?: string
 }>()
 const emit = defineEmits<{
+  (e:'update:markdownTypography',value:MarkdownTypography):void
   (e: 'update:theme', val: ThemePreference): void
   (e: 'update:fontSize', val: number): void
   (e: 'update:wordWrap', val: boolean): void
@@ -82,6 +91,10 @@ const emit = defineEmits<{
   (e: 'update:documentImageRules', val: ImageRules | null): void
 }>()
 const { visible, dialogRef, open, close, handleKeydown } = useModal()
+function updateMd(key:keyof MarkdownTypography,value:number|string|boolean){
+  if(typeof value==='number'&&(!Number.isFinite(value)||(key==='width'&&(value<480||value>1400))||(key==='fontSize'&&(value<12||value>28))||(key==='lineHeight'&&(value<1.2||value>2.4))))return
+  emit('update:markdownTypography',{...(props.markdownTypography||defaultMarkdownTypography()),[key]:value})
+}
 const contentRef = ref<HTMLElement | null>(null), shortcutsRef = ref<HTMLDetailsElement | null>(null)
 const activeSection = ref('appearance'), fontDraft = ref(String(props.fontSize)), fontError = ref('')
 const shortcutDraft = ref({ ...props.shortcuts }), shortcutError = ref('')
