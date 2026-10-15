@@ -19,10 +19,14 @@
     "test:ui:theme": "node tests/theme-ui.mjs",
     "test:ui:selection": "node tests/selection-ui.mjs",
     "test:ui:menu": "node tests/menu-ui.mjs",
+    "test:ui:clipboard": "node tests/clipboard-ui.mjs",
+    "test:ui:workspace-tools": "node tests/workspace-tools-ui.mjs",
     "test:native:editor": "node tests/editor-native.mjs",
     "test": "vitest run --pool=forks --maxWorkers=1 --minWorkers=1",
     "test:ui:markdown-clicks": "node tests/markdown-click-ui.mjs",
-    "test:ui:settings": "node tests/settings-ui.mjs"
+    "test:ui:settings": "node tests/settings-ui.mjs",
+    "test:ux:model": "node tests/ux-model-check.mjs",
+    "test:ux:ui": "node tests/ux-special-ui.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
@@ -47,6 +51,7 @@
     "@lezer/highlight": "^1.2.5",
     "@lezer/markdown": "^1.8.0",
     "@tauri-apps/api": "^2.2.0",
+    "@tauri-apps/plugin-clipboard-manager": "^2.4.2",
     "markdown-it": "^15.0.2",
     "vue": "^3.4.21"
   },

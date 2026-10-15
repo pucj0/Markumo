@@ -19,6 +19,8 @@
   --selection-inactive: #41455f;
   --blue: #82afff;
   --green: #91ceac;
+  --change-modified: #eea044;
+  --change-inserted: #4bc28b;
   --yellow: #e2b77a;
   --pink: #e6a1c6;
   --shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
@@ -50,6 +52,8 @@ body.light {
   --selection-inactive: #cbd5ec;
   --blue: #376db5;
   --green: #247a56;
+  --change-modified: #d87a17;
+  --change-inserted: #26945d;
   --yellow: #9b6a34;
   --pink: #a33e73;
   --shadow: 0 24px 60px rgba(24, 32, 49, 0.15);

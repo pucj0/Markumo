@@ -6,18 +6,28 @@
       </div>
 
       <!-- 编辑主体区 -->
-      <div v-show="mainDoc || secondaryDoc || manager.isSplit" class="panes-container">
+      <div ref="panes" class="panes-container">
         <!-- 主 Pane (Left) -->
         <div
           class="pane main-pane"
+          :style="manager.isSplit ? { flex: `0 0 calc(${ratio * 100}% - .5px)` } : undefined"
           :class="{ active: manager.activePane === 'main' }"
           @focusin="manager.focusPane('main', false)"
           @mousedown="manager.focusPane('main', false)"
           @dragover.prevent
           @drop.prevent="dropTab($event, 'main')"
         >
-          <EditorPane :manager="manager" pane="main" :doc="mainDoc" />
+          <TabBar :docs="mainDocs" :active-id="manager.group.activeId" pane="main" :split="manager.isSplit"
+            @select-tab="manager.select($event, 'main')" @pin-tab="manager.pin($event)"
+            @close-tab="$emit('close-main', $event)" @new-doc="newMain"
+            @move-tab="manager.moveTab($event.id, $event.from, 'main')"
+            @move-other="manager.moveTab($event,'main','secondary')"
+            @close-others="$emit('close-others',{id:$event,pane:'main'})" @split-tab="splitTab($event,'main')" @close-split="manager.closeSplit()" />
+          <Breadcrumb :doc="mainDoc" />
+          <EditorPane :manager="manager" pane="main" :doc="mainDoc" :files="files" />
         </div>
+
+        <div v-if="manager.isSplit" class="pane-divider" role="separator" aria-label="调整编辑窗格宽度" aria-orientation="vertical" tabindex="0" :aria-valuenow="Math.round(ratio * 100)" :aria-valuemin="Math.round(minimum * 100)" :aria-valuemax="Math.round((1 - minimum) * 100)" @pointerdown="startResize" @keydown="resizeKey" />
 
         <!-- 副 Pane (Right) - 仅在分栏模式开启时展示 -->
         <div
@@ -29,22 +39,14 @@
           @dragover.prevent
           @drop.prevent="dropTab($event, 'secondary')"
         >
-          <div class="secondary-pane-header">
-            <span class="pane-title">分栏</span>
-            <button
-              class="tinyclose"
-              title="关闭副分栏"
-              aria-label="关闭副分栏"
-              @click.stop="manager.closeSplit()"
-            >
-              ✕
-            </button>
-          </div>
-          <TabBar :docs="secondaryDocs" :active-id="manager.secondaryGroup.activeId" pane="secondary"
+          <TabBar :docs="secondaryDocs" :active-id="manager.secondaryGroup.activeId" pane="secondary" :split="manager.isSplit"
             @select-tab="manager.select($event, 'secondary')" @pin-tab="manager.pin($event)"
             @close-tab="$emit('close-secondary', $event)" @new-doc="newSecondary"
-            @move-tab="manager.moveTab($event.id, $event.from, 'secondary')" />
-          <EditorPane :manager="manager" pane="secondary" :doc="secondaryDoc" />
+            @move-tab="manager.moveTab($event.id, $event.from, 'secondary')"
+            @move-other="manager.moveTab($event,'secondary','main')"
+            @close-others="$emit('close-others',{id:$event,pane:'secondary'})" @split-tab="splitTab($event,'secondary')" @close-split="manager.closeSplit()" />
+          <Breadcrumb :doc="secondaryDoc" />
+          <EditorPane :manager="manager" pane="secondary" :doc="secondaryDoc" :files="files" />
         </div>
       </div>
 
@@ -81,19 +83,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import EditorPane from './EditorPane.vue'
 import TabBar from './TabBar.vue'
+import Breadcrumb from './Breadcrumb.vue'
 import OutlineView from './OutlineView.vue'
 import { extractOutline, type OutlineItem } from '../../editor/outline/outlineService'
-import type { EditorDocument } from '../../types'
+import type { EditorDocument, MarkdownMode } from '../../types'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
+import type { FileController } from '../../features/files/FileController'
 
 const props = defineProps<{
   doc: EditorDocument | null
   manager: DocumentManager
   showOutline: boolean
   desktop: boolean
+  wordWrap?: boolean
+  files?: FileController
 }>()
 
 defineEmits<{
@@ -101,6 +107,12 @@ defineEmits<{
   (e: 'open-palette', cat: 'action' | 'file' | 'all'): void
   (e: 'close-outline'): void
   (e: 'close-secondary', id: string): void
+  (e: 'close-main', id: string): void
+  (e: 'set-md-mode', mode: MarkdownMode): void
+  (e: 'toggle-wrap'): void
+  (e: 'toggle-outline'): void
+  (e: 'toggle-split-pane'): void
+  (e:'close-others',tab:{id:string;pane:'main'|'secondary'}):void
 }>()
 
 const revision = ref(0)
@@ -108,6 +120,18 @@ const unsubscribe = props.manager.subscribe(() => revision.value++)
 const mainDoc = computed(() => { revision.value; return props.manager.group.activeId ? props.manager.metadata(props.manager.group.activeId) : null })
 const secondaryDoc = computed(() => { revision.value; return props.manager.secondaryGroup.activeId ? props.manager.metadata(props.manager.secondaryGroup.activeId) : null })
 const secondaryDocs = computed(() => { revision.value; return props.manager.secondaryOpenedDocuments })
+const mainDocs = computed(() => { revision.value; return props.manager.mainOpenedDocuments })
+const panes = ref<HTMLElement | null>(null), ratio = ref(.5), availableWidth = ref(0)
+const minimum = computed(() => availableWidth.value ? Math.min(220 / availableWidth.value, .3) : .3)
+let observer: ResizeObserver | undefined
+function setRatio(value: number) { ratio.value = Math.min(1 - minimum.value, Math.max(minimum.value, value)) }
+function resizeMove(event: PointerEvent) { const rect = panes.value?.getBoundingClientRect(); if (rect?.width) setRatio((event.clientX - rect.left) / rect.width) }
+function stopResize() { window.removeEventListener('pointermove', resizeMove); window.removeEventListener('pointerup', stopResize); window.removeEventListener('pointercancel', stopResize) }
+function startResize(event: PointerEvent) { if (event.button !== 0) return; event.preventDefault(); window.addEventListener('pointermove', resizeMove); window.addEventListener('pointerup', stopResize); window.addEventListener('pointercancel', stopResize) }
+function resizeKey(event: KeyboardEvent) { if (!['ArrowLeft','ArrowRight','Home'].includes(event.key)) return; event.preventDefault(); setRatio(event.key === 'Home' ? .5 : ratio.value + (event.key === 'ArrowRight' ? .05 : -.05)) }
+onMounted(() => { observer = new ResizeObserver(entries => { availableWidth.value = entries[0].contentRect.width; setRatio(ratio.value) }); if (panes.value) observer.observe(panes.value) })
+function newMain() { props.manager.focusPane('main', false); props.manager.createUntitled() }
+function splitTab(id:string,pane:'main'|'secondary'){if(!props.manager.splitEditor())return;props.manager.open(id,false,pane==='main'?'secondary':'main')}
 // The manager is deliberately markRaw; use its subscription to invalidate the render.
 function newSecondary() { props.manager.focusPane('secondary', false); props.manager.createUntitled() }
 function dropTab(event: DragEvent, pane: 'main' | 'secondary') {
@@ -118,7 +142,7 @@ function dropTab(event: DragEvent, pane: 'main' | 'secondary') {
 }
 
 const isMarkdownDoc = computed(() => {
-  return /\.(md|markdown)$/i.test(props.doc?.name || '')
+  return props.doc?.kind !== 'javaClass' && /\.(md|markdown)$/i.test(props.doc?.name || '')
 })
 
 const outlineItems = computed<OutlineItem[]>(() => {
@@ -140,7 +164,7 @@ function handleSelectOutline(item: OutlineItem) {
   }
 }
 
-onUnmounted(unsubscribe)
+onUnmounted(() => { unsubscribe(); observer?.disconnect(); stopResize() })
 </script>
 
 <style scoped>
@@ -182,27 +206,17 @@ onUnmounted(unsubscribe)
   min-width: 0;
   display: flex;
   position: relative;
-  border: 1px solid transparent;
+  flex-direction: column;
 }
 
 .secondary-pane {
   flex-direction: column;
-  border-left: 1px solid var(--line);
 }
-.is-split-pane .pane.active { border-color: var(--accent); }
+.is-split-pane .pane.active :deep(.tabs) { box-shadow:inset 0 2px var(--accent) }
+.pane-divider { width:1px;flex:none;background:var(--line);position:relative;cursor:col-resize;z-index:5;outline:none }
+.pane-divider::after { content:'';position:absolute;inset:0 -3px;background:transparent }
+.pane-divider:hover::after,.pane-divider:focus-visible::after { background:var(--accentbg) }
 
-.secondary-pane-header {
-  height: 28px;
-  background: var(--bar);
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 10px;
-  font-size: 11px;
-  color: var(--muted);
-  flex: none;
-}
 
 .editor-host {
   flex: 1;
@@ -222,6 +236,7 @@ onUnmounted(unsubscribe)
 }
 
 .empty-state {
+  position:absolute;inset:72px 0 0;
   flex: 1;
   display: flex;
   flex-direction: column;

@@ -16,6 +16,9 @@ pub struct EditorSettings {
     default_md_mode: String,
     auto_save: bool,
     auto_save_delay: u32,
+    #[serde(default = "legacy_shortcut_version")]
+    shortcut_version: u8,
+    custom_shortcuts: Vec<String>,
     shortcuts: BTreeMap<String, String>,
     file_modes: BTreeMap<String, String>,
 }
@@ -32,10 +35,15 @@ impl Default for EditorSettings {
             default_md_mode: "live".into(),
             auto_save: true,
             auto_save_delay: 1500,
+            shortcut_version: 3,
+            custom_shortcuts: Vec::new(),
             shortcuts: BTreeMap::new(),
             file_modes: BTreeMap::new(),
         }
     }
+}
+fn legacy_shortcut_version() -> u8 {
+    1
 }
 fn validate(settings: &EditorSettings) -> Result<(), String> {
     if !["dark", "light", "system"].contains(&settings.theme.as_str())
@@ -43,6 +51,9 @@ fn validate(settings: &EditorSettings) -> Result<(), String> {
         || !["system", "consolas", "cascadia"].contains(&settings.font_family.as_str())
         || !(1..=8).contains(&settings.indent_size)
         || !(500..=10000).contains(&settings.auto_save_delay)
+        || !(1..=3).contains(&settings.shortcut_version)
+        || settings.custom_shortcuts.len() > 32
+        || settings.custom_shortcuts.iter().any(|id| id.len()>64)
         || !["live", "source", "split"].contains(&settings.default_md_mode.as_str())
         || settings.file_modes.len() > 100
         || settings.shortcuts.len() > 32
@@ -112,6 +123,16 @@ pub async fn save_editor_settings(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shortcut_version_distinguishes_legacy_from_explicit_preferences() {
+        let legacy: super::EditorSettings = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
+        assert_eq!(legacy.shortcut_version, 1);
+        let current = super::EditorSettings::default();
+        assert_eq!(current.shortcut_version, 3);
+        let roundtrip: super::EditorSettings =
+            serde_json::from_slice(&serde_json::to_vec(&current).unwrap()).unwrap();
+        assert_eq!(roundtrip.shortcut_version, 3);
+    }
     #[test]
     fn automatic_save_defaults_and_explicit_preferences_are_validated_and_persisted() {
         let dir = tempfile::tempdir().unwrap();

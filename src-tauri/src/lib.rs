@@ -33,6 +33,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") { let _ = window.unminimize(); let _ = window.set_focus(); }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(Arc::new(Mutex::new(files::FileService::default())))
         .manage(workspace_store.clone())
         .manage(search_manager)
@@ -64,6 +65,8 @@ pub fn run() {
             commands::files::open_dialog, commands::files::save_dialog,
             commands::files::open_recent, commands::files::reopen_file,
             commands::files::save_file, commands::files::release_file,
+            commands::files::read_class_hex,
+            commands::workspace::reveal_workspace_node,
             commands::files::drain_pending, commands::files::file_preferences, commands::files::persist_layout,
             commands::workspace::open_workspace_dialog,
             commands::workspace::remove_workspace_folder,

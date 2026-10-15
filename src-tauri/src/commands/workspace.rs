@@ -378,69 +378,81 @@ pub async fn reveal_in_explorer(token: String, store: State<'_, FileStore>) -> R
             .map_err(|e| e.to_string())?
             .revealed_path(&token)
             .map_err(|e| e.message)?;
-        #[cfg(target_os = "windows")]
-        {
-            use windows_sys::Win32::{
-                System::Com::{
-                    CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED,
-                },
-                UI::Shell::{SHOpenFolderAndSelectItems, SHParseDisplayName},
+        reveal_path(&p)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn reveal_workspace_node(path: String, store: State<'_, WorkspaceStore>) -> Result<(),String> {
+    let store=store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let p=store.lock().map_err(|error|error.to_string())?.revealed_path(&std::path::PathBuf::from(path))?;
+        reveal_path(&p)
+    }).await.map_err(|error|error.to_string())?
+}
+fn reveal_path(p: &std::path::Path) -> Result<(),String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::{
+            System::Com::{
+                CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED,
+            },
+            UI::Shell::{SHOpenFolderAndSelectItems, SHParseDisplayName},
+        };
+        let wide = shell_path(&p);
+        unsafe {
+            let initialized = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+            if initialized < 0 {
+                return Err(format!("资源管理器 COM 初始化失败: {initialized:#x}"));
+            }
+            let mut pidl = std::ptr::null_mut();
+            let parsed = SHParseDisplayName(
+                wide.as_ptr(),
+                std::ptr::null_mut(),
+                &mut pidl,
+                0,
+                std::ptr::null_mut(),
+            );
+            let result = if parsed >= 0 {
+                SHOpenFolderAndSelectItems(pidl, 0, std::ptr::null(), 0)
+            } else {
+                parsed
             };
-            let wide = shell_path(&p);
-            unsafe {
-                let initialized = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
-                if initialized < 0 {
-                    return Err(format!("资源管理器 COM 初始化失败: {initialized:#x}"));
-                }
-                let mut pidl = std::ptr::null_mut();
-                let parsed = SHParseDisplayName(
-                    wide.as_ptr(),
-                    std::ptr::null_mut(),
-                    &mut pidl,
-                    0,
-                    std::ptr::null_mut(),
-                );
-                let result = if parsed >= 0 {
-                    SHOpenFolderAndSelectItems(pidl, 0, std::ptr::null(), 0)
-                } else {
-                    parsed
-                };
-                if !pidl.is_null() {
-                    CoTaskMemFree(pidl.cast());
-                }
-                CoUninitialize();
-                if result < 0 {
-                    return Err(format!("在资源管理器显示失败: {result:#x}"));
-                }
+            if !pidl.is_null() {
+                CoTaskMemFree(pidl.cast());
+            }
+            CoUninitialize();
+            if result < 0 {
+                return Err(format!("在资源管理器显示失败: {result:#x}"));
             }
         }
-        #[cfg(target_os = "macos")]
-        {
-            let status = std::process::Command::new("open")
-                .arg("-R")
-                .arg(&p)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open")
+            .arg("-R")
+            .arg(&p)
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err("文件管理器启动失败".into());
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(parent) = p.parent() {
+            let status = std::process::Command::new("xdg-open")
+                .arg(parent)
                 .status()
                 .map_err(|e| e.to_string())?;
             if !status.success() {
                 return Err("文件管理器启动失败".into());
             }
         }
-        #[cfg(target_os = "linux")]
-        {
-            if let Some(parent) = p.parent() {
-                let status = std::process::Command::new("xdg-open")
-                    .arg(parent)
-                    .status()
-                    .map_err(|e| e.to_string())?;
-                if !status.success() {
-                    return Err("文件管理器启动失败".into());
-                }
-            }
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    }
+    Ok(())
 }
 
 #[cfg(windows)]

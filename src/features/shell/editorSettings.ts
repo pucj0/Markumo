@@ -6,9 +6,10 @@ import { foldKeymap } from '@codemirror/language'
 import { completionKeymap, closeBracketsKeymap } from '@codemirror/autocomplete'
 export const defaultShortcuts = {
   new: 'Mod+N', open: 'Mod+O', save: 'Mod+S', 'save-as': 'Mod+Shift+S',
-  palette: 'Mod+Shift+P', 'quick-open': 'Mod+P', find: 'Mod+F', replace: 'Mod+H',
+  palette: 'Mod+Shift+P', 'quick-open': 'Mod+P', find: 'Mod+F', replace: 'Mod+R',
   'find-next': 'F3', 'find-previous': 'Shift+F3', 'goto-line': 'Mod+G',
-  'split-editor': 'Mod+\\', 'switch-pane': 'Mod+Alt+ArrowRight', sidebar: 'Mod+B',
+  'split-editor': 'Mod+\\', 'switch-pane': 'Mod+Alt+ArrowRight', sidebar: 'Mod+Alt+B', explorer:'Alt+1',
+  bold:'Mod+B', italic:'Mod+I', 'close-current':'Mod+W',
   'workspace-search': 'Mod+Shift+F', 'zoom-in': 'Mod+=', 'zoom-out': 'Mod+-', 'zoom-reset': 'Mod+0',
   undo: 'Mod+Z', redo: 'Mod+Y', uppercase: 'Mod+Alt+U', lowercase: 'Mod+Alt+L',
 } as const
@@ -17,24 +18,28 @@ export const shortcutLabels: Record<ShortcutAction, string> = {
   new: '新建文档', open: '打开文件', save: '保存文件', 'save-as': '另存为', palette: '命令面板', 'quick-open': '快速打开',
   find: '查找', replace: '替换', 'find-next': '查找下一个', 'find-previous': '查找上一个', 'goto-line': '转到行',
   'split-editor': '切换分栏', 'switch-pane': '切换窗格', sidebar: '切换侧边栏', 'workspace-search': '工作区搜索',
+  bold:'Markdown 加粗', italic:'Markdown 斜体', 'close-current':'关闭文件',
+  explorer:'资源管理器',
   'zoom-in': '放大字号', 'zoom-out': '缩小字号', 'zoom-reset': '恢复默认字号', undo: '撤销', redo: '重做', uppercase: '转为大写', lowercase: '转为小写',
 }
 export interface EditorSettings {
   theme: ThemePreference; fontSize: number; fontFamily: 'system' | 'consolas' | 'cascadia'
   wordWrap: boolean; showOutline: boolean; indentSize: number; useTabs: boolean; defaultMdMode: MarkdownMode
   autoSave: boolean; autoSaveDelay: number
+  shortcutVersion: number
+  customShortcuts: ShortcutAction[]
   shortcuts: Record<ShortcutAction, string>; fileModes: Record<string, MarkdownMode>
 }
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
 export function defaultSettings(): EditorSettings {
-  return { theme: 'system', fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: true, autoSaveDelay: 1500, shortcuts: { ...defaultShortcuts }, fileModes: {} }
+  return { theme: 'system', fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: true, autoSaveDelay: 1500, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
 }
 export function normalizeShortcut(raw: string) {
   const parts = raw.trim().split('+'), key = parts.pop() || ''
   const mods = ['Mod', 'Alt', 'Shift'].filter(mod => parts.some(p => p.toLowerCase() === mod.toLowerCase()))
   if (parts.length !== mods.length || parts.some(p => !['mod','alt','shift'].includes(p.toLowerCase()))) return null
   const normalizedKey = key.length === 1 ? key.toUpperCase() : /^(f[1-9]|f1[0-2])$/i.test(key) ? key.toUpperCase() : key.toLowerCase() === 'arrowright' ? 'ArrowRight' : ''
-  if (!normalizedKey || (!mods.includes('Mod') && !/^F\d+$/.test(normalizedKey))) return null
+  if (!normalizedKey || (!mods.includes('Mod') && !/^F\d+$/.test(normalizedKey) && !(mods.includes('Alt') && /^[1-9]$/.test(normalizedKey)))) return null
   return [...mods, normalizedKey].join('+')
 }
 export function validateShortcuts(shortcuts: Record<string, string>): string | null {
@@ -61,6 +66,8 @@ for (const binding of [...defaultKeymap,...historyKeymap,...searchKeymap,...fold
     }
   }
 }
+// Keep explicitly configured legacy replacement shortcuts available.
+reservedEditorKeys.delete('Mod+H')
 export function settingsFrom(raw: unknown): EditorSettings {
   const defaults = defaultSettings()
   if (!raw || typeof raw !== 'object') return defaults
@@ -73,13 +80,44 @@ export function settingsFrom(raw: unknown): EditorSettings {
   if (Number.isInteger(s.indentSize) && s.indentSize! >= 1 && s.indentSize! <= 8) defaults.indentSize = s.indentSize!
   if (['live','source','split'].includes(s.defaultMdMode || '')) defaults.defaultMdMode = s.defaultMdMode!
   const shortcuts = { ...defaults.shortcuts, ...s.shortcuts }
+  for (const id of Object.keys(defaultShortcuts) as ShortcutAction[]) {
+    if (typeof shortcuts[id] === 'string') shortcuts[id] = normalizeShortcut(shortcuts[id]) || shortcuts[id]
+  }
+  const version = s.shortcutVersion || 1
+  const legacyDefaults = { ...defaultShortcuts, sidebar:'Mod+B', replace:version < 2 ? 'Mod+H' : 'Mod+R' }
+  // Old files have no per-key customization provenance. Migrate an untouched
+  // old default map; preserve ambiguous/custom maps rather than overwrite intent.
+  const explicit = new Set<ShortcutAction>(Array.isArray(s.customShortcuts) ? s.customShortcuts.filter(id => Object.prototype.hasOwnProperty.call(defaultShortcuts,id)) : [])
+  const untouched = !explicit.size && Object.entries(s.shortcuts || {}).every(([id, value]) => legacyDefaults[id as ShortcutAction] === value)
+  if (version < 2 && untouched && shortcuts.replace === 'Mod+H') shortcuts.replace = 'Mod+R'
+  if (version < 3 && untouched && shortcuts.sidebar === 'Mod+B') shortcuts.sidebar = defaultShortcuts.sidebar
+  if (version < 3 && !untouched) for (const id of Object.keys(s.shortcuts || {})) if (id in defaultShortcuts) explicit.add(id as ShortcutAction)
+  // Preserve old user keys. Newly introduced commands take an available key.
+  for (const id of ['bold','italic','close-current','explorer'] as const) {
+    if (s.shortcuts?.[id] !== undefined) continue
+    const occupied = new Set(Object.entries(shortcuts).filter(([key])=>key!==id).map(([,value])=>value))
+    if (occupied.has(shortcuts[id])) {
+      const key = id === 'bold' ? 'B' : id === 'italic' ? 'I' : id === 'explorer' ? '1' : 'W'
+      const alternatives = [key,...'ABCDEFGHIJKLMNOPQRSTUVWXYZ',...Array.from({length:12},(_,i)=>`F${i+1}`)]
+      const candidates = [`Mod+Alt+${key}`,`Mod+Shift+${key}`,`Mod+Alt+Shift+${key}`,...alternatives.flatMap(other=>[`Mod+Alt+${other}`,`Mod+Alt+Shift+${other}`])]
+      const free = candidates.find(value=>!occupied.has(value)&&!reservedEditorKeys.has(value))
+      if (free) shortcuts[id] = free
+    }
+  }
+  defaults.customShortcuts = [...explicit]
   if (!validateShortcuts(shortcuts)) defaults.shortcuts = Object.fromEntries(Object.entries(shortcuts).filter(([id]) => Object.prototype.hasOwnProperty.call(defaultShortcuts,id)).map(([id,key]) => [id,normalizeShortcut(key)!])) as EditorSettings['shortcuts']
   for (const [path,mode] of Object.entries(s.fileModes || {}).slice(-100)) if (path.length <= 4096 && ['live','source','split'].includes(mode)) defaults.fileModes[path] = mode
   return defaults
 }
-export function eventShortcut(event: KeyboardEvent) {
-  const key = event.key === '+' ? '=' : event.key === '|' ? '\\' : event.key === '_' ? '-' : event.key.length === 1 ? event.key.toUpperCase() : event.key
-  return [event.ctrlKey || event.metaKey ? 'Mod' : '', event.altKey ? 'Alt' : '', event.shiftKey ? 'Shift' : '', key].filter(Boolean).join('+')
+export function macPlatform(platform = globalThis.navigator?.platform || '') { return /Mac|iPhone|iPad/i.test(platform) }
+export function shortcutLabel(key: string, platform?: string) {
+  return macPlatform(platform) ? key.replace('Mod','⌘').replace('Alt','⌥').replace('Shift','⇧').replace(/\+/g,' ') : key.replace('Mod','Ctrl')
+}
+export function eventShortcut(event: KeyboardEvent, platform?: string) {
+  const key = event.altKey && /^Digit[1-9]$/.test(event.code) ? event.code.slice(-1) : event.key === '+' ? '=' : event.key === '|' ? '\\' : event.key === '_' ? '-' : event.key.length === 1 ? event.key.toUpperCase() : event.key
+  const mod = macPlatform(platform) ? event.metaKey : event.ctrlKey
+  const extra = macPlatform(platform) ? event.ctrlKey ? 'Ctrl' : '' : event.metaKey ? 'Meta' : ''
+  return [mod ? 'Mod' : '', extra, event.altKey ? 'Alt' : '', event.shiftKey ? 'Shift' : '', key].filter(Boolean).join('+')
 }
 export async function loadEditorSettings(): Promise<EditorSettings> {
   return settingsFrom(isTauri() ? await invoke('load_editor_settings') : JSON.parse(localStorage.getItem('lightedit.settings.v1') || 'null'))

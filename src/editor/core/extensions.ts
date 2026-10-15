@@ -2,11 +2,12 @@ import { EditorState, type Extension } from '@codemirror/state'
 import { EditorView, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, dropCursor, rectangularSelection, crosshairCursor, highlightActiveLine, keymap } from '@codemirror/view'
 import { history, historyKeymap, defaultKeymap, indentWithTab } from '@codemirror/commands'
 import { bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting, HighlightStyle } from '@codemirror/language'
-import { search, searchKeymap, openSearchPanel } from '@codemirror/search'
+import { search, searchKeymap } from '@codemirror/search'
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete'
 import { tags } from '@lezer/highlight'
 import type { Theme } from '../../types'
-import { createEditorSearchPanel } from './searchPanel'
+import { createEditorSearchPanel, showEditorSearch } from './searchPanel'
+import { changeGutter } from './changeGutter'
 
 const highlight = HighlightStyle.define([
   { tag: [tags.keyword, tags.modifier], color: 'var(--pink)' },
@@ -20,21 +21,17 @@ const highlight = HighlightStyle.define([
 ])
 
 export const coreExtensions: Extension = [
-  lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(), history(),
+  changeGutter, lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(), history(),
   drawSelection(), dropCursor(), rectangularSelection(), crosshairCursor(), highlightActiveLine(),
   EditorState.allowMultipleSelections.of(true),
   EditorState.phrases.of({ 'Find': '查找', 'Replace': '替换', 'next': '下一个', 'previous': '上一个', 'all': '全部', 'match case': '区分大小写', 'regexp': '正则', 'by word': '全词', 'replace': '替换', 'replace all': '全部替换', 'close': '关闭' }),
-  indentOnInput(), bracketMatching(), foldGutter(), syntaxHighlighting(highlight),
+  indentOnInput(), bracketMatching(), foldGutter({ markerDOM(open) {
+    const element = document.createElement('span'); element.className = 'cm-fold-chevron' + (open ? ' open' : '')
+    element.setAttribute('aria-label', open ? '折叠代码' : '展开代码'); return element
+  } }), syntaxHighlighting(highlight),
   closeBrackets(), autocompletion(), search({ top: true, createPanel: createEditorSearchPanel }),
-  keymap.of([{ key: 'Mod-h', run: view => {
-    openSearchPanel(view)
-    const field = view.dom.querySelector<HTMLInputElement>('.cm-search input[name="replace"]')
-    if (field?.parentElement) field.parentElement.hidden = false
-    const toggle = view.dom.querySelector('.cm-search button[name="toggleReplace"]')
-    if (toggle) { toggle.setAttribute('aria-expanded', 'true'); toggle.textContent = '⌄' }
-    field?.focus()
-    return true
-  } }, ...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, ...foldKeymap, ...completionKeymap, indentWithTab]),
+  keymap.of([{ key: 'Mod-f', run: view => showEditorSearch(view, false) }, { key: 'Mod-r', run: view => showEditorSearch(view, true) },
+    ...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap.filter(binding => binding.key !== 'Mod-h'), ...foldKeymap, ...completionKeymap, indentWithTab]),
 ]
 
 export function editorTheme(theme: Theme) {
@@ -55,5 +52,10 @@ export function editorTheme(theme: Theme) {
     '.cm-searchMatch': { backgroundColor: 'var(--accentbg)', outline: '1px solid var(--accent)' },
     '.cm-searchMatch-selected': { backgroundColor: 'var(--accentbg)' },
     '.cm-foldPlaceholder': { backgroundColor: 'var(--soft)', color: 'var(--sub)', borderColor: 'var(--line)' },
+    '.cm-foldGutter .cm-gutterElement': { padding: '0 2px', width: '16px', boxSizing: 'border-box' },
+    '.cm-fold-chevron': { display: 'inline-block', width: '12px', height: '12px', position: 'relative', color: 'var(--muted)', transform: 'rotate(0deg)', transition: 'transform .12s' },
+    '.cm-fold-chevron:after': { content: "''", position: 'absolute', width: '5px', height: '5px', top: '3px', left: '2px', borderTop: '1.5px solid currentColor', borderRight: '1.5px solid currentColor', transform: 'rotate(45deg)' },
+    '.cm-fold-chevron.open': { transform: 'rotate(90deg)' },
+    '.cm-fold-chevron:hover': { color: 'var(--bright)' },
   }, { dark: theme === 'dark' })
 }

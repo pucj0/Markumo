@@ -5,30 +5,32 @@
       :class="[
         node.isDirectory ? 'folder' : 'file',
         `depth-${depth}`,
-        { active: !node.isDirectory && activePath === node.path }
+        { active: !node.isDirectory && activePath && displayPathKey(activePath) === displayPathKey(node.path) }
       ]"
-      :style="{ paddingLeft: `${depth * 14 + 10}px` }"
+      :style="{ paddingLeft: `${Math.min(depth, 10) * 12 + 10}px` }"
+      :title="`${node.name}\n${readablePath(node.path)}`"
       role="button"
+      :aria-label="node.name"
+      :aria-expanded="node.isDirectory ? !!node.isExpanded : undefined"
       tabindex="0"
       @click="handleClick"
       @dblclick="handleDblClick"
       @keydown.enter.self.prevent="handleClick"
       @keydown.space.self.prevent="handleClick"
-      @contextmenu.prevent="openMenu"
+      @contextmenu.prevent.stop="openMenu"
+      @keydown.shift.f10.prevent.stop="openMenu"
     >
       <template v-if="node.isDirectory">
         <span class="twisty">
           <span v-if="node.isLoading" class="loading-spin">⟳</span>
           <span v-else>{{ node.isExpanded ? '▾' : '▸' }}</span>
         </span>
-        <Icon name="open" size="small" />
+        <Icon name="folder" size="small" />
         <span class="label">{{ node.name }}</span>
       </template>
 
       <template v-else>
-        <span class="fileext" :class="getExt(node.name)">
-          {{ getExt(node.name).slice(0, 2) }}
-        </span>
+        <span class="twisty" aria-hidden="true"></span><Icon name="file" size="small" />
         <span class="label">{{ node.name }}</span>
         <span v-if="isDirty" class="dirty-dot">●</span>
       </template>
@@ -70,6 +72,7 @@
         :depth="depth + 1"
         :active-path="activePath"
         :dirty-paths="dirtyPaths"
+        :desktop="desktop"
         @select-file="$emit('select-file', $event)"
         @pin-file="$emit('pin-file', $event)"
         @toggle-folder="$emit('toggle-folder', $event)"
@@ -77,15 +80,21 @@
         @rename-node="$emit('rename-node', $event)"
         @delete-node="$emit('delete-node', $event)"
         @move-node="$emit('move-node', $event)"
+        @copy-path="$emit('copy-path', $event)"
+        @reveal-node="$emit('reveal-node', $event)"
       />
     </div>
+    <ContextMenu ref="contextMenu" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import ContextMenu from '../common/ContextMenu.vue'
+import { CommandRegistry, menuCommand as cmd, separator } from '../../features/shell/menuModel'
 import Icon from '../common/Icon.vue'
 import type { WorkspaceNode } from '../../features/workspace/contracts'
+import { readablePath, displayPathKey } from '../../features/shell/pathDisplay'
 
 const props = defineProps<{
   node: WorkspaceNode
@@ -93,6 +102,7 @@ const props = defineProps<{
   activePath?: string
   dirtyPaths?: string[]
   flat?: boolean
+  desktop?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -103,16 +113,14 @@ const emit = defineEmits<{
   (e: 'rename-node', node: WorkspaceNode): void
   (e: 'delete-node', node: WorkspaceNode): void
   (e: 'move-node', node: WorkspaceNode): void
+  (e: 'copy-path', path: string): void
+  (e: 'reveal-node', path: string): void
 }>()
 
 const isDirty = computed(() => {
   return props.dirtyPaths?.includes(props.node.path) ?? false
 })
 
-function getExt(filename: string): string {
-  const parts = filename.split('.')
-  return parts.length > 1 ? (parts.pop()?.toLowerCase() || 'txt') : 'txt'
-}
 
 function handleClick() {
   if (props.node.isDirectory) {
@@ -132,8 +140,18 @@ function startRename() {
   emit('rename-node', props.node)
 }
 
-function openMenu() {
-  startRename()
+const contextMenu = ref<InstanceType<typeof ContextMenu> | null>(null)
+function openMenu(event: MouseEvent | KeyboardEvent) {
+  const node = props.node
+  const registry = new CommandRegistry([
+    { id:'node-new-file',title:'新建文件…',enabled:node.isDirectory,run:()=>emit('create-file',node.path) },
+    { id:'node-rename',title:'重命名…',enabled:true,run:()=>emit('rename-node',node) },
+    { id:'node-move',title:'移动到…',enabled:true,run:()=>emit('move-node',node) },
+    { id:'node-delete',title:'删除…',enabled:true,run:()=>emit('delete-node',node) },
+    { id:'node-copy-path',title:'复制文件路径',enabled:true,run:()=>emit('copy-path',node.path) },
+    { id:'node-reveal',title:'在文件管理器中显示',enabled:!!props.desktop,run:()=>emit('reveal-node',node.path) },
+  ])
+  contextMenu.value?.open(event,[...(node.isDirectory ? [cmd('node-new-file'),separator('node-create-section')] : []),cmd('node-rename'),cmd('node-move'),cmd('node-delete'),separator('node-path-section'),cmd('node-copy-path'),cmd('node-reveal')],registry,'文件与目录操作')
 }
 </script>
 
@@ -165,6 +183,7 @@ function openMenu() {
 }
 
 .twisty {
+  flex:none;
   width: 12px;
   text-align: center;
   color: var(--muted);
@@ -172,6 +191,7 @@ function openMenu() {
 }
 
 .label {
+  min-width:0;
   flex: 1;
   white-space: nowrap;
   overflow: hidden;

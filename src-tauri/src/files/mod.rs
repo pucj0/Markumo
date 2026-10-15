@@ -1,5 +1,6 @@
 pub(crate) mod atomic;
 mod codec;
+pub mod classfile;
 #[cfg(test)] mod tests;
 
 use serde::{Deserialize, Serialize};
@@ -27,7 +28,17 @@ pub struct FileMetadata {
     #[serde(skip_serializing_if = "Option::is_none")] pub warning: Option<String>,
 }
 #[derive(Debug, Serialize)]
-pub struct OpenFile { #[serde(flatten)] pub metadata: FileMetadata, pub text: String }
+#[serde(rename_all = "camelCase")]
+pub struct OpenFile {
+    #[serde(flatten)] pub metadata: FileMetadata,
+    pub kind: FileKind,
+    // Empty for JavaClass, never decoded from binary bytes.
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")] pub class_info: Option<classfile::ClassInfo>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileKind { Text, JavaClass }
 #[derive(Default, Serialize)]
 pub struct OpenBatch { pub files: Vec<OpenFile>, pub errors: Vec<String> }
 #[derive(Debug, Serialize)]
@@ -44,7 +55,7 @@ pub struct Preferences {
     #[serde(skip_serializing_if = "Option::is_none")] pub warning: Option<String>,
 }
 #[derive(Clone)]
-struct Grant { selected: PathBuf, canonical: PathBuf }
+struct Grant { selected: PathBuf, canonical: PathBuf, writable: bool }
 #[derive(Default)]
 pub struct FileService {
     grants: HashMap<String, Grant>, next_token: u64,
@@ -90,7 +101,7 @@ fn read_disk(path: &Path) -> Result<(Vec<u8>, String, bool)> {
         if info.nNumberOfLinks > 1 { return fail("path", "暂不支持硬链接文件，请复制为独立文件后打开。" ); }
     }
     let before = file.metadata().map_err(FileError::io)?;
-    if !before.is_file() || before.len() > MAX_BYTES { return fail("size", "仅支持不超过 16 MiB 的普通文本文件；未读取或修改文件。" ); }
+    if !before.is_file() || before.len() > MAX_BYTES { return fail("size", "仅支持不超过 16 MiB 的普通文件；未读取或修改文件。" ); }
     let mut bytes = Vec::new();
     (&file).take(MAX_BYTES + 1).read_to_end(&mut bytes).map_err(FileError::io)?;
     let after = file.metadata().map_err(FileError::io)?;
@@ -151,11 +162,11 @@ impl FileService {
         self.preferences.recent.insert(0, Recent { path: display, name: path.file_name().unwrap().to_string_lossy().into_owned() });
         self.preferences.recent.truncate(20); self.persist()
     }
-    fn grant(&mut self, selected: PathBuf, canonical: PathBuf) -> String {
+    fn grant(&mut self, selected: PathBuf, canonical: PathBuf, writable: bool) -> String {
         // A new generation avoids late release responses revoking a reopened file.
         // The frontend deduplicates by canonical path and releases extra grants.
         self.next_token += 1; let token = format!("document-{}", self.next_token);
-        self.grants.insert(token.clone(), Grant { selected, canonical }); token
+        self.grants.insert(token.clone(), Grant { selected, canonical, writable }); token
     }
     fn validate(&self, token: &str, missing: bool) -> Result<PathBuf> {
         let grant = self.grants.get(token).ok_or_else(|| FileError::new("scope", "文件授权已经释放或无效。"))?;
@@ -165,32 +176,44 @@ impl FileService {
     pub fn open_selected(&mut self, selected: PathBuf, encoding: Option<&str>) -> Result<OpenFile> {
         let path = checked_path(&selected, false)?;
         let (bytes, version, read_only) = read_disk(&path)?;
+        if is_class_path(&path) || bytes.starts_with(classfile::MAGIC) {
+            let class_info = classfile::parse(&bytes)?;
+            let token = self.grant(selected, path.clone(), false);
+            let warning = self.recent(&path);
+            return Ok(OpenFile { metadata: FileMetadata { token, path:path.to_string_lossy().into_owned(), name:path.file_name().unwrap().to_string_lossy().into_owned(),
+                encoding:"Binary".into(),bom:false,eol:"LF".into(),read_only:true,version,warning },kind:FileKind::JavaClass,text:String::new(),class_info:Some(class_info) });
+        }
         let (text, encoding, bom) = codec::decode(&bytes, encoding)?;
         guard_text(&text)?;
-        let token = self.grant(selected, path.clone());
+        let token = self.grant(selected, path.clone(), true);
         let warning = self.recent(&path);
         Ok(OpenFile { metadata: FileMetadata { token, path: path.to_string_lossy().into_owned(), name: path.file_name().unwrap().to_string_lossy().into_owned(),
-            eol: codec::eol(&text), encoding, bom, read_only, version, warning }, text })
+            eol: codec::eol(&text), encoding, bom, read_only, version, warning }, kind:FileKind::Text,text,class_info:None })
     }
     pub fn open_recent(&mut self, path: &str, encoding: Option<&str>) -> Result<OpenFile> {
         if !self.preferences.recent.iter().any(|entry| entry.path == path) { return fail("scope", "该路径不在最近文件授权列表。" ); }
         self.open_selected(PathBuf::from(path), encoding)
     }
     pub fn reopen(&mut self, token: &str, encoding: &str) -> Result<OpenFile> {
+        self.require_text_grant(token)?;
         let path = self.validate(token, false)?;
         self.open_selected(path, Some(encoding))
     }
     pub fn prepare_target(&mut self, selected: PathBuf, source: Option<&str>) -> Result<SaveTarget> {
+        if let Some(source)=source { self.require_text_grant(source)?; }
         let path = checked_path(&selected, true)?;
+        guard_text_target(&path)?;
         if let Some((token, _)) = self.grants.iter().find(|(_, grant)| grant.canonical == path) {
             if Some(token.as_str()) != source { return fail("already_open", "目标文件已在其他标签打开，请保存那个标签或选择其他文件名。" ); }
         }
         let version = disk_version(&path)?;
-        let token = self.grant(selected, path.clone());
+        let token = self.grant(selected, path.clone(), true);
         Ok(SaveTarget { token, path: path.to_string_lossy().into_owned(), version })
     }
     pub fn save(&mut self, token: &str, text: &str, expected: Option<&str>, encoding: &str, bom: bool) -> Result<FileMetadata> {
+        self.require_text_grant(token)?;
         let path = self.validate(token, true)?;
+        guard_text_target(&path)?;
         guard_text(text)?;
         let bytes = codec::encode(text, encoding, bom)?;
         if bytes.len() as u64 > MAX_BYTES { return fail("size", "编码后的文件超过 16 MiB，已阻止写入。" ); }
@@ -202,6 +225,20 @@ impl FileService {
             encoding: encoding.into(), bom, eol: codec::eol(text), read_only, version, warning })
     }
     pub fn release(&mut self, token: &str) { self.grants.remove(token); }
+    fn require_text_grant(&self, token: &str) -> Result<()> {
+        match self.grants.get(token) {
+            Some(grant) if !grant.writable => fail("read_only_binary", "ClassFile 仅供只读查看，不能作为文本保存或另存为。"),
+            Some(_) => Ok(()),
+            None => fail("scope", "文件授权已经释放或无效。"),
+        }
+    }
+    pub fn read_class_hex(&self, token: &str, expected: &str, offset: usize) -> Result<classfile::HexPage> {
+        if self.grants.get(token).is_some_and(|grant| grant.writable) { return fail("binary_type", "该文件不是已授权的 ClassFile。"); }
+        let path = self.validate(token,false)?;
+        let (bytes,version,_) = read_disk(&path)?;
+        if version != expected { return fail("conflict", "ClassFile 已被外部修改，请关闭并重新打开后查看。" ); }
+        classfile::hex_page(&bytes,offset)
+    }
     pub fn revealed_path(&self, token: &str) -> Result<PathBuf> { self.validate(token, false) }
     pub fn update_grant_path(&mut self, old_path: &Path, new_path: &Path) {
         // The old path no longer exists after rename. Compare stored grants instead.
@@ -246,7 +283,7 @@ impl FileService {
         for (index, path) in paths.into_iter().enumerate() {
             if index >= 20 || total >= 48 * 1024 * 1024 { batch.errors.push("本批已达到 20 个文件或文本体积限制，余下文件请分批选择。".into()); break; }
             match self.open_selected(path.clone(), encoding) {
-            Ok(file) => { total += file.text.len(); batch.files.push(file); }, Err(error) => batch.errors.push(format!("{}：{error}", path.display())),
+            Ok(file) => { total += file.class_info.as_ref().map(|info| info.byte_length).unwrap_or(file.text.len()); batch.files.push(file); }, Err(error) => batch.errors.push(format!("{}：{error}", path.display())),
         } }
         batch
     }
@@ -265,6 +302,16 @@ fn guard_text(text: &str) -> Result<()> {
         if ch == '\r' { if chars.peek() == Some(&'\n') { chars.next(); } breaks += 1; }
         else if ch == '\n' { breaks += 1; }
         if breaks > 200_000 { return fail("size", "文件超过 200,001 行，请拆分后打开；大文件优化将在 Phase 7 实施。" ); }
+    }
+    Ok(())
+}
+fn is_class_path(path: &Path) -> bool { path.extension().is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("class")) }
+fn guard_text_target(path: &Path) -> Result<()> {
+    if is_class_path(path) { return fail("read_only_binary", "不能使用文本保存覆盖 .class 文件。"); }
+    match fs::File::open(path) {
+        Ok(file) => { let mut magic = Vec::with_capacity(4); file.take(4).read_to_end(&mut magic).map_err(FileError::io)?; if magic.as_slice() == classfile::MAGIC { return fail("read_only_binary", "目标是 JVM ClassFile，已阻止文本覆盖。"); } },
+        Err(error) if error.kind()==std::io::ErrorKind::NotFound => {},
+        Err(error) => return Err(FileError::io(error)),
     }
     Ok(())
 }

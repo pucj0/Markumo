@@ -10,6 +10,7 @@ fn encoding(label: &str) -> Result<&'static Encoding> {
 }
 
 pub fn decode(bytes: &[u8], selected: Option<&str>) -> Result<(String, String, bool)> {
+    if bytes.starts_with(super::classfile::MAGIC) { return fail("binary", "JVM ClassFile 是二进制字节码，只能通过只读查看器打开。"); }
     let detected = Encoding::for_bom(bytes);
     let enc = match selected { Some(label) => encoding(label)?, None => detected.map(|(enc, _)| enc).unwrap_or(UTF_8) };
     // An explicit incompatible encoding is never allowed to reinterpret a BOM.

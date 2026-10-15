@@ -6,11 +6,12 @@
       :app-mode="appMode"
       :theme="theme"
       :focus-mode="focusMode"
-      :active-file-name="activeDoc?.name"
-      :workspace-name="workspace.roots.length > 1 ? `${workspace.roots.length} 个文件夹` : workspace.rootName"
       :desktop="desktop"
-      :file-busy="fileBusy"
+      :file-busy="fileBusy || activeDoc?.kind === 'javaClass'"
       :menu-groups="menuGroups"
+      :command-registry="commandRegistry"
+      :quick-shortcut="shortcuts['quick-open']"
+      @execute-command="executeCommand"
       @open-file="openFile()"
       @save-file="saveActive()"
       @set-mode="setMode"
@@ -33,7 +34,7 @@
 
       <!-- 侧边栏 (Explorer / Search / Outline) -->
       <Sidebar
-        v-if="!focusMode && sidebarVisible && (appMode === 'workspace' || sidebarPanel !== 'files')"
+        v-if="!focusMode && sidebarVisible"
         v-model:width="sidebarWidth"
         :active-panel="sidebarPanel"
         :active-doc-id="activeDocId"
@@ -51,35 +52,20 @@
 
       <!-- 编辑主体区 -->
       <section class="center-area">
-        <!-- 标签栏 -->
-        <TabBar
-          :docs="mainOpenedDocuments"
-          :active-id="mainActiveId"
-          @select-tab="selectDocById"
-          @pin-tab="pinDocById"
-          @close-tab="closeDocById($event)"
-          @move-tab="manager.moveTab($event.id, $event.from, 'main')"
-          @new-doc="createNewDoc"
-        />
-
-        <!-- 面包屑与快捷动作条 -->
-        <Breadcrumb
-          :doc="activeDoc"
-          :word-wrap="wordWrap"
-          :show-outline="showOutline"
-          :is-split-pane="manager.isSplit"
-          @set-md-mode="setMarkdownMode"
-          @toggle-wrap="wordWrap = !wordWrap"
-          @toggle-outline="showOutline = !showOutline"
-          @toggle-split-pane="toggleSplitPane"
-        />
-
         <!-- 主编辑器容器 -->
         <EditorContainer
           :doc="activeDoc"
           :manager="manager"
           :show-outline="showOutline"
           :desktop="desktop"
+          :word-wrap="wordWrap"
+          :files="files"
+          @set-md-mode="setMarkdownMode"
+          @toggle-wrap="wordWrap = !wordWrap"
+          @toggle-outline="showOutline = !showOutline"
+          @toggle-split-pane="toggleSplitPane"
+          @close-main="closeDocById($event, 'main')"
+          @close-others="closeOtherTabs($event.id,$event.pane)"
           @new-doc="createNewDoc"
           @open-palette="openPalette"
           @close-outline="showOutline = false"
@@ -93,6 +79,8 @@
       v-if="!focusMode"
       :doc="activeDoc"
       @set-language="setLanguage"
+      :root="activeRoot"
+      :multi-root="workspace.roots.length > 1"
       :indent-size="indentSize"
       :use-tabs="useTabs"
     />
@@ -129,7 +117,7 @@
     />
 
     <!-- 操作提示 Toast -->
-    <DiscardDialog ref="discardRef" :can-save="desktop" :busy="fileBusy" @save="savePending" @discard="discardPending" />
+    <DiscardDialog ref="discardRef" :can-save="desktop" :busy="fileBusy" @save="savePending" @discard="discardPending" @cancel="cancelPendingClose" />
     <Toast ref="toastRef" />
   </div>
 </template>
@@ -138,8 +126,6 @@
 import TopBar from './components/layout/TopBar.vue'
 import ActivityBar from './components/layout/ActivityBar.vue'
 import Sidebar from './components/layout/Sidebar.vue'
-import TabBar from './components/layout/TabBar.vue'
-import Breadcrumb from './components/layout/Breadcrumb.vue'
 import EditorContainer from './components/layout/EditorContainer.vue'
 import StatusBar from './components/layout/StatusBar.vue'
 import CommandPalette from './components/modals/CommandPalette.vue'
@@ -150,9 +136,9 @@ import Toast from './components/common/Toast.vue'
 import { computed } from 'vue'
 import { useAppShell } from './app/useAppShell'
 const { appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay,
-  paletteRef, settingsRef, discardRef, toastRef, manager, workspace, openedDocuments, mainOpenedDocuments, mainActiveId, activeDoc, activeDocId, paletteActions, menuGroups,
-  setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, selectDocById, handleSelectDoc,
-  pinDocById, createNewDoc, closeDocById, discardPending, savePending, setLanguage, setMarkdownMode,
+  paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
+  setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
+  createNewDoc, closeDocById,closeOtherTabs,cancelPendingClose, discardPending, savePending, setLanguage, setMarkdownMode,
   gotoLineRef, handleGotoLine, toggleSplitPane,
   desktop, fileBusy, recentFiles, openFile, openRecent, saveActive } = useAppShell()
 
@@ -161,6 +147,7 @@ const activeDocLineCount = computed(() => {
   const state = manager.getState(activeDoc.value.id)
   return state ? state.doc.lines : 1
 })
+const activeRoot = computed(() => appMode.value === 'workspace' && activeDoc.value?.path ? workspace.roots.find(root => root.rootPath === workspace.rootForPath(activeDoc.value!.path)) : null)
 </script>
 
 <style scoped>

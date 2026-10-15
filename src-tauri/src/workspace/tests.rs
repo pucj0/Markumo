@@ -10,6 +10,25 @@ mod tests {
     };
 
     #[test]
+    fn explorer_reveal_uses_live_workspace_scope_and_existing_nodes() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("root");
+        let outside = dir.path().join("outside.txt");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("中文 文件.txt"), "data").unwrap();
+        fs::write(&outside, "outside").unwrap();
+        let mut service = WorkspaceService::default();
+        service.open_workspace(root.clone()).unwrap();
+        assert_eq!(service.revealed_path(&root).unwrap(), root.canonicalize().unwrap());
+        assert!(service.revealed_path(&root.join("中文 文件.txt")).is_ok());
+        assert!(service.revealed_path(&outside).is_err());
+        assert!(service.revealed_path(&root.join("../outside.txt")).is_err());
+        assert!(service.revealed_path(&root.join("missing.txt")).is_err());
+        service.remove_workspace(&root.canonicalize().unwrap()).unwrap();
+        assert!(service.revealed_path(&root).is_err());
+    }
+
+    #[test]
     fn multiple_roots_keep_separate_scope_and_persist_without_deleting_files() {
         let dir = tempdir().unwrap();
         let a = dir.path().join("a");

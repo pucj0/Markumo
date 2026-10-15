@@ -1,98 +1,83 @@
 import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
-import { mkdir, writeFile } from 'node:fs/promises'
-const { chromium } = createRequire(process.env.LIGHTEDIT_PLAYWRIGHT_PACKAGE || import.meta.url)('playwright')
-const output = 'test-results/menu'; await mkdir(output,{recursive:true})
-const browser = await chromium.launch({headless:true,channel:process.env.LIGHTEDIT_TEST_BROWSER || 'msedge'})
+import {createRequire} from 'node:module'
+import {mkdir,writeFile} from 'node:fs/promises'
+const {chromium}=createRequire(process.env.LIGHTEDIT_PLAYWRIGHT_PACKAGE||import.meta.url)('playwright')
+const output='test-results/main-menu';await mkdir(output,{recursive:true})
+const browser=await chromium.launch({headless:true,channel:process.env.LIGHTEDIT_TEST_BROWSER||'msedge'})
 const page=await browser.newPage({viewport:{width:1200,height:780}}),errors=[],results=[]
 page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text())})
-const editor=()=>page.locator('.main-pane .cm-content')
+const editor=()=>page.locator('.main-pane .cm-content').first()
+const item=(name,role='menuitem')=>page.locator('[data-menu-popup]').getByRole(role,{name,exact:true})
+const category=name=>page.getByRole('menubar').getByRole('menuitem',{name,exact:true})
 const raw=()=>page.evaluate(()=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;return m.getText(m.activeId)})
-async function menu(group) {await page.locator('[role=menubar]').getByRole('menuitem',{name:'文件',exact:true}).click();await page.locator('.menu-categories').getByRole('menuitem',{name:group,exact:true}).click()}
-async function selectTheme(theme) {await page.getByTitle('设置',{exact:true}).click();await page.getByLabel('颜色主题',{exact:true}).selectOption(theme);await page.getByRole('button',{name:'完成',exact:true}).click();await page.locator('.settingsoverlay').waitFor({state:'hidden'})}
-async function wheel(delta, ctrl = false) {
-  const delivered = page.evaluate(() => new Promise(resolve => window.addEventListener('wheel', () => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))), { once: true })))
-  if(ctrl) await page.keyboard.down('Control')
-  await page.mouse.wheel(0,delta)
-  if(ctrl) await page.keyboard.up('Control')
-  await delivered
-}
-try {
-  await page.goto(process.env.LIGHTEDIT_TEST_URL || 'http://localhost:1422');await editor().waitFor()
-  await page.waitForFunction(()=>document.documentElement.style.getPropertyValue('--editor-size')==='14px')
-  assert.equal(await page.locator('.sidebar-wrapper').count(),0)
-  assert.equal(await page.locator('.toolrow .crumb').count(),0)
-  assert.equal(await page.locator('.status .file-path').innerText(),'Untitled-1.txt')
-  const menubar=page.getByRole('menubar',{name:'应用菜单',exact:true})
-  for(const name of ['文件','编辑','格式','视图','工作区','帮助']) assert.equal(await menubar.getByRole('menuitem',{name,exact:true}).isVisible(),true)
-  assert.equal(await page.locator('.app-menu-popup').count(),0)
-  await page.screenshot({path:`${output}/menubar.png`})
-  const initialTabs=await page.getByRole('tab').count()
-  await menubar.getByRole('menuitem',{name:'帮助',exact:true}).hover()
-  await page.getByRole('menuitem',{name:'快捷键设置',exact:true}).waitFor()
-  await page.keyboard.press('Control+n')
-  assert.equal(await page.getByRole('tab').count(),initialTabs+1)
-  assert.equal(await page.locator('.app-menu-popup').count(),0)
-  await menu('文件');assert.equal(await page.getByRole('menuitem',{name:'打开文件',exact:true}).isDisabled(),true)
-  assert.equal(await page.getByRole('menuitem',{name:'已打开：Untitled-1.txt',exact:true}).count(),1)
-  await page.locator('.menu-categories').getByRole('menuitem',{name:'格式',exact:true}).click()
-  assert.equal(await page.getByRole('menuitem',{name:'加粗',exact:true}).isDisabled(),true)
-  await page.keyboard.press('Escape');assert.equal(await page.locator('[role=menubar]').getByRole('menuitem',{name:'格式',exact:true}).evaluate(el=>el===document.activeElement),true)
-  await menu('文件');await page.getByRole('menuitem',{name:'新建 Markdown 文档',exact:true}).click()
-  await editor().focus();await page.keyboard.insertText('word word WORD\n中文菜单')
-  await editor().press('Control+Home');for(let i=0;i<4;i++)await editor().press('Shift+ArrowRight')
-  await menu('格式');await page.getByRole('menuitem',{name:'加粗',exact:true}).click()
-  assert.equal(await raw(),'**word** word WORD\n中文菜单')
-  await editor().press('Control+z');assert.equal(await raw(),'word word WORD\n中文菜单')
-  await editor().press('Control+y');assert.equal(await raw(),'**word** word WORD\n中文菜单')
-  await editor().press('Control+z')
-  results.push({name:'圆角菜单、单文件无侧栏、文件列表转菜单、Markdown 格式事务/撤销',result:'PASS'})
-
-  await page.getByRole('button',{name:'源码',exact:true}).click()
-  const box=await editor().boundingBox();await page.mouse.move(box.x+70,box.y+30)
-  const width=await page.evaluate(()=>innerWidth)
-  await wheel(-120,true)
-  await page.waitForFunction(()=>document.documentElement.style.getPropertyValue('--editor-size')==='15px')
-  assert.equal(await page.evaluate(()=>innerWidth),width)
-  await wheel(120);assert.equal(await page.evaluate(()=>document.documentElement.style.getPropertyValue('--editor-size')),'15px')
-  await page.bringToFront();await page.mouse.click(box.x+70,box.y+30);await editor().press('Control+0')
-  await page.waitForFunction(()=>document.documentElement.style.getPropertyValue('--editor-size')==='14px')
-  results.push({name:'真实 Ctrl+滚轮缩放、普通滚轮不缩放、Ctrl+0 重置14px',result:'PASS'})
-
-  await editor().press('Control+h');const panel=page.locator('.fleet-search');await panel.waitFor()
-  await panel.locator('input[name=search]').fill('(w)(ord)');await panel.locator('input[name=replace]').fill('$2$1');await panel.locator('input[name=re]').check()
-  await page.waitForFunction(()=>document.querySelector('.search-count').textContent.includes('3'))
-  await panel.locator('button[name=replaceAll]').click();assert.equal(await raw(),'ordw ordw ORDW\n中文菜单')
-  await panel.locator('button[name=toggleReplace]').click();assert.equal(await panel.locator('input[name=replace]').isVisible(),false)
-  await editor().focus();await editor().press('Control+h');assert.equal(await panel.locator('input[name=replace]').isVisible(),true)
-  await panel.locator('input[name=search]').fill('[')
-  await page.waitForFunction(()=>document.querySelector('.search-count').textContent==='无效正则')
-  await panel.locator('input[name=search]').press('Escape');await panel.waitFor({state:'hidden'})
-  await editor().focus();await editor().press('Control+z');assert.equal(await raw(),'word word WORD\n中文菜单')
-  results.push({name:'Fleet 查找替换、真实正则/分组替换、计数、无效正则、收起重开、Esc与撤销',result:'PASS'})
-
-  await page.getByTitle('设置',{exact:true}).click();await page.getByText('快捷键配置',{exact:true}).click()
-  assert.equal(await page.getByLabel('快捷键 转到行',{exact:true}).count(),1)
-  assert.equal(await page.locator('.shortcut-row label').filter({hasText:/^(goto-line|find|save|new)$/}).count(),0)
-  await page.getByRole('button',{name:'完成',exact:true}).click();await page.locator('.settingsoverlay').waitFor({state:'hidden'})
-  for(const theme of ['light','dark']) {
-    await selectTheme(theme);await editor().focus();await editor().press('Control+h')
-    for(const width of [1200,680]) {
-      await page.setViewportSize({width,height:780})
-      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth||document.querySelector('.topbar').scrollWidth>document.querySelector('.topbar').clientWidth),false)
-      const p=await panel.boundingBox();assert.ok(p.x>=0&&p.x+p.width<=width)
-      await page.screenshot({path:`${output}/${theme}-${width}-search.png`})
-    }
-    await panel.locator('button[name=close]').click();await menu('文件');await page.screenshot({path:`${output}/${theme}-menu.png`});await page.keyboard.press('Escape')
-  }
-  await menu('文件');await page.keyboard.press('ArrowRight')
-  assert.equal(await page.getByRole('menuitem',{name:'撤销',exact:true}).count(),1)
-  const tabs=await page.getByRole('tab').count();await page.keyboard.press('Control+n')
-  assert.equal(await page.locator('.app-menu-popup').count(),0);assert.equal(await page.getByRole('tab').count(),tabs+1)
-  await menu('帮助');await page.getByRole('menuitem',{name:'快捷键设置',exact:true}).click()
-  await page.getByLabel('快捷键 转到行',{exact:true}).waitFor();assert.equal(await page.locator('#settings-shortcuts details').evaluate(el=>el.open),true)
-  await page.keyboard.press('Escape');await page.locator('.settingsoverlay').waitFor({state:'hidden'})
-  assert.deepEqual(errors,[]);results.push({name:'中文快捷键、明暗/680px 布局、菜单键盘切换与快捷键',result:'PASS'})
-  console.log(`PASS ${results.length} menu/editor UX groups; console/page errors: 0`)
-} catch(error) {await page.screenshot({path:`${output}/failure.png`});results.push({result:'FAIL',error:String(error)});throw error}
-finally {await writeFile(`${output}/results.json`,JSON.stringify({results,errors},null,2));await browser.close()}
+async function menu(name){await category(name).click();await page.locator('[data-menu-popup]').first().waitFor()}
+async function command(group,name,role='menuitem'){await menu(group);await item(name,role).click();await page.locator('[data-menu-popup]').waitFor({state:'hidden'})}
+async function mode(name){await menu('视图');await item('Markdown 编辑模式').click();await item(name,'menuitemradio').click()}
+async function theme(name){await page.getByTitle('设置',{exact:true}).click();await page.getByLabel('颜色主题',{exact:true}).selectOption(name);await page.getByRole('button',{name:'完成',exact:true}).click();await page.locator('.settingsoverlay').waitFor({state:'hidden'})}
+async function contextTab(name,action){await page.getByRole('tab',{name,exact:true}).click({button:'right'});await item(action).click()}
+async function source(text){await page.evaluate(text=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;m.dispatch(m.activeId,{changes:{from:0,to:m.getState(m.activeId).doc.length,insert:text},selection:{anchor:0,head:Math.min(4,text.length)}})},text)}
+const activeName=()=>page.evaluate(()=>document.querySelector('#app').__vue_app__._instance.setupState.manager.activeDocument.name)
+const pass=name=>results.push({name,result:'PASS'})
+try{
+ await page.goto(process.env.LIGHTEDIT_TEST_URL||'http://localhost:1422');await editor().waitFor()
+ assert.deepEqual(await page.getByRole('menubar').getByRole('menuitem').allTextContents(),['文件','编辑','格式','视图'])
+ assert.equal(await page.locator('.sidebar-wrapper').count(),0);assert.equal(await page.locator('.toolrow').count(),0)
+ await editor().focus();await page.keyboard.insertText('plain');const focus=await page.evaluate(()=>document.activeElement?.className)
+ await category('格式').hover();await item('加粗').waitFor();assert.equal(await page.evaluate(()=>document.activeElement?.className),focus)
+ assert.equal(await item('加粗').isDisabled(),true);assert.equal(await item('标题').isDisabled(),true)
+ await page.keyboard.press('Space');await page.keyboard.insertText('text');assert.equal(await raw(),'plain text');assert.equal(await page.locator('[data-menu-popup]').count(),0)
+ await menu('文件');assert.equal(await item('打开文件…').isDisabled(),true);assert.equal(await item('最近打开').isDisabled(),true)
+ assert.equal(await page.locator('[data-menu-popup]').getByRole('menuitem',{name:/已打开：|UTF-16|转为大写/}).count(),0);await page.keyboard.press('Escape')
+ pass('四组菜单、非MD禁用、历史折叠、悬停不抢焦点')
+ await page.evaluate(()=>{const s=document.querySelector('#app').__vue_app__._instance.setupState;s.recentFiles.push({path:'C:/甲/同名.md',name:'同名.md'},{path:'C:/乙/同名.md',name:'同名.md'});s.workspace.recentWorkspaces=['C:/中文项目 A','C:/项目 B']})
+ await menu('文件');assert.equal(await item('同名.md — 甲').count(),0);await item('最近打开').hover();await item('同名.md — 甲').waitFor();assert.equal(await item('同名.md — 甲').getAttribute('title'),'C:/甲/同名.md')
+ const child=await item('同名.md — 甲').boundingBox(),parent=await item('最近打开').boundingBox()
+ await page.mouse.move(parent.x+parent.width-4,parent.y+parent.height/2);await page.mouse.move(child.x+child.width/2,child.y+child.height/2,{steps:12});assert.equal(await page.locator('[data-menu-popup]').count(),2)
+ await page.keyboard.press('Escape');assert.equal(await page.locator('[data-menu-popup]').count(),1)
+ await item('工作区').click();await item('最近工作区').click();assert.equal(await page.locator('[data-menu-popup]').count(),3)
+ for(const count of [2,1,0]){await page.keyboard.press('Escape');assert.equal(await page.locator('[data-menu-popup]').count(),count)}
+ pass('三级工作区/最近文件、完整路径、鼠标父子通道、Escape逐级关闭')
+ await command('文件','新建 Markdown');await source('word word WORD\n中文菜单');await editor().focus();await page.keyboard.press('Control+b');assert.equal(await raw(),'**word** word WORD\n中文菜单')
+ await editor().press('Control+z');await command('格式','斜体');assert.equal(await raw(),'*word* word WORD\n中文菜单');await editor().press('Control+z')
+ await menu('格式');await item('标题').click();await item('H6 · 六级标题').click();assert.equal(await raw(),'###### word word WORD\n中文菜单');await editor().press('Control+z')
+ await command('格式','插入表格');assert.match(await raw(),/\| 列 1 \| 列 2 \|/);await editor().press('Control+z');assert.equal(await raw(),'word word WORD\n中文菜单')
+ for(const name of ['源码编辑','双栏预览','实时排版']){const text=await raw();await mode(name);assert.equal(await raw(),text);await menu('视图');await item('Markdown 编辑模式').click();assert.equal(await item(name,'menuitemradio').getAttribute('aria-checked'),'true');assert.equal(await page.locator('[role=menuitemradio][aria-checked=true]').count(),1);await page.keyboard.press('Escape');await page.keyboard.press('Escape')}
+ pass('Markdown格式、快捷键、H6/表格插入与撤销、三模式单选/源文不变')
+ // Controlled clipboard provider: these browser checks never alter the system clipboard.
+ await page.evaluate(()=>{globalThis.__testClipboard={text:'',reject:false};Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{if(__testClipboard.reject)throw Error('clipboard permission denied');__testClipboard.text=text},readText:async()=>{if(__testClipboard.reject)throw Error('clipboard permission denied');return __testClipboard.text}},configurable:true})})
+ await source('word word WORD\n中文菜单');await editor().focus();await command('编辑','复制');assert.equal(await page.evaluate(()=>__testClipboard.text),'word')
+ await command('编辑','剪切');assert.equal(await raw(),' word WORD\n中文菜单');await editor().press('Control+z')
+ await page.evaluate(()=>{__testClipboard.text='粘贴'});await command('编辑','粘贴');assert.equal(await raw(),'粘贴 word WORD\n中文菜单');await editor().press('Control+z')
+ await page.evaluate(()=>{__testClipboard.reject=true});const before=await raw();await command('编辑','剪切');assert.equal(await raw(),before);await page.getByText(/clipboard permission denied/).waitFor();await page.evaluate(()=>{__testClipboard.reject=false})
+ await command('编辑','全选');assert.equal(await page.evaluate(()=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;return m.activeEditorView.state.selection.main.to-m.activeEditorView.state.selection.main.from}),(await raw()).length)
+ pass('菜单剪贴板实际CM事务/撤销、全选和权限失败保留源文（控制提供者）')
+ await mode('源码编辑');await editor().focus();await page.keyboard.press('Control+f');assert.equal(await page.locator('.fleet-search input[name=replace]').isVisible(),false)
+ await page.locator('.fleet-search input[name=search]').press('Escape');await editor().focus();await page.keyboard.press('Control+r');await page.locator('.fleet-search input[name=replace]').waitFor()
+ await page.locator('.fleet-search input[name=search]').fill('(w)(ord)');await page.locator('.fleet-search input[name=replace]').fill('$2$1');await page.locator('.fleet-search input[name=re]').check()
+ await page.waitForFunction(()=>document.querySelector('.search-count').textContent.includes('3'));await page.locator('.fleet-search button[name=replaceAll]').click();assert.equal(await raw(),'ordw ordw ORDW\n中文菜单')
+ await page.locator('.fleet-search input[name=search]').press('Escape');await editor().press('Control+z');assert.equal(await raw(),'word word WORD\n中文菜单')
+ await command('视图','自动换行','menuitemcheckbox');await menu('视图');assert.equal(await item('自动换行','menuitemcheckbox').getAttribute('aria-checked'),'true');await page.keyboard.press('Escape')
+ await command('视图','显示侧边栏','menuitemcheckbox');await page.locator('.sidebar-wrapper').waitFor();await command('视图','显示侧边栏','menuitemcheckbox');await page.locator('.sidebar-wrapper').waitFor({state:'hidden'})
+ pass('Ctrl+F/Ctrl+R不刷新、分组替换与撤销、复选状态和单文件侧边栏')
+ await contextTab(await activeName(),'在另一窗格中打开');assert.equal(await page.locator('.secondary-pane').count(),1)
+ await page.locator('.secondary-pane [role=tab]').first().click({button:'right'});await item('移动到另一窗格').click();assert.equal(await page.locator('.secondary-pane [role=tab]').count(),0)
+ await page.locator('.main-pane [role=tab]').last().click({button:'right'});await item('关闭分栏').click();assert.equal(await page.locator('.secondary-pane').count(),0)
+ await editor().focus();await page.keyboard.press('Control+n');await page.keyboard.insertText('dirty second');await page.keyboard.press('Control+n');await page.keyboard.insertText('dirty keep')
+ const keep=await activeName(),count=await page.getByRole('tab').count();await contextTab(keep,'关闭其他标签');await page.getByRole('dialog',{name:'未保存修改确认'}).waitFor();await page.getByRole('button',{name:'继续编辑',exact:true}).click();assert.equal(await page.getByRole('tab').count(),count)
+ await contextTab(keep,'关闭其他标签');for(let i=0;i<count-1;i++){await page.getByRole('button',{name:'放弃修改并关闭',exact:true}).click();if(i<count-2)await page.getByRole('dialog',{name:'未保存修改确认'}).waitFor()}
+ assert.equal(await page.getByRole('tab').count(),1);assert.equal(await raw(),'dirty keep');await editor().press('Control+w');await page.getByRole('dialog',{name:'未保存修改确认'}).waitFor();await page.keyboard.press('Escape');assert.equal(await raw(),'dirty keep')
+ pass('标签右键打开/移动/关闭分栏、关闭其他逐个脏确认/取消和Ctrl+W保护')
+ await page.evaluate(()=>{const s=document.querySelector('#app').__vue_app__._instance.setupState;s.appMode='workspace';s.sidebarVisible=true;s.sidebarPanel='files';const node={id:'a',name:'长中文 folder 文件.md',path:'C:/fixture/长中文 folder 文件.md',relativePath:'长中文 folder 文件.md',isDirectory:false,isSymlink:false,isReadOnly:false,size:0,mtime:null,hasChildren:false};s.workspace.rootPath='C:/fixture';s.workspace.rootName='Fixture';s.workspace.roots=[{rootPath:'C:/fixture',name:'Fixture',entries:[node]}];s.workspace.entries=[node]})
+ await page.locator('.tree-node-wrapper .treenode').first().click({button:'right'});await item('重命名…').waitFor();assert.equal(await page.locator('.workspace-operation-dialog').count(),0);assert.equal(await item('在文件管理器中显示').isDisabled(),true)
+ await item('复制文件路径').click();assert.equal(await page.evaluate(()=>__testClipboard.text),'C:/fixture/长中文 folder 文件.md')
+ await page.locator('.tree-node-wrapper .treenode').first().click({button:'right'});await item('重命名…').click();await page.locator('.workspace-operation-dialog').waitFor();await page.getByRole('button',{name:'取消',exact:true}).click()
+ await page.locator('.root-toggle').click({button:'right'});await item('移除工作区根目录').waitFor();await page.keyboard.press('Escape');pass('树右键不直接重命名、复制/重命名入口、工作区根菜单（内存树fixture）')
+ await editor().focus();await category('文件').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('End');assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),'关闭文件')
+ await page.keyboard.press('Home');assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),'新建文件');const tabs=await page.getByRole('tab').count();await page.keyboard.press('Enter');assert.equal(await page.getByRole('tab').count(),tabs+1)
+ await category('视图').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('ArrowRight');assert.equal(await item('新建文件').count(),1);await page.keyboard.press('Escape')
+ for(const color of ['light','dark']){await theme(color);for(const size of [{width:1200,height:780},{width:680,height:300},{width:460,height:420}]){await page.setViewportSize(size);await menu('文件');await item('工作区').click();await item('最近工作区').click();for(const rect of await page.locator('[data-menu-popup]').evaluateAll(elements=>elements.map(el=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,scroll:el.scrollWidth,client:el.clientWidth}}))){assert.ok(rect.left>=0&&rect.right<=size.width+1&&rect.top>=0&&rect.bottom<=size.height+1);assert.ok(rect.scroll<=rect.client)}assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth||document.querySelector('.topbar').scrollWidth>document.querySelector('.topbar').clientWidth),false);await page.screenshot({path:`${output}/${color}-${size.width}x${size.height}.png`});for(let i=0;i<3;i++)await page.keyboard.press('Escape')}}
+ await page.setViewportSize({width:1200,height:780});await page.getByTitle('设置',{exact:true}).click();await page.getByRole('button',{name:'快捷键',exact:true}).click();await page.getByLabel('快捷键 Markdown 加粗').fill('Mod+Alt+B');await page.getByRole('button',{name:'应用快捷键',exact:true}).click();await page.getByRole('alert').waitFor();assert.match(await page.getByRole('alert').innerText(),/重复/);await page.keyboard.press('Escape')
+ assert.deepEqual(errors,[]);pass('方向/Home/End/Enter导航、明暗/窄窗/三级边界展开、快捷键冲突提示')
+ console.log(`PASS ${results.length} main-menu UI groups; console/page errors: 0`)
+}catch(error){await page.screenshot({path:`${output}/failure.png`});results.push({result:'FAIL',error:String(error)});throw error}
+finally{await writeFile(`${output}/results.json`,JSON.stringify({results,errors},null,2));await browser.close()}

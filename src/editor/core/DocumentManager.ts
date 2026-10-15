@@ -1,18 +1,21 @@
 import { Annotation, Compartment, EditorState, EditorSelection, Prec, Transaction, Text, type Extension, type StateEffect, type TransactionSpec } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { undo, redo, undoSelection, redoSelection, isolateHistory } from '@codemirror/commands'
-import { openSearchPanel, findNext, findPrevious, SearchQuery } from '@codemirror/search'
+import { findNext, findPrevious, SearchQuery } from '@codemirror/search'
+import { showEditorSearch } from './searchPanel'
 import { indentUnit } from '@codemirror/language'
 import { coreExtensions, editorTheme } from './extensions'
 import { detectLanguage, loadLanguage, type LanguageName } from '../languages'
 import { TabGroup } from '../../features/tabs/TabGroup'
 import type { EditorDocument, Theme, MarkdownMode } from '../../types'
 import { lineEndings, type LineEndingSnapshot } from './lineEndings'
-import type { FileMetadata, OpenFile } from '../../features/files/contracts'
+import type { FileMetadata, OpenFile, ClassInfo } from '../../features/files/contracts'
+import { classSummary } from '../../features/files/classSummary'
 import { livePreviewExtension } from '../markdown/livePreview'
 import { markdownFormatTransaction, type MarkdownFormat } from '../markdown/formatCommands'
+import { captureLineBaseline, savedLineBaseline } from './changeGutter'
 
-export interface DocumentSeed { id: string; name: string; path: string; text: string; pinned?: boolean; mode?: MarkdownMode }
+export interface DocumentSeed { id: string; name: string; path: string; text: string; pinned?: boolean; mode?: MarkdownMode; kind?: 'text' | 'javaClass'; classInfo?: ClassInfo }
 export type Pane = 'main' | 'secondary'
 const sharedConfiguration = Annotation.define<boolean>()
 interface CachedDocument {
@@ -65,6 +68,7 @@ export class DocumentManager {
     return this.activePane === 'main' ? this.group.activeId : this.secondaryGroup.activeId
   }
   get activeDocument() { return this.activeId ? this.metadata(this.activeId) : null }
+  get activeEditorView() { return this.paneView(this.activePane) }
   get hasDirtyDocuments() { return [...this.records.values()].some(record => record.meta.dirty) }
   get isComposing() { return this.view?.compositionStarted || this.secondaryView?.compositionStarted || false }
   get catalog() { return [...this.seeds.values()].map(({ id, name, path }) => ({ id, name, path })) }
@@ -85,18 +89,22 @@ export class DocumentManager {
   private create(seed: DocumentSeed) {
     const language = new Compartment(), wrap = new Compartment(), theme = new Compartment(), markdownMode = new Compartment(), indent = new Compartment()
     const endings = lineEndings(seed.text)
-    const isMd = /\.(md|markdown)$/i.test(seed.name)
+    const binary = seed.kind === 'javaClass'
+    const isMd = !binary && /\.(md|markdown)$/i.test(seed.name)
     const initialMdMode: MarkdownMode | undefined = isMd ? (seed.mode || this.defaultMarkdownMode) : undefined
 
     const state = EditorState.create({
       doc: seed.text,
       extensions: [
         coreExtensions,
+        binary ? [EditorState.readOnly.of(true), EditorView.editable.of(false), EditorState.transactionFilter.of(tr => tr.docChanged ? [] : tr)] : [],
         indent.of([EditorState.tabSize.of(this.indentSize), indentUnit.of(this.useTabs ? '\t' : ' '.repeat(this.indentSize))]),
         Prec.highest(keymap.of([
           { key: 'Mod-z', run: () => { this.command('undo'); return true } },
           { key: 'Mod-Shift-z', run: () => { this.command('redo'); return true } },
           { key: 'Mod-y', run: () => { this.command('redo'); return true } },
+          { key: 'Mod-b', run: () => { this.formatMarkdown('bold'); return true } },
+          { key: 'Mod-i', run: () => { this.formatMarkdown('italic'); return true } },
           { key: 'Mod-u', run: () => { this.historyCommand(false, true); return true } },
           { key: 'Alt-u', mac: 'Mod-Shift-u', run: () => { this.historyCommand(true, true); return true } },
         ])),
@@ -120,7 +128,8 @@ export class DocumentManager {
     const record: CachedDocument = {
       meta: {
         id: seed.id, uri: seed.id.startsWith('untitled-') ? `untitled:${seed.id}` : `sample:${seed.id}`, name: seed.name, path: seed.path,
-        language: detectLanguage(seed.name), languageStatus: 'loading', dirty: false, pinned: seed.pinned ?? true,
+        kind: seed.kind || 'text', classInfo: seed.classInfo,
+        language: binary ? 'Plain Text' : detectLanguage(seed.name), languageStatus: binary ? 'ready' : 'loading', dirty: false, pinned: seed.pinned ?? true,
         encoding: 'UTF-8', eol: /\r\n/.test(seed.text) ? 'CRLF' : 'LF', bom: false, readOnly: false, lastDiskVersion: null,
         charCount: state.doc.length, line: 1, column: 1, mode: initialMdMode,
       },
@@ -128,7 +137,7 @@ export class DocumentManager {
       panes: { main: { selection: state.selection, top: 0, left: 0 }, secondary: { selection: state.selection, top: 0, left: 0 } },
     }
     this.records.set(seed.id, record)
-    void this.setLanguage(seed.id, record.meta.language)
+    if (!binary) void this.setLanguage(seed.id, record.meta.language)
     return record
   }
 
@@ -138,7 +147,8 @@ export class DocumentManager {
     const existing = [...this.records.values()].find(record => record.meta.path === file.path && record.meta.fileToken)
     if (existing) { this.open(existing.meta.id, preview); return existing.meta.id }
     const id = `file:${file.token}`
-    const seed = { id, name: file.name, path: file.path, text: file.text, pinned: !preview }
+    const seed: DocumentSeed = { id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text, pinned: !preview,
+      kind: file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined }
     this.seeds.set(id, seed)
     const record = this.create(seed)
     this.attachMetadata(record, file)
@@ -149,11 +159,12 @@ export class DocumentManager {
 
   private attachMetadata(record: CachedDocument, file: FileMetadata) {
     Object.assign(record.meta, { path: file.path, name: file.name, uri: `file:${file.path}`, fileToken: file.token,
-      encoding: file.encoding, bom: file.bom, eol: file.eol, readOnly: file.readOnly, lastDiskVersion: file.version })
+      encoding: file.encoding, bom: file.bom, eol: file.eol, readOnly: record.meta.kind === 'javaClass' || file.readOnly, lastDiskVersion: file.version })
     // File seeds must not retain a second full text copy after closing.
     this.seeds.delete(record.meta.id)
   }
   private restoreFileMode(record: CachedDocument) {
+    if (record.meta.kind === 'javaClass') return
     const mode = this.fileModes[record.meta.path]
     if (mode && /\.(md|markdown)$/i.test(record.meta.name) && record.meta.mode !== mode) {
       record.meta.mode = mode
@@ -163,14 +174,16 @@ export class DocumentManager {
 
   saveSnapshot(id: string) {
     const record = this.records.get(id)
-    if (!record || this.isComposing) return null
+    if (!record || record.meta.kind === 'javaClass' || this.isComposing) return null
     const state = record.state
+    const savedLines = captureLineBaseline(state)
     return { text: record.endings.serialize(state), metadata: this.metadata(id)!,
       complete: (file: FileMetadata) => {
         if (this.disposed || this.records.get(id) !== record) return false
         const previousName = record.meta.name
         record.baseline = state.doc
         record.baselineEndings = record.endings.snapshot(state)
+        this.effects(record,[savedLineBaseline.of(savedLines)])
         this.attachMetadata(record, file)
         this.updateMarkdownType(record, previousName)
         record.meta.dirty = !record.state.doc.eq(state.doc) || !record.endings.equal(record.state, record.baselineEndings)
@@ -186,7 +199,8 @@ export class DocumentManager {
     const record = this.records.get(id)
     if (!record || record.meta.dirty || this.isComposing || this.disposed) return false
     this.deferred.delete(id)
-    const seed = { id, name: file.name, path: file.path, text: file.text }
+    const seed: DocumentSeed = { id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text,
+      kind: file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined }
     const next = this.create(seed)
     this.attachMetadata(next, file)
     this.restoreFileMode(next)
@@ -376,6 +390,7 @@ export class DocumentManager {
   private applyTransactions(pane: Pane, transactions: readonly Transaction[]) {
     const view = this.paneView(pane), id = this.paneGroup(pane).activeId, record = id && this.records.get(id)
     if (!view || !record) return
+    if (record.meta.kind === 'javaClass' && transactions.some(tr => tr.docChanged)) return
     this.applying = true
     try {
       view.update(transactions)
@@ -502,6 +517,7 @@ export class DocumentManager {
   dispatch(id: string, spec: TransactionSpec) {
     const record = this.records.get(id)
     if (!record) return
+    if (record.meta.kind === 'javaClass' && spec.changes) return
     const view = this.activeViewFor(id)
     if (view) view.dispatch(view.state.update(spec))
     else {
@@ -540,7 +556,7 @@ export class DocumentManager {
 
   async setLanguage(id: string, language: LanguageName) {
     const record = this.records.get(id)
-    if (!record || this.disposed) return
+    if (!record || record.meta.kind === 'javaClass' || this.disposed) return
     const generation = ++record.languageGeneration
     record.readyLanguageGeneration = null
     record.meta.language = language
@@ -562,7 +578,7 @@ export class DocumentManager {
   }
   setMarkdownMode(id: string, mode: MarkdownMode): boolean {
     const record = this.records.get(id)
-    if (!record || !/\.(md|markdown)$/i.test(record.meta.name) || !['live', 'source', 'split'].includes(mode) || this.disposed || this.isComposing) return false
+    if (!record || record.meta.kind === 'javaClass' || !/\.(md|markdown)$/i.test(record.meta.name) || !['live', 'source', 'split'].includes(mode) || this.disposed || this.isComposing) return false
     record.meta.mode = mode
     const extension = mode === 'live' ? livePreviewExtension() : []
     this.effects(record, [record.markdownMode.reconfigure(extension)])
@@ -572,6 +588,7 @@ export class DocumentManager {
   setDefaultMarkdownMode(mode: MarkdownMode) { this.defaultMarkdownMode = mode }
   setFileModes(modes: Record<string, MarkdownMode>) { this.fileModes = { ...modes } }
   private updateMarkdownType(record: CachedDocument, previousName: string) {
+    if (record.meta.kind === 'javaClass') return
     const wasMarkdown = /\.(md|markdown)$/i.test(previousName)
     const isMarkdown = /\.(md|markdown)$/i.test(record.meta.name)
     if (wasMarkdown === isMarkdown) return
@@ -596,18 +613,7 @@ export class DocumentManager {
     else if (!view) return
     else if (command === 'find-next') findNext(view)
     else if (command === 'find-previous') findPrevious(view)
-    else {
-      openSearchPanel(view)
-      const searchInput = view.dom.querySelector<HTMLInputElement>('.cm-search input[name="search"]')
-      searchInput?.focus()
-      if (command === 'replace') {
-        const field = view.dom.querySelector<HTMLInputElement>('.cm-search input[name="replace"]')
-        if (field?.parentElement) field.parentElement.hidden = false
-        const toggle = view.dom.querySelector('.cm-search button[name="toggleReplace"]')
-        if (toggle) { toggle.setAttribute('aria-expanded', 'true'); toggle.textContent = '⌄' }
-        field?.focus()
-      }
-    }
+    else showEditorSearch(view, command === 'replace')
   }
   dispose() {
     this.disposed = true

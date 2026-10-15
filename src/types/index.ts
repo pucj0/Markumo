@@ -4,8 +4,11 @@ export type Theme = 'dark' | 'light'
 export type ThemePreference = Theme | 'system'
 export type MarkdownMode = 'live' | 'source' | 'split'
 import type { LanguageName } from '../editor/languages'
+import type { ClassInfo } from '../features/files/contracts'
 
 export interface EditorDocument {
+  kind?: 'text' | 'javaClass'
+  classInfo?: ClassInfo
   id: string
   uri: string
   name: string

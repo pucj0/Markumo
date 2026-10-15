@@ -16,6 +16,18 @@
     <template v-else-if="name === 'plus'">
       <path d="M12 5v14M5 12h14" />
     </template>
+    <template v-else-if="name === 'expand-all'">
+      <path d="m8 7 4-4 4 4M8 17l4 4 4-4M4 12h16" />
+    </template>
+    <template v-else-if="name === 'collapse-all'">
+      <path d="m8 3 4 4 4-4M8 21l4-4 4 4M4 12h16" />
+    </template>
+    <template v-else-if="name === 'locate'">
+      <circle cx="12" cy="12" r="6" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4" /><circle cx="12" cy="12" r="1" />
+    </template>
+    <template v-else-if="name === 'refresh'">
+      <path d="M20 7v5h-5M4 17v-5h5M5 8a7 7 0 0 1 12-3l3 7M4 12l3 7a7 7 0 0 0 12-3" />
+    </template>
     <template v-else-if="name === 'split'">
       <rect x="3" y="4" width="18" height="16" rx="2" />
       <path d="M12 4v16" />
@@ -52,6 +64,12 @@
     <template v-else-if="name === 'open'">
       <path d="M4 19V5h6l2 2h8v12Z" />
       <path d="M12 13h6m-3-3 3 3-3 3" />
+    </template>
+    <template v-else-if="name === 'folder'">
+      <path d="M3 7V5h7l2 2h9v13H3Z" />
+    </template>
+    <template v-else-if="name === 'file'">
+      <path d="M5 3h9l5 5v13H5Z" /><path d="M14 3v5h5" />
     </template>
     <template v-else-if="name === 'save'">
       <path d="M4 3h13l4 4v14H4Z" /><path d="M8 3v6h9V3M8 21v-8h9v8" />

@@ -72,6 +72,7 @@ export const tauriWorkspace: WorkspaceGateway = {
     return raw ? mapInfo(raw) : null
   },
   async removeWorkspaceFolder(path) { await invoke('remove_workspace_folder', { path }) },
+  async revealNode(path) { await invoke('reveal_workspace_node',{path}) },
   async restoreWorkspaces() { return (await invoke<RawWorkspaceInfo[]>('restore_workspace_folders')).map(mapInfo) },
 
   async openWorkspacePath(path: string, add = false): Promise<WorkspaceInfo> {

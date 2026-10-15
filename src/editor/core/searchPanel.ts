@@ -1,5 +1,17 @@
 import { type EditorView, type Panel, type ViewUpdate, runScopeHandlers } from '@codemirror/view'
-import { SearchQuery, getSearchQuery, setSearchQuery, findNext, findPrevious, selectMatches, replaceNext, replaceAll, closeSearchPanel } from '@codemirror/search'
+import { SearchQuery, getSearchQuery, setSearchQuery, findNext, findPrevious, selectMatches, replaceNext, replaceAll, openSearchPanel, closeSearchPanel } from '@codemirror/search'
+
+export function showEditorSearch(view: EditorView, replacement: boolean) {
+  if (view.compositionStarted) return true
+  openSearchPanel(view)
+  const field = view.dom.querySelector<HTMLInputElement>('.cm-search input[name="replace"]')
+  if (field?.parentElement) field.parentElement.hidden = !replacement
+  const toggle = view.dom.querySelector('.cm-search button[name="toggleReplace"]')
+  if (toggle) { toggle.setAttribute('aria-expanded', String(replacement)); toggle.textContent = replacement ? '⌄' : '›' }
+  view.dom.querySelector<HTMLInputElement>(`.cm-search input[name="${replacement ? 'replace' : 'search'}"]`)?.focus()
+  view.requestMeasure()
+  return true
+}
 
 export function createEditorSearchPanel(view: EditorView): Panel {
   const dom = document.createElement('div'); dom.className = 'cm-search fleet-search'
@@ -35,8 +47,8 @@ export function createEditorSearchPanel(view: EditorView): Panel {
     toggle.setAttribute('aria-expanded', String(!second.hidden))
     view.requestMeasure()
   })
-  // Keep the replacement field available for Ctrl+H and existing CM search commands.
-  toggle.setAttribute('aria-expanded', 'true'); toggle.textContent = '⌄'; first.prepend(toggle)
+  second.hidden = true
+  toggle.setAttribute('aria-expanded', 'false'); first.prepend(toggle)
   dom.append(first, second)
   let timer: ReturnType<typeof setTimeout> | undefined
   function commit() {

@@ -12,6 +12,11 @@ $installPath = [IO.Path]::GetFullPath((Join-Path $outputPath 'installed'))
 $safeRoot = [IO.Path]::GetFullPath((Join-Path $projectPath 'test-results/installer')) + [IO.Path]::DirectorySeparatorChar
 if (!$installPath.StartsWith($safeRoot,[StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid isolated installation path.' }
 New-Item -ItemType Directory -Path $outputPath | Out-Null
+New-Item -ItemType Directory -Path $installPath | Out-Null
+# This disposable fixture may inherit a Low MIC label from generated directories.
+# Set only the already validated fixture to Medium, never user folders or app data.
+& icacls.exe $installPath /setintegritylevel '(OI)(CI)M' | Out-Null
+if ($LASTEXITCODE) { throw 'Cannot prepare isolated installation integrity level.' }
 $dataPath = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'com.lightedit.app'
 if ((Test-Path $dataPath) -and ((Get-Item -LiteralPath $dataPath).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Do not mutate redirected user app metadata.' }
 $metadata = @()
@@ -38,7 +43,19 @@ try {
   $installedExe=Join-Path $installPath 'lightedit.exe'
   if(!(Test-Path -LiteralPath $installedExe)){throw 'Installed executable missing.'}
   $releaseExe=Join-Path $projectPath 'src-tauri/target/release/lightedit.exe'
-  $report.installedBinaryMatches=(Get-FileHash -LiteralPath $installedExe).Hash -eq (Get-FileHash -LiteralPath $releaseExe).Hash
+  # Tauri patches its fixed-width bundle marker only in the bundled binary, then
+  # restores the release source executable. All remaining bytes must match.
+  $releaseBytes=[IO.File]::ReadAllBytes($releaseExe)
+  $marker='__TAURI_BUNDLE_TYPE_VAR_UNK'
+  $binaryText=[Text.Encoding]::ASCII.GetString($releaseBytes)
+  $markerIndex=$binaryText.IndexOf($marker,[StringComparison]::Ordinal)
+  if($markerIndex -lt 0 -or $binaryText.IndexOf($marker,$markerIndex+1,[StringComparison]::Ordinal) -ge 0){throw 'Unexpected Tauri bundle marker; do not accept binary mismatch.'}
+  $patched=[Text.Encoding]::ASCII.GetBytes('__TAURI_BUNDLE_TYPE_VAR_NSS')
+  [Buffer]::BlockCopy($patched,0,$releaseBytes,$markerIndex,$patched.Length)
+  $sha=[Security.Cryptography.SHA256]::Create()
+  $expectedHash=[BitConverter]::ToString($sha.ComputeHash($releaseBytes)).Replace('-','')
+  $sha.Dispose()
+  $report.installedBinaryMatches=(Get-FileHash -LiteralPath $installedExe).Hash -eq $expectedHash
   if(!$report.installedBinaryMatches){throw 'Installed binary differs from tested build.'}
   $env:LIGHTEDIT_INSTALL_TEST_EXE=$installedExe
   $env:LIGHTEDIT_INSTALL_TEST_OUTPUT=$outputPath
@@ -52,7 +69,8 @@ finally {
     if(Test-Path -LiteralPath $uninstaller){
       $uninstallProcess=Start-Process -FilePath $uninstaller -ArgumentList @('/S','/UPDATE') -WindowStyle Hidden -PassThru
       if(!$uninstallProcess.WaitForExit(30000)){$uninstallProcess.Kill();$report.failure='Test uninstaller timeout.'}else{$report.uninstallExit=$uninstallProcess.ExitCode}
-      for($i=0;$i -lt 100 -and ((Test-Path $uninstallKey) -or (Test-Path (Join-Path $installPath 'lightedit.exe')));$i++){Start-Sleep -Milliseconds 100}
+      # The launcher exits before its temporary NSIS child completes uninstall.
+      for($i=0;$i -lt 900 -and ((Test-Path $uninstallKey) -or (Test-Path (Join-Path $installPath 'lightedit.exe')));$i++){Start-Sleep -Milliseconds 100}
       if((Test-Path $uninstallKey) -or (Test-Path (Join-Path $installPath 'lightedit.exe'))){$report.failure='Isolated installation did not finish uninstalling.'}
     }
   }
@@ -60,6 +78,11 @@ finally {
     if($item.Exists){[IO.File]::WriteAllBytes($item.Path,$item.Bytes)}elseif(Test-Path -LiteralPath $item.Path){Remove-Item -LiteralPath $item.Path}
   }
   $report.metadataRestored=$true
+  foreach($item in $metadata){
+    if($item.Exists){if([Convert]::ToBase64String([IO.File]::ReadAllBytes($item.Path)) -ne [Convert]::ToBase64String($item.Bytes)){$report.metadataRestored=$false}}
+    elseif(Test-Path -LiteralPath $item.Path){$report.metadataRestored=$false}
+  }
+  if(!$report.metadataRestored){$report.failure='User metadata restoration verification failed.'}
   # Remove only the exact installer key whose previous contents were backed up.
   if(Test-Path $productKey){Remove-Item -LiteralPath $productKey -Recurse}
   if($productExisted){& reg.exe import $registryBackup | Out-Null;if($LASTEXITCODE){$report.failure='Cannot restore previous installer metadata.'}}

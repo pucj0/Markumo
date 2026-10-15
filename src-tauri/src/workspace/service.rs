@@ -300,6 +300,12 @@ impl WorkspaceService {
 
         self.read_directory_internal(&valid_dir)
     }
+    pub fn revealed_path(&self, path: &Path) -> Result<PathBuf,String> {
+        let root = self.root_for_path(path)?;
+        let target = validate_under_root(root,path).map_err(|error|error.to_string())?;
+        if !target.exists() { return Err("目标不存在。".into()); }
+        Ok(target)
+    }
 
     fn read_directory_internal(&self, dir: &Path) -> Result<Vec<WorkspaceNode>, String> {
         let root = self.root_for_path(dir)?;
@@ -308,8 +314,14 @@ impl WorkspaceService {
         let entries = fs::read_dir(dir).map_err(|e| format!("读取目录失败: {e}"))?;
 
         let mut nodes = Vec::new();
+        let started = std::time::Instant::now();
+        let mut visited = 0usize;
 
         for entry in entries.flatten() {
+            visited += 1;
+            if visited > 100_000 || nodes.len() >= 50_000 || started.elapsed().as_secs() >= 5 {
+                return Err("目录条目过多或读取超时，已停止加载；请打开更小的目录范围。".into());
+            }
             let path = entry.path();
             let name = path
                 .file_name()

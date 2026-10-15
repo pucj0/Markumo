@@ -1,24 +1,27 @@
 <template>
   <footer class="status">
     <div class="stat-group left">
-      <span class="stat-item file-path" :title="doc?.path || doc?.name || '未打开文件'" aria-label="当前文件路径">{{ doc?.path || doc?.name || '未打开文件' }}</span>
+      <span class="stat-item file-path" :title="readablePath(doc?.path || doc?.name || '未打开文件')" aria-label="当前文件路径">{{ displayFilePath(doc?.path || doc?.name || '未打开文件', root, multiRoot) }}</span>
       <span class="stat-item dirty-item" :class="{ dirty: isDirty }">
-        {{ isDirty ? '● 未保存修改' : doc?.fileToken ? '已保存' : doc ? '未保存' : '' }}
+        {{ doc?.kind === 'javaClass' ? '只读查看' : isDirty ? '● 未保存修改' : doc?.fileToken ? '已保存' : doc ? '未保存' : '' }}
       </span>
-      <span v-if="doc?.readOnly" class="stat-item" title="原路径不可写，可另存为">不可写</span>
+      <span v-if="doc?.readOnly && doc.kind !== 'javaClass'" class="stat-item" title="原路径不可写，可另存为">不可写</span>
     </div>
 
     <div class="stat-group right">
-      <span class="stat-item position">Ln {{ doc?.line || 1 }}, Col {{ doc?.column || 1 }}</span>
-      <span class="stat-item optional">{{ useTabs ? 'Tabs' : 'Spaces' }}: {{ indentSize }}</span>
-      <span class="stat-item" :title="doc?.encoding || 'UTF-8'">{{ doc?.encoding || 'UTF-8' }}{{ doc?.bom ? ' BOM' : '' }}</span>
-      <span class="stat-item">{{ doc?.eol || 'LF' }}</span>
-      <select class="stat-item lang-item" aria-label="语言模式" :disabled="!doc" :value="doc?.language || 'Plain Text'"
+      <template v-if="doc?.kind !== 'javaClass'">
+        <span class="stat-item position">Ln {{ doc?.line || 1 }}, Col {{ doc?.column || 1 }}</span>
+        <span class="stat-item optional">{{ useTabs ? 'Tabs' : 'Spaces' }}: {{ indentSize }}</span>
+        <span class="stat-item" :title="doc?.encoding || 'UTF-8'">{{ doc?.encoding || 'UTF-8' }}{{ doc?.bom ? ' BOM' : '' }}</span>
+        <span class="stat-item">{{ doc?.eol || 'LF' }}</span>
+      </template>
+      <span v-if="doc?.kind === 'javaClass'" class="stat-item">JVM ClassFile</span>
+      <select v-else class="stat-item lang-item" aria-label="语言模式" :disabled="!doc" :value="doc?.language || 'Plain Text'"
         @change="$emit('set-language', ($event.target as HTMLSelectElement).value as LanguageName)">
         <option v-for="language in languageNames" :key="language" :value="language">{{ language }}</option>
       </select>
       <span v-if="doc?.languageStatus === 'loading'" class="optional">加载中…</span>
-      <span class="stat-item">{{ charCount }} 字符</span>
+      <span class="stat-item">{{ doc?.kind === 'javaClass' ? `${doc.classInfo?.byteLength.toLocaleString()} 字节` : `${charCount} 字符` }}</span>
     </div>
   </footer>
 </template>
@@ -27,12 +30,15 @@
 import { computed } from 'vue'
 import type { EditorDocument } from '../../types'
 import { languageNames, type LanguageName } from '../../editor/languages'
+import { readablePath, displayFilePath } from '../../features/shell/pathDisplay'
 defineEmits<{ (e: 'set-language', language: LanguageName): void }>()
 
 const props = defineProps<{
   doc: EditorDocument | null
   indentSize: number
   useTabs: boolean
+  root?: { rootPath: string; name: string } | null
+  multiRoot?: boolean
 }>()
 
 const isDirty = computed(() => {

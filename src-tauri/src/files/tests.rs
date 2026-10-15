@@ -30,6 +30,32 @@ fn fixture(bytes: &[u8]) -> (tempfile::TempDir, PathBuf, FileService, OpenFile) 
 }
 
 #[test]
+fn batch_and_cmd_are_never_executed_and_preserve_encoding_bom_crlf_on_save_and_save_as() {
+    for extension in ["bat", "cmd"] {
+        for (encoding, bom) in [("UTF-8", true), ("UTF-16LE", true), ("GB18030", false), ("windows-1252", false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(format!("do not run.{extension}"));
+            let source = if encoding == "windows-1252" { "@echo off\r\nrem café\r\necho harmless" } else { "@echo off\r\nrem 中文\r\necho harmless" };
+            let bytes = codec::encode(source, encoding, bom).unwrap();
+            fs::write(&path, &bytes).unwrap();
+            let mut service = FileService::default();
+            if !bom && encoding != "UTF-8" { assert!(service.open_selected(path.clone(), None).is_err()); }
+            let file = service.open_selected(path.clone(), Some(encoding)).unwrap();
+            assert_eq!(file.text, source);
+            assert_eq!(file.metadata.eol, "CRLF");
+            assert_eq!(file.metadata.bom, bom);
+            let edited = format!("{source}\r\nrem saved");
+            service.save(&file.metadata.token, &edited, Some(&file.metadata.version), encoding, bom).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), codec::encode(&edited, encoding, bom).unwrap());
+            let other = dir.path().join(format!("copy.{extension}"));
+            let target = service.prepare_target(other.clone(), None).unwrap();
+            service.save(&target.token, &edited, None, encoding, bom).unwrap();
+            assert_eq!(fs::read(&other).unwrap(), fs::read(&path).unwrap());
+        }
+    }
+}
+
+#[test]
 fn utf8_bom_crlf_chinese_and_no_final_newline_round_trip() {
     let source = "中文\r\n第二行🚀";
     let bytes = codec::encode(source, "UTF-8", true).unwrap();

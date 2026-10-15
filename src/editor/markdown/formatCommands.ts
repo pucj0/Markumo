@@ -4,11 +4,17 @@ import { isolateHistory } from '@codemirror/commands'
 export const markdownFormats = [
   ['heading-1', '一级标题'], ['heading-2', '二级标题'], ['heading-3', '三级标题'], ['heading-4', '四级标题'], ['heading-5', '五级标题'], ['heading-6', '六级标题'],
   ['bold', '加粗'], ['italic', '斜体'], ['strike', '删除线'], ['inline-code', '行内代码'], ['code-block', '代码块'],
-  ['quote', '引用'], ['bullet', '无序列表'], ['ordered', '有序列表'], ['task', '任务列表'], ['link', '链接'], ['image', '图片语法'], ['rule', '分隔线'],
+  ['quote', '引用'], ['bullet', '无序列表'], ['ordered', '有序列表'], ['task', '任务列表'], ['link', '链接'], ['image', '图片语法'], ['rule', '分隔线'], ['table','表格'],
 ] as const
 export type MarkdownFormat = typeof markdownFormats[number][0]
 
 export function markdownFormatTransaction(state: EditorState, format: MarkdownFormat): TransactionSpec {
+  if (format === 'table') {
+    const at = state.doc.lineAt(state.selection.main.to).to
+    const prefix = at > 0 ? (state.doc.lineAt(at).text ? '\n\n' : '\n') : ''
+    const source = '| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |'
+    return { changes:{from:at,insert:prefix + source + '\n\n'},selection:{anchor:at + prefix.length + 2},annotations:isolateHistory.of('full'),userEvent:'input.format.table' }
+  }
   const wrappers: Partial<Record<MarkdownFormat, [string, string, string]>> = {
     bold: ['**', '**', '文本'], italic: ['*', '*', '文本'], strike: ['~~', '~~', '文本'],
     'inline-code': ['`', '`', '代码'], link: ['[', '](https://example.com)', '链接文字'], image: ['![', '](图片路径)', '图片描述'],

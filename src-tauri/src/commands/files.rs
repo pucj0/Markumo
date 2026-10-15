@@ -57,6 +57,10 @@ pub async fn release_file(store: State<'_, FileStore>, token: String) -> Result<
     operate(store.inner().clone(), move |service| { service.release(&token); Ok(()) }).await
 }
 #[tauri::command]
+pub async fn read_class_hex(store: State<'_, FileStore>, token: String, expected_version: String, offset: usize) -> Result<crate::files::classfile::HexPage> {
+    operate(store.inner().clone(), move |service| service.read_class_hex(&token,&expected_version,offset)).await
+}
+#[tauri::command]
 pub async fn drain_pending(store: State<'_, FileStore>) -> Result<OpenBatch> {
     operate(store.inner().clone(), |service| Ok(service.drain())).await
 }

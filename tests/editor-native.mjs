@@ -1,3 +1,4 @@
+import {setMarkdownMode,viewCommand} from './menu-helpers.mjs'
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -55,7 +56,7 @@ async function connect() {
 try {
   await connect()
   await test('自动保存：默认开启、真实BOM/CRLF写入、关闭/重启设置、外部冲突保留并暂停',async()=>{
-    await page.getByRole('button',{name:'源码',exact:true}).click()
+    await setMarkdownMode(page,'源码')
     const filePath=await page.evaluate(()=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;return m.activeDocument.path})
     assert.equal(await page.locator('.kernel-notice,.sidefoot').count(),0)
     await editor().focus();await editor().press('Control+End');await page.keyboard.insertText('自动保存中文')
@@ -95,10 +96,10 @@ try {
     await page.waitForFunction(async()=>await window.__TAURI_INTERNALS__.invoke('plugin:window|is_maximized',{label:'main'}))
     await page.getByRole('button',{name:'最大化或还原窗口',exact:true}).click()
     await page.waitForFunction(async()=>!await window.__TAURI_INTERNALS__.invoke('plugin:window|is_maximized',{label:'main'}))
-    await page.getByRole('button',{name:'源码',exact:true}).click();await editor().click();await editor().press('Control+End');await page.keyboard.insertText('dirty-titlebar')
+    await setMarkdownMode(page,'源码');await editor().click();await editor().press('Control+End');await page.keyboard.insertText('dirty-titlebar')
     for(const source of ['button','menu']) {
       if(source==='button') await page.getByRole('button',{name:'关闭窗口',exact:true}).click()
-      else { await page.locator('[role=menubar]').getByRole('menuitem',{name:'文件',exact:true}).click();await page.getByRole('menuitem',{name:'退出应用',exact:true}).click() }
+      else { await page.locator('[role=menubar]').getByRole('menuitem',{name:'文件',exact:true}).click();await page.getByRole('menuitem',{name:'退出',exact:true}).click() }
       await page.getByRole('dialog',{name:'未保存修改确认',exact:true}).waitFor()
       await page.getByRole('button',{name:'继续编辑',exact:true}).click()
     }
@@ -106,7 +107,7 @@ try {
   })
   await test('菜单与字号：真实 Markdown 格式、Ctrl+滚轮、14px 重置和查找替换',async()=>{
     const before=await raw()
-    await page.getByRole('button',{name:'源码',exact:true}).click()
+    await setMarkdownMode(page,'源码')
     assert.equal(await page.evaluate(()=>document.documentElement.style.getPropertyValue('--editor-size')),'14px')
     const box=await editor().boundingBox();await page.mouse.move(box.x+80,box.y+30)
     await page.keyboard.down('Control');await page.mouse.wheel(0,-120);await page.keyboard.up('Control')
@@ -119,7 +120,7 @@ try {
     await page.getByRole('menuitem',{name:'加粗',exact:true}).click()
     assert.ok((await raw()).startsWith('# **中文标题**'))
     await editor().press('Control+z');assert.equal(await raw(),before)
-    await editor().press('Control+h');const panel=page.locator('.fleet-search')
+    await editor().press('Control+r');const panel=page.locator('.fleet-search')
     await panel.locator('input[name=search]').fill('bold');await panel.locator('input[name=replace]').fill('native')
     await page.waitForFunction(()=>document.querySelector('.search-count').textContent.includes('1'))
     await page.screenshot({path:join(output,'fleet-search.png')})
@@ -128,17 +129,43 @@ try {
   })
   await test('Phase 5: 30 次真实模式切换不修改 BOM/CRLF/末尾状态', async () => {
     for (let i = 0; i < 10; i++) for (const mode of ['源码', '双栏', '即时排版']) {
-      await page.getByRole('button', { name: mode, exact: true }).click()
+      await setMarkdownMode(page,mode)
       assert.equal(await raw(), original)
     }
     await editor().press('Control+s')
     await pause(200)
     assert.deepEqual(await readFile(fixture), Buffer.concat([bom, Buffer.from(original)]))
   })
+  await test('GFM 表格：原生真实鼠标映射、单元格编辑、BOM/CRLF 保存与撤销', async () => {
+    const before = await raw()
+    await setMarkdownMode(page,'即时排版')
+    await page.evaluate(() => { const m = document.querySelector('#app').__vue_app__._instance.setupState.manager; m.dispatch(m.activeId,{selection:{anchor:0}}) })
+    const cell = page.locator('.cm-md-table tr').last().locator('td').first()
+    await cell.waitFor()
+    const position = Number(await cell.getAttribute('data-source-from'))
+    await cell.click()
+    assert.equal(await page.evaluate(() => document.querySelector('#app').__vue_app__._instance.setupState.manager.view.state.selection.main.head), position)
+    await page.keyboard.insertText('原生表格')
+    const edited = await raw();assert.ok(edited.includes('原生表格1'))
+    await editor().press('Control+s')
+    for(let i=0;i<50;i++){if((await readFile(fixture)).equals(Buffer.concat([bom,Buffer.from(edited)])))break;await pause(100)}
+    assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from(edited)]))
+    await editor().press('Control+z');assert.equal(await raw(),before)
+    await editor().press('Control+y');assert.equal(await raw(),edited)
+    await editor().press('Control+z');await editor().press('Control+s')
+    for(let i=0;i<50;i++){if((await readFile(fixture)).equals(Buffer.concat([bom,Buffer.from(before)])))break;await pause(100)}
+    assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from(before)]))
+    await page.evaluate(() => window.nativeNoRefresh = true)
+    await editor().press('Control+f');assert.equal(await page.locator('input[name=replace]').isVisible(),false)
+    await page.locator('input[name=search]').press('Control+r');assert.equal(await page.locator('input[name=replace]').isVisible(),true)
+    assert.equal(await page.evaluate(() => window.nativeNoRefresh),true)
+    await page.locator('input[name=replace]').press('Escape')
+    await page.screenshot({path:join(output,'native-table.png')})
+  })
   await test('Markdown 坐标：40 次真实点击、滚动、编辑撤销和段落留白', () => checkMarkdownClicks(page, output))
   await test('选区回归：原生明暗、拖选/失焦/键盘、Markdown 三模式可见且撤销保留',async()=>{
     const before=await raw()
-    await page.getByRole('button',{name:'源码',exact:true}).click()
+    await setMarkdownMode(page,'源码')
     await editor().focus();await editor().press('Control+a')
     await page.keyboard.insertText('0123456789 中文拖选 abcdefghijklmnopqrstuvwxyz\n第二行 **bold** keyboard selection abcdefghijklmnopqrstuvwxyz\n第三行')
     for(const theme of ['dark','light']) {
@@ -146,18 +173,18 @@ try {
       await page.getByLabel('颜色主题',{exact:true}).selectOption(theme)
       await page.getByRole('button',{name:'完成',exact:true}).click()
       for(const mode of ['源码','即时排版','双栏']) {
-        await page.getByRole('button',{name:mode,exact:true}).click()
+        await setMarkdownMode(page,mode)
         await checkSelection(page,{output,name:`selection-${theme}-${mode}`})
       }
     }
-    await page.getByRole('button',{name:'源码',exact:true}).click()
+    await setMarkdownMode(page,'源码')
     await editor().focus();await editor().press('Control+z')
     assert.equal(await raw(),before)
     assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from(before)]))
   })
   await test('Phase 6: 双窗格真实键盘编辑、共享撤销与磁盘保存',async()=>{
     const before=await raw()
-    await page.getByTitle('双 Pane 分栏编辑 (Split Pane)',{exact:true}).click()
+    await viewCommand(page,'编辑器分栏')
     await page.waitForSelector('.secondary-pane .cm-editor')
     const left=page.locator('.main-pane .cm-content'),right=page.locator('.secondary-pane .cm-content')
     await left.click();await left.press('Control+Home');await page.keyboard.insertText('LEFT')
@@ -168,7 +195,7 @@ try {
     await right.press('Control+y');await right.press('Control+y');assert.equal(await raw(),'LEFT'+before+'RIGHT')
     await right.press('Control+s');await pause(300)
     assert.deepEqual(await readFile(fixture),Buffer.concat([bom,Buffer.from('LEFT'+before+'RIGHT')]))
-    await page.getByTitle('关闭分栏',{exact:true}).click()
+    await viewCommand(page,'编辑器分栏')
     assert.equal(await page.locator('.cm-editor').count(),1)
   })
   await test('Phase 6: 设置与自定义快捷键实际交互、冲突拒绝与模态保护',async()=>{
@@ -199,7 +226,7 @@ try {
     assert.equal(await raw(),'    a')
     await page.evaluate(()=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;m.close(m.activeId,true)})
     await page.getByRole('tab',{name:/complex.md/}).click()
-    await page.getByRole('button',{name:'源码',exact:true}).click()
+    await setMarkdownMode(page,'源码')
     await pause(500)
     const settings=JSON.parse(await readFile(join(profile,'editor-settings.json'),'utf8'))
     assert.equal(settings.fontSize,17);assert.equal(settings.indentSize,4);assert.equal(settings.shortcuts['goto-line'],'Mod+Alt+J')
@@ -234,7 +261,7 @@ try {
     launch();await connect()
     await page.waitForFunction(()=>document.documentElement.style.getPropertyValue('--editor-size')==='17px')
     assert.equal(await page.evaluate(()=>document.body.classList.contains('light')===!matchMedia('(prefers-color-scheme: dark)').matches),true)
-    assert.equal(await page.getByRole('button',{name:'源码',exact:true}).getAttribute('class'),'on')
+    assert.equal(await page.evaluate(()=>document.querySelector('#app').__vue_app__._instance.setupState.manager.activeDocument.mode),'source')
     assert.ok((await page.locator('.status').innerText()).includes('Spaces: 4'))
     assert.equal(await page.locator('.outline-sidebar').count(),1)
     await editor().press('Control+Alt+j');await page.getByRole('dialog',{name:'转到指定行'}).waitFor();await page.keyboard.press('Escape')
@@ -248,7 +275,7 @@ try {
   })
   await test('Phase 5: 十次真实编辑/撤销/重做后磁盘只含预期修改', async () => {
     const baseline = await raw()
-    await page.getByRole('button', { name: '源码', exact: true }).click()
+    await setMarkdownMode(page,'源码')
     await editor().click()
     let expected = baseline
     for (let i = 0; i < 10; i++) {

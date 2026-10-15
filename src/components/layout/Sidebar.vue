@@ -7,55 +7,31 @@
       <!-- 侧边栏头部 -->
       <div class="panelhead">
         <span class="panel-title">{{ panelTitle }}</span>
-        <div class="headbtns">
-          <template v-if="activePanel === 'files' && workspace.rootPath">
-            <button class="ib small" :aria-pressed="workspace.showIgnored" title="显示/隐藏被忽略的文件" @click="workspace.toggleIgnored()">◉</button>
-            <button
-              class="ib small"
-              title="新建文件"
-              @click="handleCreateFile(workspace.rootPath)"
-            >
-              <Icon name="plus" size="small" />
-            </button>
-            <button
-              class="ib small"
-              title="新建文件夹"
-              @click="handleCreateDir(workspace.rootPath)"
-            >
-              <Icon name="open" size="small" />
-            </button>
-            <button
-              class="ib small"
-              title="刷新目录树"
-              @click="workspace.refreshDirectory()"
-            >
-              <span style="font-size: 11px;">↻</span>
-            </button>
-          </template>
-          <button
-            class="ib small"
-            title="隐藏侧边栏 (Ctrl+B)"
-            @click="$emit('toggle-side')"
-          >
-            <Icon name="panel" size="small" />
-          </button>
+        <div v-if="activePanel === 'files'" class="headbtns" role="toolbar" aria-label="工作区工具栏">
+          <button class="ib tree-tool" :disabled="!workspace.rootPath" :title="workspace.expanding ? '停止全部展开' : '全部展开'" :aria-label="workspace.expanding ? '停止全部展开' : '全部展开'" @click="expandAll"><Icon name="expand-all" size="small" /></button>
+          <button class="ib tree-tool" :disabled="!workspace.rootPath" title="全部收起" aria-label="全部收起" @click="collapseAll"><Icon name="collapse-all" size="small" /></button>
+          <button class="ib tree-tool" :disabled="!workspace.rootPath" title="新建" aria-label="新建" aria-haspopup="menu" @click="newMenu"><Icon name="plus" size="small" /></button>
+          <button class="ib tree-tool" title="定位当前文件" aria-label="定位当前文件" @click="locateCurrentFile"><Icon name="locate" size="small" /></button>
+          <button class="ib tree-tool" :disabled="!workspace.rootPath" title="刷新目录树" aria-label="刷新目录树" @click="workspace.refreshDirectory()"><Icon name="refresh" size="small" /></button>
         </div>
       </div>
 
       <!-- 侧边栏内容体 -->
-      <div class="panel-body">
+      <div class="panel-body" :class="{ 'files-body': activePanel === 'files' }">
         <!-- 1. 资源管理器面板 -->
         <div v-if="activePanel === 'files'" class="treelist">
           <!-- 已打开真实工作区 -->
           <template v-if="workspace.rootPath">
-            <div class="workspace-tree-container" tabindex="0" aria-label="工作区目录树" :style="{ height: `${Math.min(flatTree.length * 26, 380)}px`, overflow: 'auto' }" @scroll="treeScrollTop = ($event.target as HTMLElement).scrollTop">
+            <div ref="treeContainer" class="workspace-tree-container" tabindex="0" aria-label="工作区目录树" @scroll="treeScrollTop = ($event.target as HTMLElement).scrollTop">
               <div :style="{ height: `${treeStart * 26}px` }"></div>
               <template v-for="row in visibleTree" :key="row.node.path">
-              <div v-if="row.root" class="treenode folder root-folder" :title="row.root.rootPath">
-                <button class="root-toggle" @click="toggleRoot(row.root.rootPath)"><span class="twisty">{{ collapsedRoots.includes(row.root.rootPath) ? '▸' : '▾' }}</span><Icon name="open" size="small" /><span class="label">{{ row.root.name }}</span></button>
+              <div v-if="row.root" class="treenode folder root-folder" :title="`${row.root.name}\n${readablePath(row.root.rootPath)}`" @contextmenu.prevent.stop="rootMenu($event,row.root)" @keydown.shift.f10.prevent.stop="rootMenu($event,row.root)">
+                <button class="root-toggle" @click="toggleRoot(row.root.rootPath)"><span class="twisty">{{ collapsedRoots.includes(row.root.rootPath) ? '▸' : '▾' }}</span><Icon name="folder" size="small" /><span class="label">{{ row.root.name }}</span></button>
+                <div class="root-actions">
                 <button class="ib small" :aria-label="`在 ${row.root.name} 中新建文件`" title="在此文件夹中新建文件" @click="handleCreateFile(row.root.rootPath)">+</button>
                 <button class="ib small" :aria-label="`在 ${row.root.name} 中新建文件夹`" title="在此文件夹中新建文件夹" @click="handleCreateDir(row.root.rootPath)"><Icon name="open" size="small" /></button>
                 <button class="ib small" :aria-label="`从工作区移除 ${row.root.name}`" title="从工作区移除（不删除文件）" @click="workspace.removeFolder(row.root.rootPath)">×</button>
+                </div>
               </div>
               <TreeNodeItem v-else
                 :key="row.node.path"
@@ -64,6 +40,7 @@
                 flat
                 :active-path="activeDocPath"
                 :dirty-paths="dirtyDocPaths"
+                :desktop="desktop"
                 @select-file="workspace.openFile($event)"
                 @pin-file="workspace.openFile($event, false)"
                 @toggle-folder="workspace.toggleFolder($event)"
@@ -71,6 +48,8 @@
                 @rename-node="handleRenameNode"
                 @delete-node="handleDeleteNode"
                 @move-node="handleMoveNode"
+                @copy-path="copyPath"
+                @reveal-node="workspace.revealNode($event)"
               />
               </template>
               <div :style="{ height: `${Math.max(0, flatTree.length - treeStart - visibleTree.length) * 26}px` }"></div>
@@ -223,6 +202,7 @@
       @mousedown.prevent="startResize"
     ></div>
     <WorkspaceOperationDialog ref="operationDialog" />
+    <ContextMenu ref="contextMenu" />
   </aside>
 </template>
 
@@ -237,6 +217,11 @@ import type { SidebarPanel, EditorDocument } from '../../types'
 import type { WorkspaceController } from '../../features/workspace/WorkspaceController'
 import type { WorkspaceNode, WorkspaceInfo } from '../../features/workspace/contracts'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
+import { treeWindow } from '../../features/workspace/virtualTree'
+import { readablePath, displayPathKey } from '../../features/shell/pathDisplay'
+import ContextMenu from '../common/ContextMenu.vue'
+import { CommandRegistry, menuCommand as cmd, separator } from '../../features/shell/menuModel'
+import { textClipboard } from '../../features/shell/clipboard'
 
 const props = defineProps<{
   width: number
@@ -263,7 +248,7 @@ const activeDoc = computed(() => {
 })
 
 const isMarkdownDoc = computed(() => {
-  return /\.(md|markdown)$/i.test(activeDoc.value?.name || '')
+  return activeDoc.value?.kind !== 'javaClass' && /\.(md|markdown)$/i.test(activeDoc.value?.name || '')
 })
 
 const outlineItems = computed<OutlineItem[]>(() => {
@@ -274,9 +259,56 @@ const outlineItems = computed<OutlineItem[]>(() => {
 
 const searchInputRef = ref<HTMLInputElement | null>(null)
 const operationDialog = ref<InstanceType<typeof WorkspaceOperationDialog> | null>(null)
+const contextMenu = ref<InstanceType<typeof ContextMenu> | null>(null)
+async function copyPath(path: string) {
+  try { await textClipboard.writeText(path) }
+  catch (error) { window.dispatchEvent(new CustomEvent('editor-notice',{detail:`复制失败：${String(error)}`})) }
+}
+function rootMenu(event: MouseEvent | KeyboardEvent, root: WorkspaceInfo) {
+  const registry = new CommandRegistry([
+    {id:'root-new-file',title:'新建文件…',enabled:true,run:()=>handleCreateFile(root.rootPath)},
+    {id:'root-new-folder',title:'新建文件夹…',enabled:true,run:()=>handleCreateDir(root.rootPath)},
+    {id:'root-copy-path',title:'复制文件夹路径',enabled:true,run:()=>copyPath(root.rootPath)},
+    {id:'root-reveal',title:'在文件管理器中显示',enabled:props.desktop,run:()=>props.workspace.revealNode(root.rootPath)},
+    {id:'root-remove',title:'移除工作区根目录',enabled:true,run:()=>props.workspace.removeFolder(root.rootPath)},
+    {id:'root-ignored',title:'显示忽略文件',enabled:props.desktop,run:()=>props.workspace.toggleIgnored()},
+  ])
+  contextMenu.value?.open(event,[cmd('root-new-file'),cmd('root-new-folder'),separator('root-path-section'),cmd('root-copy-path'),cmd('root-reveal'),{type:'checkbox',id:'root-ignored',commandId:'root-ignored',checked:props.workspace.showIgnored},separator('root-remove-section'),cmd('root-remove')],registry,'工作区根目录操作')
+}
+function newMenu(event:MouseEvent) {
+  const parent=(activeDocPath.value&&props.workspace.rootForPath(activeDocPath.value))||props.workspace.rootPath
+  if(!parent)return
+  const registry=new CommandRegistry([
+    {id:'new-file',title:'新建文件',enabled:true,run:()=>handleCreateFile(parent)},
+    {id:'new-folder',title:'新建文件夹',enabled:true,run:()=>handleCreateDir(parent)},
+  ])
+  contextMenu.value?.open(event,[cmd('new-file'),cmd('new-folder')],registry,'新建',true)
+}
+function expandAll() {if(props.workspace.expanding){props.workspace.cancelExpand();return}collapsedRoots.value=[];void props.workspace.expandAll()}
+function collapseAll() {props.workspace.collapseAll();collapsedRoots.value=props.workspace.roots.map(root=>root.rootPath)}
+function notice(message:string){window.dispatchEvent(new CustomEvent('editor-notice',{detail:message}))}
+async function locateCurrentFile() {
+  const path=activeDocPath.value
+  if(!path||!props.workspace.rootForPath(path)){notice('当前文件不在工作区内。');return}
+  const found=await props.workspace.revealFileInTree(path,true)
+  if(activeDocPath.value!==path)return
+  if(!found){notice('无法定位当前文件：文件不存在、被忽略或目录无法读取。');return}
+  const root=props.workspace.rootForPath(path)
+  collapsedRoots.value=collapsedRoots.value.filter(item=>item!==root)
+  await nextTick();scrollActiveIntoView()
+}
 const treeScrollTop = ref(0)
+const treeContainer = ref<HTMLElement | null>(null), treeHeight = ref(0)
+let treeObserver: ResizeObserver | undefined
+watch(treeContainer, element => {
+  treeObserver?.disconnect()
+  if (!element) return
+  treeHeight.value = element.clientHeight
+  treeObserver = new ResizeObserver(() => { treeHeight.value = element.clientHeight; treeScrollTop.value = element.scrollTop })
+  treeObserver.observe(element)
+}, { flush: 'post' })
 const collapsedRoots = ref<string[]>([])
-function toggleRoot(path: string) { collapsedRoots.value = collapsedRoots.value.includes(path) ? collapsedRoots.value.filter(item => item !== path) : [...collapsedRoots.value, path] }
+function toggleRoot(path: string) { props.workspace.cancelExpand();collapsedRoots.value = collapsedRoots.value.includes(path) ? collapsedRoots.value.filter(item => item !== path) : [...collapsedRoots.value, path] }
 const flatTree = computed(() => {
   const rows: { node: WorkspaceNode; depth: number; root?: WorkspaceInfo }[] = []
   const visit = (nodes: WorkspaceNode[], depth: number) => {
@@ -291,8 +323,9 @@ const flatTree = computed(() => {
   }
   return rows
 })
-const treeStart = computed(() => Math.max(0, Math.min(Math.floor(treeScrollTop.value / 26) - 5, flatTree.value.length - 30)))
-const visibleTree = computed(() => flatTree.value.slice(treeStart.value, treeStart.value + 30))
+const virtualWindow = computed(() => treeWindow(flatTree.value.length, treeScrollTop.value, treeHeight.value))
+const treeStart = computed(() => virtualWindow.value.start)
+const visibleTree = computed(() => flatTree.value.slice(treeStart.value, treeStart.value + virtualWindow.value.count))
 watch(() => props.workspace.openRevision, () => {
   treeScrollTop.value = 0
   searchQueryText.value = ''
@@ -312,6 +345,24 @@ const panelTitle = computed(() => {
 const activeDocPath = computed(() => {
   return props.openDocs.find(d => d.id === props.activeDocId)?.path
 })
+function scrollActiveIntoView() {
+  const element = treeContainer.value, index = flatTree.value.findIndex(row => activeDocPath.value && displayPathKey(row.node.path) === displayPathKey(activeDocPath.value))
+  if (!element || index < 0) return
+  const top = index * 26, bottom = top + 26
+  if (top < element.scrollTop) element.scrollTop = top
+  else if (bottom > element.scrollTop + element.clientHeight) element.scrollTop = bottom - element.clientHeight
+  treeScrollTop.value = element.scrollTop
+}
+watch([activeDocPath, () => props.workspace.openRevision], async ([path]) => {
+  if (!path || props.activePanel !== 'files') return
+  const root = props.workspace.rootForPath(path)
+  collapsedRoots.value = collapsedRoots.value.filter(item => item !== root)
+  await props.workspace.revealFileInTree(path)
+  if (activeDocPath.value !== path) return
+  await nextTick(); scrollActiveIntoView()
+}, { immediate:true })
+watch(flatTree, async () => { await nextTick(); if (treeContainer.value) treeScrollTop.value = treeContainer.value.scrollTop })
+watch(() => props.activePanel, async panel => { if (panel === 'files') { await nextTick(); scrollActiveIntoView() } })
 
 const dirtyDocPaths = computed(() => {
   return props.openDocs.filter(d => d.dirty).map(d => d.path)
@@ -407,6 +458,7 @@ function onMouseUp() {
 }
 
 onUnmounted(() => {
+  treeObserver?.disconnect()
   if (resizing) document.body.style.cursor = ''
   window.removeEventListener('mousemove', onMouseMove)
   window.removeEventListener('mouseup', onMouseUp)
@@ -416,8 +468,13 @@ onUnmounted(() => {
 
 <style scoped>
 .root-toggle { display:flex;align-items:center;gap:5px;flex:1;min-width:0;text-align:left;height:26px;color:var(--sub) }
+.root-actions { display:none;position:absolute;right:4px;top:1px;align-items:center;background:var(--sidebar) }
+.root-folder { position:relative }
+.root-folder:hover .root-actions,.root-folder:focus-within .root-actions { display:flex;background:var(--hover) }
+.root-folder:hover .root-toggle,.root-folder:focus-within .root-toggle { padding-right:76px }
 .root-toggle .label { overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
 .sidebar-wrapper {
+  min-height:0;
   flex: none;
   display: flex;
   position: relative;
@@ -425,6 +482,7 @@ onUnmounted(() => {
 }
 
 .explorer {
+  min-height:0;
   flex: 1;
   background: var(--sidebar);
   border-right: 1px solid var(--line);
@@ -439,7 +497,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 10px 0 14px;
+  padding: 0 6px;
   border-bottom: 1px solid var(--line);
   flex: none;
 }
@@ -453,9 +511,13 @@ onUnmounted(() => {
 
 .headbtns {
   display: flex;
-  gap: 3px;
+  gap: 1px;
+  flex:none;
 }
 
+.tree-tool { width:22px;height:24px }
+.tree-tool:disabled { opacity:.4;cursor:default }
+.panel-title { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
 .ib.small {
   width: 24px;
   height: 24px;
@@ -463,9 +525,13 @@ onUnmounted(() => {
 
 .panel-body {
   flex: 1;
+  min-height:0;
   overflow-y: auto;
   padding: 6px 0;
 }
+.panel-body.files-body { overflow:hidden;display:flex;flex-direction:column;padding:0 }
+.files-body .treelist { flex:1;min-height:0;display:flex;flex-direction:column }
+.workspace-tree-container { flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain }
 
 .treelist {
   font-size: 12px;
@@ -506,6 +572,7 @@ onUnmounted(() => {
 }
 
 .label {
+  min-width:0;
   flex: 1;
   white-space: nowrap;
   overflow: hidden;

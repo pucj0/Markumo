@@ -3,9 +3,9 @@ import { undo, redo, isolateHistory, undoDepth } from '@codemirror/commands'
 import { EditorSelection, Transaction } from '@codemirror/state'
 import { DocumentManager } from '../src/editor/core/DocumentManager'
 import { FileController } from '../src/features/files/FileController'
-import type { FileGateway, FileMetadata, OpenFile } from '../src/features/files/contracts'
+import type { FileGateway, FileMetadata, OpenFile, TextOpenFile } from '../src/features/files/contracts'
 
-const fixture = (extra: Partial<OpenFile> = {}): OpenFile => ({ token: 'file-1', path: 'E:\\fixtures\\中文.txt', name: '中文.txt',
+const fixture = (extra: Partial<TextOpenFile> = {}): OpenFile => ({ token: 'file-1', path: 'E:\\fixtures\\中文.txt', name: '中文.txt',
   text: '第一行\r\n第二行', encoding: 'UTF-8', bom: true, eol: 'CRLF', readOnly: false, version: 'disk-1', ...extra })
 function setup() {
   const manager = new DocumentManager([], async () => [])

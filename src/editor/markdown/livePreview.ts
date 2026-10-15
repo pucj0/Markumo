@@ -3,6 +3,7 @@ import { EditorState, StateEffect, StateField, type Extension } from '@codemirro
 import { syntaxTree } from '@codemirror/language'
 import { CheckboxWidget, HorizontalRuleWidget, ListMarkerWidget } from './widgets'
 import { openMarkdownLink, safeMarkdownURL } from './links'
+import { tableField, tableComposition } from './tableField'
 
 const refresh = StateEffect.define<null>()
 const refreshGeneration = StateField.define({ create: () => 0, update: (value: number, tr) => tr.effects.some(effect => effect.is(refresh)) ? value + 1 : value })
@@ -35,7 +36,11 @@ export function buildLiveDecorationsForState(state: EditorState, visibleRanges: 
     const from = Math.max(0, visible.from), to = Math.min(state.doc.length, visible.to)
     tree.iterate({ from, to, enter: node => {
       const name = node.name
-      if (['FencedCode', 'CodeBlock', 'Table', 'Image'].includes(name)) return false
+      if (['FencedCode', 'CodeBlock'].includes(name)) {
+        for (let number = state.doc.lineAt(Math.max(node.from, from)).number; number <= state.doc.lineAt(Math.min(node.to, to)).number; number++) line(state.doc.line(number).from, 'cm-md-code-block')
+        return false
+      }
+      if (['Table', 'Image'].includes(name)) return false
       if (/^(ATXHeading|SetextHeading)[1-6]$/.test(name)) {
         const level = name.match(/[1-6]$/)![0]
         const firstLine = state.doc.lineAt(node.from)
@@ -124,4 +129,4 @@ export const livePreviewPlugin = ViewPlugin.fromClass(class {
     event.preventDefault(); void openMarkdownLink(link); return true
   },
 } })
-export function livePreviewExtension(): Extension { return [refreshGeneration, livePreviewPlugin] }
+export function livePreviewExtension(): Extension { return [refreshGeneration, tableField, tableComposition, livePreviewPlugin, EditorView.editorAttributes.of({ 'data-markdown-live': 'true' })] }

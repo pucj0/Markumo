@@ -51,10 +51,11 @@ export class FileController {
   }
   async autoSave(id: string) {
     const doc = this.manager.metadata(id)
-    if (!doc?.fileToken || !doc.dirty || doc.readOnly || this.manager.isComposing || this.workspaceBusy || this.saving.has(id)) return 'skipped' as const
+    if (!doc?.fileToken || doc.kind === 'javaClass' || !doc.dirty || doc.readOnly || this.manager.isComposing || this.workspaceBusy || this.saving.has(id)) return 'skipped' as const
     return this.performSave(id, false, undefined, true)
   }
   private async performSave(id: string, saveAs: boolean, encoding: Encoding | undefined, automatic: boolean): Promise<'saved' | 'changed' | 'failed' | 'skipped'> {
+    if (this.manager.metadata(id)?.kind === 'javaClass') { if (!automatic) this.notify('ClassFile 仅供只读查看，不能作为文本保存或另存为。'); return 'skipped' }
     if (this.workspaceBusy) { if (!automatic) this.notify('工作区文件操作进行中，请稍后保存。'); return 'skipped' }
     if (this.disposed || this.saving.has(id)) return 'skipped'
     const snapshot = this.manager.saveSnapshot(id)
@@ -90,6 +91,7 @@ export class FileController {
   }
   async reopen(encoding: Encoding) {
     const doc = this.manager.activeDocument
+    if (doc?.kind === 'javaClass') { this.notify('ClassFile 是二进制字节码，不支持按文本编码重开。'); return }
     if (!doc?.fileToken) { this.notify('请先打开真实文件。'); return }
     if (doc.dirty || this.manager.isComposing || this.saving.has(doc.id)) {
       this.notify('请先保存修改并完成输入，再用其他编码重开。'); return
@@ -111,6 +113,11 @@ export class FileController {
     const result = this.manager.close(id, discard, pane)
     if (result === 'closed' && token && !this.manager.metadata(id)) void this.gateway.release(token).catch(error => this.notify(fileError(error)))
     return result
+  }
+  async classHex(id: string, offset: number) {
+    const doc = this.manager.metadata(id)
+    if (this.disposed || doc?.kind !== 'javaClass' || !doc.fileToken || !doc.lastDiskVersion || !this.gateway.readClassHex) throw new Error('ClassFile 查看授权不可用。')
+    return this.gateway.readClassHex(doc.fileToken,doc.lastDiskVersion,offset)
   }
   dispose() {
     if (this.disposed) return

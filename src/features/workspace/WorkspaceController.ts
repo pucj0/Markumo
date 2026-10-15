@@ -1,5 +1,6 @@
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { FileController } from '../files/FileController'
+import { displayPathKey } from '../shell/pathDisplay'
 import type {
   SearchDonePayload,
   SearchMatch,
@@ -29,6 +30,10 @@ export class WorkspaceController {
   private operationBusy = false
   private disposed = false
   private searchSequence = 0
+  private revealSequence = 0
+  private expandSequence = 0
+  private folderLoads = new Map<WorkspaceNode,Promise<boolean>>()
+  expanding = false
 
   // 全文搜索状态
   searchId = ''
@@ -112,6 +117,7 @@ export class WorkspaceController {
   }
 
   private addWorkspace(info: WorkspaceInfo) {
+    this.cancelExpand()
     this.openRevision++
     if (!this.roots.some(root => root.rootPath === info.rootPath)) this.roots.push(info)
     if (info.warning) this.notify(info.warning)
@@ -120,6 +126,7 @@ export class WorkspaceController {
   }
 
   async removeFolder(path: string) {
+    this.cancelExpand();this.revealSequence++
     if (this.operationBusy || this.fileController.saving.size || this.documentManager.isComposing) { this.notify('请等待文件操作和输入完成。'); return }
     if (!this.beginMutation()) return
     this.cancelSearch(); this.quickGeneration++
@@ -155,6 +162,7 @@ export class WorkspaceController {
   }
 
   private applyWorkspace(info: WorkspaceInfo) {
+    this.cancelExpand();this.revealSequence++
     this.openRevision++
     this.cancelSearch()
     this.quickGeneration++
@@ -171,28 +179,103 @@ export class WorkspaceController {
     this.emit()
   }
 
+  private loadFolder(node: WorkspaceNode): Promise<boolean> {
+    if (node.children && (node.children.length || !node.hasChildren) && !node.isLoading) return Promise.resolve(true)
+    const pending=this.folderLoads.get(node)
+    if(pending)return pending
+    const root=this.roots.find(root=>root.rootPath===this.rootForPath(node.path))
+    if(!root || node.isSymlink)return Promise.resolve(false)
+    node.isLoading=true;this.emit()
+    const load=(async()=>{
+      try {
+        const children=await this.gateway.readDirectory(node.path)
+        if(this.disposed||!this.roots.includes(root))return false
+        const prefix=displayPathKey(node.path)+'/'
+        node.children=children.filter(child=>!child.isSymlink&&displayPathKey(child.path).startsWith(prefix))
+        node.hasChildren=!!node.children.length;return true
+      }catch(error){this.notify(`读取目录失败：${String(error)}`);return false}
+      finally {node.isLoading=false;this.folderLoads.delete(node);this.emit()}
+    })()
+    this.folderLoads.set(node,load);return load
+  }
   async toggleFolder(node: WorkspaceNode) {
-    if (!node.isDirectory || node.isLoading) return
-    if (!node.isExpanded) {
-      if (!node.children || node.children.length === 0) {
-        node.isLoading = true
-        this.emit()
-        try {
-          node.children = await this.gateway.readDirectory(node.path)
-        } catch (e) {
-          this.notify(`读取目录失败: ${e}`)
-        } finally {
-          node.isLoading = false
+    if(!node.isDirectory || node.isSymlink)return
+    this.cancelExpand()
+    node.isExpanded=!node.isExpanded;this.emit()
+    if(node.isExpanded && !await this.loadFolder(node))node.isExpanded=false
+    this.emit()
+  }
+  cancelExpand() {this.expandSequence++;this.expanding=false;this.emit()}
+  collapseAll() {
+    this.cancelExpand();this.revealSequence++
+    const stack=this.roots.flatMap(root=>root.entries)
+    while(stack.length){const node=stack.pop()!;node.isExpanded=false;if(node.children)for(const child of node.children)stack.push(child)}
+    this.emit()
+  }
+  async expandAll(options: {maxNodes?:number;maxDirectories?:number;maxDepth?:number;timeoutMs?:number} = {}) {
+    const sequence=++this.expandSequence,roots=[...this.roots],started=Date.now()
+    const maxNodes=Math.min(20000,Math.max(1,options.maxNodes??20000)),maxDirectories=Math.min(250,Math.max(1,options.maxDirectories??250)),maxDepth=Math.min(32,Math.max(1,options.maxDepth??32)),timeout=Math.min(5000,Math.max(1,options.timeoutMs??5000))
+    const queue=roots.map(root=>({nodes:root.entries,depth:1}))
+    let count=0,directories=0,limited=false
+    this.expanding=true;this.emit()
+    try {
+      outer:for(let cursor=0;cursor<queue.length;cursor++){
+        const {nodes,depth}=queue[cursor]
+        for(const node of nodes){
+          if(this.disposed||sequence!==this.expandSequence||roots.some(root=>!this.roots.includes(root)))break outer
+          if(++count>maxNodes||Date.now()-started>timeout){limited=true;break outer}
+          if(!node.isDirectory||node.isSymlink)continue
+          if(depth>maxDepth){limited=true;continue}
+          if(++directories>maxDirectories){limited=true;break outer}
+          if(!await this.loadFolder(node))continue
+          if(sequence!==this.expandSequence||this.disposed)break outer
+          node.isExpanded=true
+          if(node.children?.length)queue.push({nodes:node.children,depth:depth+1})
+          if(directories%8===0){this.emit();await new Promise<void>(resolve=>setTimeout(resolve,0))}
         }
       }
-      node.isExpanded = true
-    } else {
-      node.isExpanded = false
+      if(limited&&sequence===this.expandSequence)this.notify('全部展开已达到保护预算，可手动展开剩余目录。')
+      return {count,directories,limited,canceled:sequence!==this.expandSequence}
+    }finally{if(sequence===this.expandSequence)this.expanding=false;this.emit()}
+  }
+  private preserveFolders(previous:WorkspaceNode[],fresh:WorkspaceNode[]) {
+    const known=new Map(previous.map(node=>[displayPathKey(node.path),node]))
+    return fresh.map(node=>{const old=known.get(displayPathKey(node.path));return old?.isDirectory&&node.isDirectory?Object.assign(old,node):node})
+  }
+  async revealFileInTree(path: string, refreshTarget=false) {
+    this.cancelExpand()
+    const sequence = ++this.revealSequence
+    const root = this.roots.find(root => root.rootPath === this.rootForPath(path))
+    if (!root) return false
+    const normalized = displayPathKey
+    const target = normalized(path)
+    let nodes = root.entries, parent:WorkspaceNode|undefined
+    for (let depth = 0; depth < 256 && !this.disposed && sequence === this.revealSequence; depth++) {
+      if(refreshTarget){
+        try {
+          const fresh=await this.gateway.readDirectory(parent?.path||root.rootPath)
+          if(sequence!==this.revealSequence||this.disposed||!this.roots.includes(root))return false
+          nodes=this.preserveFolders(nodes,fresh)
+          if(parent)parent.children=nodes
+          else {root.entries=nodes;if(this.roots[0]===root)this.entries=nodes}
+        }catch(error){this.notify(`定位文件失败：${String(error)}`);return false}
+      }
+      if (nodes.some(node => !node.isDirectory && normalized(node.path) === target)) {this.emit();return true}
+      parent = nodes.find(node => node.isDirectory && !node.isSymlink && target.startsWith(normalized(node.path) + '/'))
+      if (!parent || !await this.loadFolder(parent)) return false
+      if (sequence !== this.revealSequence || !this.roots.includes(root)) return false
+      parent.isExpanded=true;this.emit()
+      nodes = parent.children || []
     }
-    this.emit()
+    return false
+  }
+  async revealNode(path:string) {
+    if(!this.gateway.revealNode) { this.notify('当前环境不支持系统文件管理器。'); return }
+    try {await this.gateway.revealNode(path)}catch(error){this.notify(`在文件管理器中显示失败：${String(error)}`)}
   }
 
   async refreshDirectory(node?: WorkspaceNode) {
+    this.cancelExpand();this.revealSequence++
     if (!this.rootPath) return
     try {
       if (!node) {
@@ -285,10 +368,10 @@ export class WorkspaceController {
   }
 
   rootForPath(path: string) {
-    const normalized = path.replace(/\\/g, '/')
-    return this.roots.find(root => {
-      const base = root.rootPath.replace(/\\/g, '/')
-      return /^[a-z]:|^\/\//i.test(base) ? normalized.toLowerCase() === base.toLowerCase() || normalized.toLowerCase().startsWith(base.toLowerCase() + '/') : normalized === base || normalized.startsWith(base + '/')
+    const normalized = displayPathKey(path)
+    return [...this.roots].sort((a,b)=>b.rootPath.length-a.rootPath.length).find(root => {
+      const base = displayPathKey(root.rootPath).replace(/\/$/,'')
+      return normalized === base || normalized.startsWith(base + '/')
     })?.rootPath || null
   }
 
@@ -532,6 +615,7 @@ export class WorkspaceController {
   }
 
   destroy() {
+    this.cancelExpand();this.revealSequence++
     this.disposed = true
     this.quickGeneration++
     this.cancelSearch()

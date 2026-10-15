@@ -5,7 +5,7 @@ export const languageNames = ['Plain Text', 'Markdown', 'JSON', 'JSONC', 'YAML',
 export type LanguageName = typeof languageNames[number]
 
 const extensions: Record<string, LanguageName> = {
-  md: 'Markdown', markdown: 'Markdown', txt: 'Plain Text', log: 'Log', csv: 'CSV',
+  md: 'Markdown', markdown: 'Markdown', txt: 'Plain Text', bat:'Plain Text', cmd:'Plain Text', log: 'Log', csv: 'CSV',
   json: 'JSON', jsonc: 'JSONC', yaml: 'YAML', yml: 'YAML', toml: 'TOML',
   js: 'JavaScript', mjs: 'JavaScript', cjs: 'JavaScript', ts: 'TypeScript', jsx: 'JSX', tsx: 'TSX',
   vue: 'Vue', html: 'HTML', htm: 'HTML', css: 'CSS', py: 'Python', go: 'Go', rs: 'Rust',

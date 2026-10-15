@@ -1,3 +1,4 @@
+import {setMarkdownMode,viewCommand} from './menu-helpers.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -52,11 +53,11 @@ try {
     const view = await page.locator('.cm-editor').elementHandle()
     await page.getByRole('tab', { name: /README.md/ }).click()
     // Phase 5 enables Live Preview; this regression checks raw-source history.
-    await page.getByRole('button', { name: '源码', exact: true }).click()
+    await setMarkdownMode(page,'源码')
     await contents('# 中文源码\n**bold** [link](https://example.com)')
     assert.equal(await page.getByRole('tab', { name: /README.md/ }).evaluate(el => el.classList.contains('temp')), false)
     assert.match(await page.locator('.status').innerText(), /未保存修改/)
-    assert.equal(await page.getByRole('button', { name: '即时排版', exact: true }).isDisabled(), false)
+    assert.equal(await page.evaluate(()=>document.querySelector('#app').__vue_app__._instance.setupState.manager.activeDocument.mode),'source')
     await page.getByRole('tab', { name: /main.rs/ }).click()
     assert.equal(await editor().innerText(), originalRust)
     assert.equal(await page.locator('.cm-editor').evaluate((el, other) => el === other, view), true)
@@ -126,7 +127,7 @@ try {
     }
     assert.equal(await page.locator('.language-message').count(), 0)
     await hidden(page.locator('.mdswitch'))
-    await page.getByRole('button', { name: '软换行', exact: true }).click()
+    await viewCommand(page,'自动换行')
     assert.match(await page.locator('.cm-content').evaluate(el => getComputedStyle(el).whiteSpace), /^(pre-wrap|break-spaces)$/)
     await setTheme('light')
     assert.equal(await editor().innerText(), text)
@@ -136,7 +137,7 @@ try {
   await test('CodeMirror 查找/替换快捷键和真实替换事务', async () => {
     await page.keyboard.press('Control+n')
     await contents('needle other needle')
-    await editor().press('Control+h')
+    await editor().press('Control+r')
     const panel = page.locator('.cm-search')
     await shown(panel)
     await panel.locator('input[name="search"]').fill('needle')
@@ -157,8 +158,8 @@ try {
     assert.equal(await editor().innerText(), '()')
     await shown(page.locator('.cm-matchingBracket').first())
     await contents('function example() {\n  return true\n}')
-    await shown(page.locator('.cm-foldGutter span[title="Fold line"]').first())
-    await page.locator('.cm-foldGutter span[title="Fold line"]').first().click()
+    await shown(page.locator('.cm-foldGutter .cm-fold-chevron.open').first())
+    await page.locator('.cm-foldGutter .cm-fold-chevron.open').first().click()
     await shown(page.locator('.cm-foldPlaceholder'))
     await page.getByRole('tab', { name: /main.rs/ }).click()
     await page.getByRole('tab', { name: /Untitled-1.txt/ }).click()
@@ -211,12 +212,12 @@ try {
     const box = await handle.boundingBox()
     await page.mouse.move(box.x + 2, box.y + 100); await page.mouse.down(); await page.mouse.move(1100, box.y + 100)
     assert.equal(await handle.getAttribute('aria-valuenow'), '420')
-    await page.keyboard.press('Control+b'); await page.mouse.up()
+    await page.keyboard.press('Control+Alt+b'); await page.mouse.up()
     assert.equal(await page.locator('body').evaluate(el => el.style.cursor), '')
-    await page.keyboard.press('Control+b'); await handle.press('ArrowLeft')
-    await page.getByRole('button', { name: '单文件', exact: true }).click(); await hidden(page.locator('.sidebar-wrapper'))
-    await page.getByRole('button', { name: '工作区', exact: true }).click()
-    await page.getByRole('button', { name: '专注模式', exact: true }).click()
+    await page.keyboard.press('Control+Alt+b'); await handle.press('ArrowLeft')
+    await viewCommand(page,'显示侧边栏'); await hidden(page.locator('.sidebar-wrapper'))
+    await page.keyboard.press('Alt+1')
+    await viewCommand(page,'专注模式')
     await hidden(page.locator('.topbar')); await page.keyboard.press('Escape'); await shown(page.locator('.topbar'))
     for (const theme of ['dark', 'light']) {
       await setTheme(theme)
@@ -233,7 +234,7 @@ try {
   })
   await test('Phase 6 左侧 AST 大纲与真实跳转，不提取围栏伪标题', async () => {
     await openCatalog('README.md')
-    await page.getByRole('button',{name:'源码',exact:true}).click()
+    await setMarkdownMode(page,'源码')
     await contents('Title\n=====\n\n```md\n# fake\n```\n\n## Real\n')
     await page.getByTitle('文档大纲',{exact:true}).click()
     const items=page.locator('.sidebar-wrapper .outline-item')

@@ -3,14 +3,24 @@ export interface FileMetadata {
   token: string
   path: string
   name: string
-  encoding: Encoding
+  encoding: Encoding | 'Binary'
   bom: boolean
   eol: 'LF' | 'CRLF' | 'CR' | 'Mixed'
   readOnly: boolean
   version: string
   warning?: string
 }
-export interface OpenFile extends FileMetadata { text: string }
+export interface ClassInfo {
+  className: string; superName: string | null; majorVersion: number; minorVersion: number; accessFlags: number; byteLength: number
+  constantPoolCount: number; constants: { index: number; tag: string; value: string }[]
+  fieldsCount: number; methodsCount: number
+  fields: { name: string; descriptor: string; flags: number }[]; methods: { name: string; descriptor: string; flags: number }[]
+  interfaces: string[]; displayTruncated: boolean
+}
+export interface HexPage { offset: number; totalLength: number; nextOffset: number | null; text: string }
+export interface TextOpenFile extends FileMetadata { kind?: 'text'; text: string }
+export interface JavaClassOpenFile extends FileMetadata { kind: 'javaClass'; text: ''; classInfo: ClassInfo }
+export type OpenFile = TextOpenFile | JavaClassOpenFile
 export interface OpenBatch { files: OpenFile[]; errors: string[] }
 export interface SaveTarget { token: string; path: string; version: string | null }
 export interface Preferences {
@@ -28,4 +38,5 @@ export interface FileGateway {
   release(token: string): Promise<void>
   preferences(): Promise<Preferences>
   persistLayout(layout: Preferences['layout']): Promise<void>
+  readClassHex?(token: string, expectedVersion: string, offset: number): Promise<HexPage>
 }

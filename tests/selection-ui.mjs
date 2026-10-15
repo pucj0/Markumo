@@ -1,3 +1,4 @@
+import {setMarkdownMode,viewCommand} from './menu-helpers.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -30,18 +31,18 @@ try {
   assert.equal(await page.evaluate(() => { const m = document.querySelector('#app').__vue_app__._instance.setupState.manager; return m.getText(m.activeId) }), '')
   await editor().press('Control+y')
   assert.equal(await editor().innerText(), text)
-  await page.getByTitle('双 Pane 分栏编辑 (Split Pane)', { exact: true }).click()
+  await viewCommand(page,'编辑器分栏')
   await page.locator('.secondary-pane .cm-content').waitFor()
   await checkSelection(page, { output, name: 'light-secondary', pane: 'secondary' })
-  await page.getByTitle('关闭分栏', { exact: true }).click()
+  await viewCommand(page,'编辑器分栏')
   results.push({ name: '双窗格选区、源文本与撤销/重做保留', result: 'PASS' })
   await page.getByRole('tab', { name: /README.md/ }).click()
-  await page.getByRole('button', { name: '源码', exact: true }).click()
+  await setMarkdownMode(page,'源码')
   await editor().click(); await editor().press('Control+a'); await page.keyboard.insertText(text)
   for (const value of ['dark', 'light']) {
     await theme(value)
     for (const mode of ['源码', '即时排版', '双栏']) {
-      await page.getByRole('button', { name: mode, exact: true }).click()
+      await setMarkdownMode(page,mode)
       await checkSelection(page, { output, name: `${value}-md-${mode}` })
     }
     results.push({ name: `${value}: Markdown Source/Live/Split 真实选区像素`, result: 'PASS' })

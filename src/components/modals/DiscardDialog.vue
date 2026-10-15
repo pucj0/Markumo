@@ -5,7 +5,7 @@
       <p>{{ name }} 有未保存的修改。</p>
       <p>放弃后无法恢复这些修改。保存失败或取消选择时会保留文档。</p>
       <div class="actions">
-        <button :disabled="busy" @click="close">继续编辑</button>
+        <button :disabled="busy" @click="cancel">继续编辑</button>
         <button class="discard" :disabled="busy" @click="discard">放弃修改并关闭</button>
         <button :disabled="!canSave || busy" :title="canSave ? '' : '需要 Tauri 桌面版'" @click="$emit('save')">保存并关闭</button>
       </div>
@@ -16,9 +16,10 @@
 import { ref } from 'vue'
 import { useModal } from '../../features/shell/useModal'
 const props = defineProps<{ canSave: boolean; busy: boolean }>()
-const emit = defineEmits<{ (e: 'discard'): void; (e: 'save'): void }>()
+const emit = defineEmits<{ (e: 'discard'): void; (e: 'save'): void; (e:'cancel'):void }>()
 const { visible, dialogRef, open: openModal, close, handleKeydown: modalKeydown } = useModal()
-function handleKeydown(event: KeyboardEvent) { if (props.busy) { event.preventDefault(); return }; modalKeydown(event) }
+function cancel(){close();emit('cancel')}
+function handleKeydown(event: KeyboardEvent) { if (event.isComposing) return; if (props.busy) { event.preventDefault(); return }; if(event.key==='Escape'){event.preventDefault();cancel()}else modalKeydown(event) }
 const name = ref('')
 function open(documentName: string) { name.value = documentName; openModal() }
 function discard() { close(); emit('discard') }

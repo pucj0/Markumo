@@ -2,45 +2,20 @@
   <header class="topbar" @mousedown="dragWindow" @dblclick="maximizeFromHeader">
     <div class="brandarea">
       <div class="app-brand"><img class="logo" src="/logo.png" alt="LightEdit 标志" width="26" height="26" /><span class="brand">LightEdit</span></div>
-      <AppMenu :groups="menuGroups" />
-      <span class="workspace-name">{{ workspaceTitle }}</span>
+      <AppMenu :groups="menuGroups" :registry="commandRegistry" @execute="$emit('execute-command',$event)" />
     </div>
 
     <button
       class="quickbtn"
-      title="Ctrl+P 快速打开"
-      @click="$emit('open-palette', 'all')"
+      :title="`${shortcutLabel(quickShortcut)} 快速打开`"
+      @click="$emit('open-palette', 'file')"
     >
       <Icon name="search" />
       <span class="quick-label">文件和命令…</span>
-      <span class="kbd">Ctrl P</span>
+      <span class="kbd">{{ shortcutLabel(quickShortcut) }}</span>
     </button>
 
     <div class="topright">
-      <button class="ib" aria-label="保存文件" :title="desktop ? '保存 (Ctrl+S) · 另存为 (Ctrl+Shift+S)' : '保存需要 Tauri 桌面版'" :disabled="!desktop || fileBusy" @click="$emit('save-file')"><Icon name="save" /></button>
-      <div class="switch">
-        <button
-          :class="{ on: appMode === 'single' }"
-          @click="$emit('set-mode', 'single')"
-        >
-          单文件
-        </button>
-        <button
-          :class="{ on: appMode === 'workspace' }"
-          @click="$emit('set-mode', 'workspace')"
-        >
-          工作区
-        </button>
-      </div>
-
-      <button
-        class="ib"
-        :class="{ on: focusMode }"
-        title="专注模式"
-        @click="$emit('toggle-focus')"
-      >
-        <Icon name="max" />
-      </button>
 
 
       <button
@@ -68,20 +43,21 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
 import Icon from '../common/Icon.vue'
 import AppMenu from './AppMenu.vue'
-import type { AppMode, ThemePreference, PaletteAction } from '../../types'
+import type { AppMode, ThemePreference } from '../../types'
+import type { MenuGroup, CommandRegistry } from '../../features/shell/menuModel'
+import { shortcutLabel } from '../../features/shell/editorSettings'
 
 const props = defineProps<{
   appMode: AppMode
   theme: ThemePreference
   focusMode: boolean
-  activeFileName?: string
-  workspaceName?: string
   desktop: boolean
   fileBusy: boolean
-  menuGroups: { title: string; items: PaletteAction[] }[]
+  menuGroups: MenuGroup[]
+  commandRegistry: CommandRegistry
+  quickShortcut: string
 }>()
 
 async function windowAction(action: 'minimize' | 'maximize' | 'close') {
@@ -110,13 +86,9 @@ defineEmits<{
   (e: 'open-file'): void
   (e: 'save-file'): void
   (e: 'open-palette', category: 'action' | 'file' | 'all'): void
+  (e:'execute-command',id:string):void
 }>()
 
-const workspaceTitle = computed(() => {
-  return props.appMode === 'workspace'
-    ? props.workspaceName || '未打开工作区'
-    : props.activeFileName || '独立文件'
-})
 </script>
 
 <style scoped>
@@ -155,16 +127,6 @@ const workspaceTitle = computed(() => {
   letter-spacing: -0.3px;
 }
 
-.workspace-name {
-  max-width: 130px;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  border-left: 1px solid var(--line);
-  padding-left: 10px;
-}
 
 .quickbtn {
   width: 100%;
@@ -198,7 +160,7 @@ const workspaceTitle = computed(() => {
 .quickbtn .kbd { flex: none; }
 
 @media (max-width: 1100px) {
-  .workspace-name,.brand { display: none; }
+  .brand { display: none; }
   .topbar { gap: 8px; }
 }
 @media (max-width: 900px) {
@@ -206,9 +168,7 @@ const workspaceTitle = computed(() => {
   .topbar { grid-template-columns: auto 32px auto; gap:6px;justify-content:space-between }
   .quickbtn { padding:0;justify-content:center }
   .topright > .ib:not([title='设置']) { display:none }
-  .switch button { padding: 3px 6px; white-space: nowrap; }
 }
-@media(max-width:640px) { .topright .switch { display:none } }
 
 .topright {
   display: flex;
@@ -221,25 +181,4 @@ const workspaceTitle = computed(() => {
 .window-controls button:hover { background:var(--hover);color:var(--bright) }
 .window-controls .window-close:hover { background:#c94048;color:#fff }
 
-.switch {
-  display: flex;
-  background: var(--soft);
-  border-radius: 7px;
-  padding: 2px;
-  margin-right: 6px;
-}
-
-.switch button {
-  padding: 3px 9px;
-  font-size: 11px;
-  border-radius: 5px;
-  color: var(--sub);
-  transition: all 0.15s;
-}
-
-.switch button.on {
-  background: var(--paper);
-  color: var(--bright);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-}
 </style>
