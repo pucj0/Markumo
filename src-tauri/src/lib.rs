@@ -46,7 +46,7 @@ fn activate(app:&tauri::AppHandle,label:&str,paths:&[PathBuf]){
     let _=window.emit("external-activate",paths.to_vec());
 }
 
-/// External open router. One decision point for every file handed to LightEdit
+/// External open router. One decision point for every file handed to Markumo
 /// from the shell (double-click, "open with", context menu, second instance).
 ///
 /// Rules:
@@ -182,5 +182,5 @@ pub fn run() {
             commands::workspace::reveal_in_explorer,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running LightEdit");
+        .expect("error while running Markumo");
 }

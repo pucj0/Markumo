@@ -107,6 +107,7 @@ const isMarkdownDoc = computed(() => {
 const outlineItems = computed<OutlineItem[]>(() => {
   if (!props.doc) return []
   const state = props.manager.getState(props.doc.id)
+  revision.value
   return extractOutline(props.doc, state)
 })
 const outlineNotice = computed(() => {
@@ -119,7 +120,9 @@ const outlineNotice = computed(() => {
 
 function handleSelectOutline(item: OutlineItem) {
   if (props.doc) {
-    props.manager.revealPosition(props.doc.id, item.lineNumber, 1)
+    const state=props.manager.getState(props.doc.id)
+    const column=state&&item.from!==undefined?item.from-state.doc.lineAt(item.from).from+1:1
+    props.manager.revealPosition(props.doc.id, item.lineNumber, column)
   }
 }
 

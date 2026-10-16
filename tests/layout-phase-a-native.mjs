@@ -8,7 +8,7 @@ const root=dirname(dirname(fileURLToPath(import.meta.url))),output=join(root,'te
 const profile=join(output,'profile'),paths=['a.txt','b.txt','c.txt'].map(name=>join(output,name))
 const {chromium}=createRequire(process.env.LIGHTEDIT_PLAYWRIGHT_PACKAGE||import.meta.url)('playwright')
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms))
-assert.equal(execFileSync('powershell.exe',['-NoProfile','-Command','Get-Process lightedit -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'],{encoding:'utf8'}).trim(),'','Preserve user data: close existing LightEdit before isolated native test.')
+assert.equal(execFileSync('powershell.exe',['-NoProfile','-Command','Get-Process lightedit,markumo -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'],{encoding:'utf8'}).trim(),'','Preserve user data: close existing LightEdit before isolated native test.')
 await mkdir(profile,{recursive:true})
 await writeFile(join(profile,'editor-settings.json'),JSON.stringify({autoSave:false}))
 await Promise.all(paths.map((path,i)=>writeFile(path,`file ${i}\r\n中文`)))
@@ -31,7 +31,7 @@ try{
   assert.ok(browser)
   for(let i=0;i<100;i++){page=browser.contexts().flatMap(context=>context.pages()).find(page=>page.url().startsWith('http://localhost:1420'));if(page)break;await pause(100)}
   assert.ok(page);page.on('pageerror',error=>errors.push(error.message))
-  page.on('console',async message=>{if(message.text().startsWith('[LightEdit close]')){const args=message.args();try{diagnostics.push(await args[1].jsonValue())}catch{}}})
+  page.on('console',async message=>{if(message.text().startsWith('[Markumo close]')){const args=message.args();try{diagnostics.push(await args[1].jsonValue())}catch{}}})
   await page.getByRole('tab',{name:'c.txt',exact:true}).waitFor({timeout:15000})
   await test('Native three disk files / two panes / closing every tab leaves no editable orphan',async()=>{
     await page.evaluate(()=>document.querySelector('#app').__vue_app__._instance.setupState.manager.splitEditor())

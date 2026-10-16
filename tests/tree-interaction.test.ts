@@ -54,7 +54,7 @@ describe('Tree Click Mode and Preferences', () => {
 
     // 内部对象 markdownTypography 的字段也必须严格匹配
     const mdKeys = Object.keys(persisted.markdownTypography).sort()
-    const expectedMdKeys = ['width', 'fontSize', 'fontFamily', 'lineHeight', 'codeLineNumbers', 'codeWrap'].sort()
+    const expectedMdKeys = ['width', 'fontSize', 'fontFamily', 'lineHeight', 'codeLineNumbers', 'codeWrap', 'imageBorder'].sort()
     expect(mdKeys).toEqual(expectedMdKeys)
 
     // 内部对象 imageRules 的字段也必须严格匹配

@@ -81,7 +81,7 @@ try {
   await page.getByTitle('跟随系统 · 切换深色主题', { exact: true }).click(); await appearance('dark')
   results.push({ name: '选择持久化/重载、显式主题忽略系统变化、顶部三态循环', result: 'PASS' })
 
-  assert.equal(await page.getByAltText('LightEdit 标志').evaluate(img => img.complete && img.naturalWidth === 256), true)
+  assert.equal(await page.getByAltText('Markumo 标志').evaluate(img => img.complete && img.naturalWidth === 512), true)
   assert.equal((await page.request.get(new URL('/favicon.png', url).href)).status(), 200)
   for (const theme of ['dark', 'light']) {
     await selectTheme(theme); await appearance(theme)

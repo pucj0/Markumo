@@ -17,6 +17,10 @@ import { ImagePreview } from './ImagePreview'
 import { FenceAutocomplete } from './FenceAutocomplete'
 import { HtmlBlockView } from './HtmlBlockView'
 import { HtmlInlineView } from './HtmlInlineView'
+import { HtmlSourceView, isHtmlSourceNode } from './HtmlSourceView'
+import { inlineHtmlRanges } from './HtmlSourceRanges'
+import { markdownParser, parseMarkdown } from './MarkdownParser'
+import { serializeBlock } from './MarkdownSerializer'
 import { createLiveSearchPlugin } from './plugins/LiveSearch'
 import { LiveSearchController } from './LiveSearchController'
 import { createNodeTargetPlugin, nodeTargetKey, type NodeTarget } from './plugins/NodeTarget'
@@ -40,8 +44,8 @@ export class MarkdownEditorController implements LiveEditor {
   readonly view: EditorView
   bridge: MarkdownSourceBridge
   readonly dom = document.createElement('div')
-  private tableTools = document.createElement('div')
-  private tableMenu = document.createElement('div')
+  private tableTools!: HTMLElement
+  private tableToolbars = new Map<number, HTMLElement>()
   private imagePreview: ImagePreview
   private properties = document.createElement('div')
   private selectionBubble = document.createElement('div')
@@ -49,6 +53,7 @@ export class MarkdownEditorController implements LiveEditor {
   private fenceAutocomplete: FenceAutocomplete
   private codeViews = new Set<CodeBlockView>()
   private liveImages = new Set<LiveImageView>()
+  private htmlViews = new Set<HtmlSourceView>()
   private extensionViews = new Set<() => void>()
   private compositionActive = false
   private onCompositionStart = () => {
@@ -88,11 +93,8 @@ export class MarkdownEditorController implements LiveEditor {
     this.dom.className = 'markdown-live'
     this.dom.setAttribute('aria-label', 'Markdown 所见即所得编辑器')
 
-    // Floating Table Toolbar (anchored to active table)
-    this.tableTools.className = 'md-table-tools md-table-floating-bar'
-    this.tableTools.setAttribute('role', 'toolbar')
-    this.tableTools.setAttribute('aria-label', '表格工具')
-    this.tableTools.hidden = true
+    // Table Toolbar (always anchored directly above table)
+    this.tableTools = this.createTableToolbar()
 
     // Floating Property Popover (anchored to link/image/math)
     this.properties.className = 'md-properties md-anchored-popover'
@@ -110,56 +112,6 @@ export class MarkdownEditorController implements LiveEditor {
     parent.append(this.dom)
     this.imagePreview = new ImagePreview(this.dom)
     this.fenceAutocomplete = new FenceAutocomplete(this.dom)
-
-    // Build Table Tools buttons
-    const tableCommands: [string, Command][] = [
-      ['前插行', addRowBefore],
-      ['后插行', addRowAfter],
-      ['删除行', deleteRow],
-      ['前插列', addColumnBefore],
-      ['后插列', addColumnAfter],
-      ['删除列', deleteColumn],
-    ]
-    const iconButton = (label: string, path: string, action: () => void) => {
-      const button = document.createElement('button')
-      button.type = 'button'; button.title = label; button.setAttribute('aria-label', label)
-      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-      svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.6');svg.setAttribute('stroke-linecap','round');svg.setAttribute('aria-hidden','true')
-      const shape = document.createElementNS(svg.namespaceURI,'path');shape.setAttribute('d',path);svg.append(shape);button.append(svg)
-      button.onmousedown = event => event.preventDefault()
-      button.onclick = action
-      return button
-    }
-    const toggleMenu = () => {
-      this.tableMenu.hidden = !this.tableMenu.hidden
-      this.tableTools.querySelectorAll('[aria-expanded]').forEach(el=>el.setAttribute('aria-expanded',String(!this.tableMenu.hidden)))
-    }
-    const grid = iconButton('表格行列操作','M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',toggleMenu)
-    grid.setAttribute('aria-expanded','false')
-    this.tableTools.append(grid)
-    for(const [label,value,path] of [
-      ['左对齐','left','M3 5h18 M3 10h12 M3 15h18 M3 20h12'],
-      ['居中对齐','center','M3 5h18 M6 10h12 M3 15h18 M6 20h12'],
-      ['右对齐','right','M3 5h18 M9 10h12 M3 15h18 M9 20h12'],
-    ]) {
-      const button=iconButton(label,path,()=>this.run(this.align(value),true));button.dataset.align=value;this.tableTools.append(button)
-    }
-    const spacer=document.createElement('span');spacer.className='md-table-tools-spacer';this.tableTools.append(spacer)
-    const more=iconButton('更多操作','M12 4h.01 M12 12h.01 M12 20h.01',toggleMenu);more.setAttribute('aria-expanded','false')
-    this.tableTools.append(more,iconButton('删除表格','M4 6h16 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7',()=>this.run(deleteTable,true)))
-    this.tableMenu.className='md-table-menu';this.tableMenu.hidden=true;this.tableMenu.setAttribute('aria-label','表格行列操作菜单')
-    for (const [label, command] of tableCommands) {
-      const button = document.createElement('button')
-      button.type = 'button'
-      button.textContent = label
-      button.onmousedown = event => event.preventDefault()
-      button.onclick = () => { this.tableMenu.hidden=true;this.tableTools.querySelectorAll('[aria-expanded]').forEach(el=>el.setAttribute('aria-expanded','false'));this.run(command, true) }
-      this.tableMenu.append(button)
-    }
-    this.tableTools.append(this.tableMenu)
-    const closeTableMenu=()=>{this.tableMenu.hidden=true;this.tableTools.querySelectorAll('[aria-expanded]').forEach(el=>el.setAttribute('aria-expanded','false'))}
-    this.tableTools.onkeydown=event=>{if(event.key==='Escape'&&!this.tableMenu.hidden){event.preventDefault();event.stopPropagation();closeTableMenu();more.focus()}}
-    this.dom.addEventListener('mousedown',event=>{if(!this.tableTools.contains(event.target as globalThis.Node))closeTableMenu()})
 
     // Input Rules
     const rules = inputRules({
@@ -213,9 +165,23 @@ export class MarkdownEditorController implements LiveEditor {
           new Plugin({ props: { decorations: state => {
             const decorations = this.inlineSource?.decorations(state.doc).find() || []
             const { $from } = state.selection
-            if(isInTable(state)) {
-              for(let depth=$from.depth;depth>0;depth--)if($from.node(depth).type===s.nodes.table){
-                decorations.push(Decoration.widget($from.before(depth),this.tableTools,{key:'active-table-tools',side:-1,stopEvent:()=>true,ignoreSelection:true}));break
+            const tablePositions = new Set<number>()
+            state.doc.descendants((node, pos) => {
+              if (node.type === s.nodes.table) {
+                tablePositions.add(pos)
+                decorations.push(Decoration.widget(pos, this.tableToolbarFor(pos), {
+                  key: `table-tools-${pos}`,
+                  side: -1,
+                  stopEvent: () => true,
+                  ignoreSelection: true
+                }))
+                return false
+              }
+            })
+            for (const [pos, bar] of this.tableToolbars) {
+              if (!tablePositions.has(pos)) {
+                if (bar !== this.tableTools) bar.remove()
+                this.tableToolbars.delete(pos)
               }
             }
             if ($from.parent.type === s.nodes.heading) {
@@ -238,11 +204,39 @@ export class MarkdownEditorController implements LiveEditor {
             'Mod-`': toggleMark(s.marks.code),
             'Backspace': (state, dispatch) => {
               const {empty,$from}=state.selection
+              if (empty && $from.parent.type === s.nodes.paragraph && $from.parent.content.size === 0) {
+                if ($from.pos === 1 && state.doc.childCount > 1) {
+                  const tr = state.tr.delete($from.before(), $from.after())
+                  const sel = Selection.near(tr.doc.resolve(1))
+                  tr.setSelection(sel)
+                  dispatch?.(tr.setMeta('isolated', true).scrollIntoView())
+                  return true
+                }
+              }
+              if(empty&&$from.parentOffset===0&&$from.depth>0){
+                const before=$from.before(),previous=state.doc.resolve(before).nodeBefore
+                const html=previous&&[...this.htmlViews].find(html=>html.getPos()===before-previous.nodeSize)
+                if(html){html.startEditing();return true}
+              }
               if(!empty || $from.parent.type!==s.nodes.heading || $from.parentOffset!==0)return false
               dispatch?.(state.tr.setNodeMarkup($from.before(),s.nodes.paragraph,{sourceId:$from.parent.attrs.sourceId}).setMeta('isolated',true).scrollIntoView())
               return true
             },
-            'Enter': chainCommands(this.enterFence,splitListItem(s.nodes.list_item, { checked: null }), liftEmptyBlock, baseKeymap.Enter),
+            'Delete': (state, dispatch) => {
+              const {empty,$from}=state.selection
+              if (empty && $from.parent.type === s.nodes.paragraph && $from.parent.content.size === 0) {
+                if ($from.after() === state.doc.content.size && state.doc.childCount > 1) {
+                  const tr = state.tr.delete($from.before(), $from.after())
+                  const sel = Selection.near(tr.doc.resolve(tr.doc.content.size), -1)
+                  tr.setSelection(sel)
+                  dispatch?.(tr.setMeta('isolated', true).scrollIntoView())
+                  return true
+                }
+              }
+              return false
+            },
+            'Enter': chainCommands(this.enterHtml,this.enterFence,splitListItem(s.nodes.list_item, { checked: null }), liftEmptyBlock, baseKeymap.Enter),
+            'F2': this.enterHtml,
             'Tab': chainCommands(this.nextCell(1), sinkListItem(s.nodes.list_item)),
             'Shift-Tab': chainCommands(this.nextCell(-1), liftListItem(s.nodes.list_item)),
             'Shift-Enter': (state, dispatch) => {
@@ -251,6 +245,12 @@ export class MarkdownEditorController implements LiveEditor {
             },
             'Mod-Enter': exitCode,
             'Escape': () => {
+              const openMenu = this.dom.querySelector<HTMLElement>('.md-table-menu:not([hidden])')
+              if (openMenu) {
+                openMenu.hidden = true
+                this.dom.querySelectorAll('.md-table-tools [aria-expanded="true"]').forEach(el => el.setAttribute('aria-expanded', 'false'))
+                return true
+              }
               if (!this.properties.hidden) {
                 this.properties.hidden = true
                 return true
@@ -274,6 +274,21 @@ export class MarkdownEditorController implements LiveEditor {
                   return true
                 }
                 return false
+              },
+              handleTextInput: (view,from,to,text) => {
+                if(view.composing||this.compositionActive||!text.includes('>'))return false
+                const $from=view.state.doc.resolve(from)
+                if(!$from.parent.isTextblock||$from.parent.type===s.nodes.code_block)return false
+                const tr=view.state.tr.insertText(text,from,to),$at=tr.doc.resolve(from+text.length)
+                const raw=serializeBlock($at.parent)
+                if(!/<\/[a-z][\w-]*\s*>$/i.test(raw)&&!/<(?:img|br|hr)\b[^>]*>$/i.test(raw))return false
+                if(!raw.includes('<')||/^\s*</.test(raw)&&/^\s*<(?:h[1-6]|div|table|details|svg|p)(?:\s|>)/i.test(raw))return false
+                const parsed=markdownParser.parse(raw,this.bridge.environment).firstChild
+                if(!parsed?.isTextblock||!parsed.content.content.some(node=>node.type===s.nodes.html_inline))return false
+                // Only this changed textblock is reparsed; canonical source is
+                // validated by the bridge before the derived node is accepted.
+                tr.replaceWith($at.start(),$at.end(),parsed.content)
+                view.dispatch(tr);return true
               },
               handleDOMEvents: {
                 focus: () => { options.focus(); return false },
@@ -361,15 +376,15 @@ export class MarkdownEditorController implements LiveEditor {
           }
           return code
         },
-        html_block: (node, view, getPos) => new HtmlBlockView(node, view, getPos, this.options.resources, this.options.history),
-        html_inline: (node, view, getPos) => new HtmlInlineView(node, view, getPos, this.options.resources),
+        html_block: (node, view, getPos) => this.htmlView(node,view,getPos),
+        html_inline: (node, view, getPos) => this.htmlView(node,view,getPos,true),
         protected_source: (node, view, getPos) => {
           const source = String(node.attrs.source || '').trim()
           if (/^\$\$[\s\S]*\$\$$/.test(source)) {
             return this.mathView(node, view, getPos, true)
           }
-          if (node.attrs.label === 'HTML（安全源码）' || /^\s*<[a-zA-Z][\s\S]*>/m.test(source)) {
-            return new HtmlBlockView(node, view, getPos, this.options.resources, this.options.history)
+          if (isHtmlSourceNode(node)) {
+            return this.htmlView(node,view,getPos)
           }
           return this.protectedView(node, view, getPos)
         },
@@ -554,10 +569,12 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   get composing() {
-    return this.compositionActive || this.view.composing || !!this.inlineSource?.composing || !!this.inlineSource?.pending || [...this.codeViews].some(code => code.cm.compositionStarted)
+    return this.compositionActive || this.view.composing || !!this.inlineSource?.composing || !!this.inlineSource?.pending || [...this.codeViews].some(code => code.cm.compositionStarted) || [...this.htmlViews].some(html=>html.composing)
   }
 
   get selection() {
+    for(const html of this.htmlViews){const selection=html.sourceSelection;if(selection)return selection}
+    if(this.inlineSource){const selection=this.inlineSource.selection();if(selection)return {anchor:this.inlineSource.sourceFrom+selection.anchor,head:this.inlineSource.sourceFrom+selection.head}}
     const sel = this.view.state.selection
     return { anchor: this.bridge.sourcePosition(sel.anchor), head: this.bridge.sourcePosition(sel.head) }
   }
@@ -652,6 +669,7 @@ export class MarkdownEditorController implements LiveEditor {
 
   typography(settings: MarkdownTypography) {
     this.settings = settings
+    this.dom.dataset.imageBorder = String(settings.imageBorder !== false)
     const style = this.dom.style
     style.setProperty('--md-content-width', `${settings.width}px`)
     style.setProperty('--md-font-size', `${settings.fontSize}px`)
@@ -665,6 +683,68 @@ export class MarkdownEditorController implements LiveEditor {
         : '"JetBrains Mono", "Cascadia Code", Consolas, monospace'
     )
     for (const code of this.codeViews) code.typography(settings)
+  }
+
+  private htmlRange(node:Node,pos:number){
+    let base=0
+    for(const block of this.bridge.blocks){
+      if(pos>=base+block.node.nodeSize){base+=block.node.nodeSize;continue}
+      if(node.type!==s.nodes.html_inline)return {from:block.from,to:block.to}
+      let ordinal=0,consumed=0,result:{from:number;to:number;htmlOrdinal:number}|null=null
+      const syntaxRanges=inlineHtmlRanges(block.raw)
+      block.node.descendants((child,offset)=>{
+        if(child.type!==s.nodes.html_inline)return
+        const range=syntaxRanges.find(range=>range.from>=consumed)
+        if(!range)return
+        const end=range.from+String(child.attrs.source).length
+        if(block.raw.slice(range.from,end)!==child.attrs.source)return
+        consumed=end
+        if(base+offset+1===pos)result={from:block.from+range.from,to:block.from+end,htmlOrdinal:ordinal}
+        ordinal++
+      })
+      return result
+    }
+    return null
+  }
+
+  private htmlView(node:Node,view:EditorView,getPos:()=>number|undefined,inline=false){
+    const html=new (inline?HtmlInlineView:HtmlBlockView)(node,view,getPos,this.options.resources,{
+      range:(node,pos)=>this.htmlRange(node,pos),
+      publish:(node,pos,raw)=>{
+        if(this.disposed||this.options.readOnly?.()||view.state.doc.nodeAt(pos)!==node)return false
+        const range=this.htmlRange(node,pos)
+        if(!range)return false
+        let tr=view.state.tr.setNodeMarkup(pos,undefined,{...node.attrs,source:raw})
+        if(inline)tr=tr.setMeta('inlineSourcePatch',{...range,from:range.from,to:range.to,insert:raw})
+        view.dispatch(tr)
+        const next=view.state.doc.nodeAt(pos)
+        return next?.attrs.source===raw&&this.bridge.source.slice(range.from,range.from+raw.length)===raw
+      },
+      selected:(anchor,head)=>this.options.selected(anchor,head),
+      history:forward=>this.options.history(forward),readOnly:()=>!!this.options.readOnly?.(),
+      settled:()=>{if(!this.disposed&&this.pendingSource!==null&&!this.composing){const source=this.pendingSource;this.pendingSource=null;this.sync(source)}},
+    })
+    this.htmlViews.add(html)
+    const destroy=html.destroy.bind(html)
+    html.destroy=()=>{this.htmlViews.delete(html);destroy()}
+    return html
+  }
+
+  private enterHtml:Command=(state,dispatch)=>{
+    if(state.selection instanceof NodeSelection){
+      const html=[...this.htmlViews].find(html=>html.getPos()===state.selection.from)
+      if(html){html.startEditing();return true}
+    }
+    const {$from,empty}=state.selection
+    if(!empty||$from.parent.type!==s.nodes.paragraph||!$from.parent.textContent.trimStart().startsWith('<'))return false
+    if(!$from.parent.content.content.every(node=>node.isText&&!node.marks.length))return false
+    const raw=$from.parent.textContent,parsed=parseMarkdown(raw).doc
+    if(parsed.childCount!==1||parsed.firstChild?.type!==s.nodes.protected_source)return false
+    if(parsed.firstChild.attrs.label!=='HTML（安全源码）')return false
+    const block=parsed.firstChild.type.create({...parsed.firstChild.attrs,sourceId:$from.parent.attrs.sourceId})
+    let tr=state.tr.replaceWith($from.before(),$from.after(),[block,s.nodes.paragraph.create()])
+    tr=tr.setSelection(TextSelection.near(tr.doc.resolve($from.before()+block.nodeSize+1)))
+    dispatch?.(tr.setMeta('isolated',true).scrollIntoView());return true
   }
 
   private run(command: Command, isolated = false) {
@@ -792,6 +872,159 @@ export class MarkdownEditorController implements LiveEditor {
     el.style.zIndex = '25'
   }
 
+  private tableToolbarFor(pos: number): HTMLElement {
+    let bar = this.tableToolbars.get(pos)
+    if (!bar) {
+      if (this.tableToolbars.size === 0) {
+        bar = this.tableTools
+      } else {
+        bar = this.createTableToolbar(pos)
+      }
+      this.tableToolbars.set(pos, bar)
+    }
+    bar.hidden = false
+    return bar
+  }
+
+  private createTableToolbar(tablePos?: number): HTMLElement {
+    const tableTools = document.createElement('div')
+    tableTools.className = 'md-table-tools md-table-floating-bar'
+    tableTools.setAttribute('role', 'toolbar')
+    tableTools.setAttribute('aria-label', '表格工具')
+    tableTools.hidden = false
+
+    const tableCommands: [string, Command][] = [
+      ['前插行', addRowBefore],
+      ['后插行', addRowAfter],
+      ['删除行', deleteRow],
+      ['前插列', addColumnBefore],
+      ['后插列', addColumnAfter],
+      ['删除列', deleteColumn],
+    ]
+    const iconButton = (label: string, path: string, action: () => void) => {
+      const button = document.createElement('button')
+      button.type = 'button'; button.title = label; button.setAttribute('aria-label', label)
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '1.6'); svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('aria-hidden', 'true')
+      const shape = document.createElementNS(svg.namespaceURI, 'path'); shape.setAttribute('d', path); svg.append(shape); button.append(svg)
+      button.onmousedown = event => event.preventDefault()
+      button.onclick = action
+      return button
+    }
+
+    const tableMenu = document.createElement('div')
+    tableMenu.className = 'md-table-menu'
+    tableMenu.hidden = true
+    tableMenu.setAttribute('aria-label', '表格行列操作菜单')
+
+    const closeTableMenu = () => {
+      tableMenu.hidden = true
+      tableTools.querySelectorAll('[aria-expanded]').forEach(el => el.setAttribute('aria-expanded', 'false'))
+    }
+
+    const toggleMenu = () => {
+      tableMenu.hidden = !tableMenu.hidden
+      tableTools.querySelectorAll('[aria-expanded]').forEach(el => el.setAttribute('aria-expanded', String(!tableMenu.hidden)))
+    }
+
+    const ensureTableFocus = () => {
+      let currentPos = tablePos
+      if (currentPos === undefined && this.view?.dom) {
+        const next = tableTools.nextElementSibling
+        if (next && next.tagName === 'TABLE') {
+          try {
+            currentPos = this.view.posAtDOM(next, 0) - 1
+          } catch { /* ignored */ }
+        }
+      }
+      if (currentPos !== undefined && this.view?.state) {
+        const { $from } = this.view.state.selection
+        let inCurrentTable = false
+        for (let depth = $from.depth; depth > 0; depth--) {
+          if ($from.before(depth) === currentPos) { inCurrentTable = true; break }
+        }
+        if (!inCurrentTable) {
+          const tableNode = this.view.state.doc.nodeAt(currentPos)
+          if (tableNode) {
+            let firstCellPos: number | undefined
+            this.view.state.doc.nodesBetween(currentPos, currentPos + tableNode.nodeSize, (n, p) => {
+              if ((n.type.name === 'table_cell' || n.type.name === 'table_header') && firstCellPos === undefined) {
+                firstCellPos = p
+              }
+            })
+            if (firstCellPos !== undefined) {
+              this.view.dispatch(this.view.state.tr.setSelection(TextSelection.near(this.view.state.doc.resolve(firstCellPos + 1))))
+              this.view.focus()
+            }
+          }
+        }
+      }
+    }
+
+    const grid = iconButton('表格行列操作', 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z', () => {
+      ensureTableFocus()
+      toggleMenu()
+    })
+    grid.setAttribute('aria-expanded', 'false')
+    tableTools.append(grid)
+
+    for (const [label, value, path] of [
+      ['左对齐', 'left', 'M3 5h18 M3 10h12 M3 15h18 M3 20h12'],
+      ['居中对齐', 'center', 'M3 5h18 M6 10h12 M3 15h18 M6 20h12'],
+      ['右对齐', 'right', 'M3 5h18 M9 10h12 M3 15h18 M9 20h12'],
+    ]) {
+      const button = iconButton(label, path, () => {
+        ensureTableFocus()
+        this.run(this.align(value), true)
+      })
+      button.dataset.align = value
+      tableTools.append(button)
+    }
+
+    const spacer = document.createElement('span')
+    spacer.className = 'md-table-tools-spacer'
+    tableTools.append(spacer)
+
+    const more = iconButton('更多操作', 'M12 4h.01 M12 12h.01 M12 20h.01', () => {
+      ensureTableFocus()
+      toggleMenu()
+    })
+    more.setAttribute('aria-expanded', 'false')
+
+    tableTools.append(more, iconButton('删除表格', 'M4 6h16 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7', () => {
+      ensureTableFocus()
+      this.run(deleteTable, true)
+    }))
+
+    for (const [label, command] of tableCommands) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.textContent = label
+      button.onmousedown = event => event.preventDefault()
+      button.onclick = () => {
+        closeTableMenu()
+        ensureTableFocus()
+        this.run(command, true)
+      }
+      tableMenu.append(button)
+    }
+    tableTools.append(tableMenu)
+
+    tableTools.onkeydown = event => {
+      if (event.key === 'Escape' && !tableMenu.hidden) {
+        event.preventDefault()
+        event.stopPropagation()
+        closeTableMenu()
+        more.focus()
+      }
+    }
+    this.dom.addEventListener('mousedown', event => {
+      if (!tableTools.contains(event.target as globalThis.Node)) closeTableMenu()
+    })
+
+    return tableTools
+  }
+
   private updateTools() {
     this.imagePreview?.refresh()
     for(const image of this.liveImages)image.refreshLayout()
@@ -804,12 +1037,19 @@ export class MarkdownEditorController implements LiveEditor {
     }
     this.searchController?.updateCount()
     const inTable = isInTable(this.view.state)
-    this.tableTools.hidden = !inTable
-    if (!inTable) { this.tableMenu.hidden=true;this.tableTools.querySelectorAll('[aria-expanded]').forEach(el=>el.setAttribute('aria-expanded','false')) }
-    const { $from }=this.view.state.selection
-    let alignment: string | null=null
-    for(let depth=$from.depth;depth>0;depth--)if(['table_cell','table_header'].includes($from.node(depth).type.name)){alignment=$from.node(depth).attrs.align || 'left';break}
-    this.tableTools.querySelectorAll<HTMLButtonElement>('[data-align]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.align===alignment)))
+    const { $from } = this.view.state.selection
+    let alignment: string | null = null
+    if (inTable) {
+      for (let depth = $from.depth; depth > 0; depth--) {
+        if (['table_cell', 'table_header'].includes($from.node(depth).type.name)) {
+          alignment = $from.node(depth).attrs.align || 'left'
+          break
+        }
+      }
+    }
+    this.dom.querySelectorAll<HTMLButtonElement>('.md-table-tools [data-align]').forEach(button => {
+      button.setAttribute('aria-pressed', String(inTable && button.dataset.align === alignment))
+    })
     for (const refresh of this.extensionViews) refresh()
   }
 
@@ -818,6 +1058,7 @@ export class MarkdownEditorController implements LiveEditor {
     if (!editor) return
     this.dismissedInline = { from: editor.from, to: editor.to }
     this.inlineSource = null
+    const hadFocus = focus || document.activeElement === editor.input || editor.dom.contains(document.activeElement) || this.view.hasFocus()
     // Let the current input handler finish before removing its editing DOM.
     queueMicrotask(() => {
       if(this.inlineSource && this.inlineSource!==editor){editor.destroy();return}
@@ -825,7 +1066,7 @@ export class MarkdownEditorController implements LiveEditor {
       // the new DOM caret instead of restoring the old image/link selection.
       let nextSelection: Selection | undefined
       const native = document.getSelection()
-      if (!focus && native?.anchorNode && native.focusNode && this.view.dom.contains(native.anchorNode) && this.view.dom.contains(native.focusNode) && !editor.dom.contains(native.anchorNode)) {
+      if (native?.anchorNode && native.focusNode && this.view.dom.contains(native.anchorNode) && this.view.dom.contains(native.focusNode) && !editor.dom.contains(native.anchorNode)) {
         try {
           nextSelection=TextSelection.create(this.view.state.doc,this.view.posAtDOM(native.anchorNode,native.anchorOffset),this.view.posAtDOM(native.focusNode,native.focusOffset))
         } catch { /* Detached DOM selection: keep PM's current selection. */ }
@@ -833,10 +1074,13 @@ export class MarkdownEditorController implements LiveEditor {
       editor.destroy()
       if (!this.disposed) {
         if (this.pendingSource !== null) { const source=this.pendingSource; this.pendingSource=null; this.sync(source) }
-        if (focus) nextSelection=Selection.near(this.view.state.doc.resolve(Math.min(position ?? editor.to,this.view.state.doc.content.size)))
+        if (hadFocus && !nextSelection) {
+          const targetPos = Math.min(position ?? editor.from, this.view.state.doc.content.size)
+          nextSelection = Selection.near(this.view.state.doc.resolve(targetPos))
+        }
         if(nextSelection && nextSelection.$from.doc===this.view.state.doc)this.view.dispatch(this.view.state.tr.setSelection(nextSelection))
         else this.view.updateState(this.view.state)
-        if (focus) this.view.focus()
+        if (hadFocus) this.view.focus()
       }
     })
   }
@@ -931,6 +1175,7 @@ export class MarkdownEditorController implements LiveEditor {
     this.inlineSource = editor; this.dismissedInline = null
     this.view.updateState(this.view.state)
     editor.focus(Math.max(0, Math.min(range.raw.length, this.bridge.sourcePosition(pos) - range.sourceFrom)))
+    if (kind === 'image') this.options.selected(range.sourceTo, range.sourceTo)
   }
 
   private buildSelectionBubble() {
@@ -1077,18 +1322,47 @@ export class MarkdownEditorController implements LiveEditor {
         )
       }
       this.properties.hidden = true
+      this.currentAnchorEl = null
+      this.view.focus()
     })
 
     this.propertyButton('删除图片', () => {
       const target = this.currentPropertyNode(token)
-      if (target) {
-        this.view.dispatch(this.view.state.tr.delete(target.pos, target.pos + target.node.nodeSize).setMeta('isolated', true))
-      }
+      this.closeInline(false)
       this.properties.hidden = true
+      this.currentAnchorEl = null
+      if (target) {
+        const doc = this.view.state.doc
+        const $pos = doc.resolve(target.pos)
+        const parent = $pos.parent
+        const isStandalone =
+          parent.type === s.nodes.paragraph &&
+          parent.childCount === 1 &&
+          parent.firstChild === target.node
+        const canDeleteParagraph = isStandalone && (doc.childCount > 1 || $pos.depth > 1)
+
+        let tr = this.view.state.tr
+        if (canDeleteParagraph) {
+          const from = $pos.before()
+          const to = $pos.after()
+          tr = tr.delete(from, to)
+          const targetPos = Math.min(from, tr.doc.content.size)
+          tr = tr.setSelection(Selection.near(tr.doc.resolve(targetPos)))
+        } else {
+          tr = tr.delete(target.pos, target.pos + target.node.nodeSize)
+          const targetPos = Math.min(target.pos, tr.doc.content.size)
+          tr = tr.setSelection(Selection.near(tr.doc.resolve(targetPos)))
+        }
+        tr = tr.setMeta('isolated', true)
+        this.view.dispatch(tr)
+        this.view.focus()
+      }
     })
 
     this.propertyButton('关闭', () => {
       this.properties.hidden = true
+      this.currentAnchorEl = null
+      this.view.focus()
     })
 
     this.positionAnchoredElement(this.properties, anchorEl)
@@ -1244,6 +1518,7 @@ export class MarkdownEditorController implements LiveEditor {
       update: next => {
         if (next.type !== node.type) return false
         if (/^\$\$[\s\S]*\$\$$/.test(String(next.attrs.source).trim())) return false
+        if (isHtmlSourceNode(next)) return false
         node = next
         if (input.value !== next.attrs.source) input.value = next.attrs.source
         refresh()
@@ -1405,5 +1680,9 @@ export class MarkdownEditorController implements LiveEditor {
     this.codeViews.clear()
     this.liveImages.clear()
     this.extensionViews.clear()
+    for (const bar of this.tableToolbars.values()) {
+      if (bar !== this.tableTools) bar.remove()
+    }
+    this.tableToolbars.clear()
   }
 }

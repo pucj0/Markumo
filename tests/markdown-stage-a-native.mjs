@@ -9,7 +9,7 @@ const root=dirname(dirname(fileURLToPath(import.meta.url))),output=join(root,'te
 const workspace=join(output,'workspace'),profile=join(output,'profile'),documentPath=join(workspace,'docs/stage-a.md')
 const {chromium}=createRequire(process.env.LIGHTEDIT_PLAYWRIGHT_PACKAGE||import.meta.url)('playwright')
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms))
-assert.equal(execFileSync('powershell.exe',['-NoProfile','-Command','Get-Process lightedit -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'],{encoding:'utf8'}).trim(),'','Preserve user data: save and close existing LightEdit first.')
+assert.equal(execFileSync('powershell.exe',['-NoProfile','-Command','Get-Process lightedit,markumo -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'],{encoding:'utf8'}).trim(),'','Preserve user data: save and close existing LightEdit first.')
 await Promise.all([mkdir(join(workspace,'docs/assets'),{recursive:true}),mkdir(profile,{recursive:true})])
 const original=(await readFile(join(root,'tests/fixtures/markdown-stage-a.md'),'utf8')).replace(/\r?\n/g,'\r\n')
 const source=original.replace(/\r\n/g,'\n'),bom=Buffer.from([0xef,0xbb,0xbf])

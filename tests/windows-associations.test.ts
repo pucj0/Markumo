@@ -53,7 +53,7 @@ describe('Windows File Associations & Context Menu Configuration', () => {
     expect(hooksContent).not.toMatch(/WriteRegStr\s+SHELL_CONTEXT\s+"Software\\Classes\\\.\$\{EXT\}"\s+""/)
   })
 
-  it('NSIS_HOOK_POSTINSTALL registers Applications\\lightedit.exe and SupportedTypes for document extensions', () => {
+  it('NSIS_HOOK_POSTINSTALL registers Applications\\markumo.exe and SupportedTypes for document extensions', () => {
     expect(hooksContent).toContain('!macro NSIS_HOOK_POSTINSTALL')
     expect(hooksContent).toContain('Software\\Classes\\Applications\\${MAINBINARYNAME}.exe')
     expect(hooksContent).toContain('FriendlyAppName')
@@ -89,8 +89,8 @@ describe('Windows File Associations & Context Menu Configuration', () => {
   })
 
   it('NSIS_HOOK_POSTINSTALL registers SystemFileAssociations right-click menu with proper quotes', () => {
-    // "使用 LightEdit 打开" in right-click context menu
-    expect(hooksContent).toContain('"使用 LightEdit 打开"')
+    // "使用 Markumo 打开" in right-click context menu
+    expect(hooksContent).toContain('"使用 Markumo 打开"')
     expect(hooksContent).toContain('SystemFileAssociations\\text\\shell\\LightEdit')
     expect(hooksContent).toContain('SystemFileAssociations\\.${EXT}\\shell\\LightEdit')
 

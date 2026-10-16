@@ -1,5 +1,5 @@
 <template>
-  <div ref="previewContainerRef" class="split-preview-pane">
+  <div ref="previewContainerRef" class="split-preview-pane" :data-image-border="imageBorder !== false">
     <div
       ref="contentRef"
       class="split-preview-content markdown-body"
@@ -19,13 +19,14 @@ import { openMarkdownLink } from './links'
 import { createMarkdownRenderer } from './rendering'
 import { createMarkdownResources, mountMarkdownImage, type MarkdownResources } from './images'
 import { textClipboard } from '../../features/shell/clipboard'
-import { sanitizeHtml, mountHtmlImages, type MountedImageHandle } from './html/SafeHtmlRenderer'
+import { htmlForPreview, mountHtmlImages, type MountedImageHandle } from './html/SafeHtmlRenderer'
 
 const props = defineProps<{
   content: string
   tooLarge?: boolean
   resources?: MarkdownResources
   resourceKey?: string
+  imageBorder?: boolean
 }>()
 const emit = defineEmits<{
   (e: 'scroll-line', line: number): void
@@ -73,7 +74,7 @@ const renderedHtml = computed(() => {
     }
   }
   const rawRendered = md.renderer.render(tokens, md.options, {})
-  return sanitizeHtml(rawRendered)
+  return htmlForPreview(rawRendered)
 })
 
 const fallbackResources = createMarkdownResources(() => undefined)

@@ -49,6 +49,7 @@ export class LiveImageView implements NodeView {
         this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos))
       )
       this.dom.classList.add('md-image-selected')
+      this.view.focus()
       this.onEditRequest(this.dom, this.node, pos)
     }
     this.dom.oncontextmenu = event => {

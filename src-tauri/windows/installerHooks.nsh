@@ -1,9 +1,10 @@
 ; ==============================================================================
-; LightEdit Windows File Associations & Context Menu NSIS Hooks
+; Markumo Windows File Associations & Context Menu NSIS Hooks
 ; ==============================================================================
-; This script hooks into Tauri 2's NSIS installer to register LightEdit with
+; This script hooks into Tauri 2's NSIS installer to register Markumo with
 ; the Windows Shell (Open With, Default Apps, Context Menu) safely without
 ; hijacking user's existing default applications.
+; Registry ProgIDs and shell verb IDs retain LightEdit for upgrade compatibility.
 ; ==============================================================================
 
 ; Override Tauri's default APP_ASSOCIATE to prevent overwriting default application handlers
@@ -34,8 +35,8 @@
 
 ; Editing a Windows executable script must not change its double-click execution.
 !macro LightEdit_RegisterEditVerb EXT
-  ; Windows Context Menu: "使用 LightEdit 打开" (Windows 10 standard & Windows 11 Show More Options)
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit" "" "使用 LightEdit 打开"
+  ; Windows Context Menu: "使用 Markumo 打开" (Windows 10 standard & Windows 11 Show More Options)
+  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit" "" "使用 Markumo 打开"
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit" "Icon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
 !macroend
@@ -52,6 +53,7 @@
 !macro LightEdit_RegisterExecutableScript EXT
   ReadRegStr $R0 SHCTX "Software\Classes\Source Code File" ""
   ${If} $R0 == "源代码文件 (LightEdit)"
+  ${OrIf} $R0 == "源代码文件 (Markumo)"
     DeleteRegValue SHCTX "Software\Classes\.${EXT}\OpenWithProgids" "Source Code File"
   ${EndIf}
   DeleteRegValue SHCTX "Software\Classes\.${EXT}\OpenWithProgids" "LightEdit.Document"
@@ -75,27 +77,32 @@
 ; Post-Install Hook: Runs after files and basic shortcuts are created
 ; ------------------------------------------------------------------------------
 !macro NSIS_HOOK_POSTINSTALL
-  ; 1. Applications\lightedit.exe registration for Windows Open With list
+  ; Replace only our old RegisteredApplications display entry.
+  ReadRegStr $R0 SHCTX "Software\RegisteredApplications" "LightEdit"
+  ${If} $R0 == "Software\LightEdit\Capabilities"
+    DeleteRegValue SHCTX "Software\RegisteredApplications" "LightEdit"
+  ${EndIf}
+  ; 1. Applications\markumo.exe registration for Windows Open With list
   WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe" "FriendlyAppName" "${PRODUCTNAME}"
   WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\DefaultIcon" "" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
-  WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\shell\open" "" "使用 LightEdit 打开"
+  WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\shell\open" "" "使用 Markumo 打开"
   WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\shell\open\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
 
   ; 2. Generic LightEdit.Document ProgID definition for Default Apps
-  WriteRegStr SHCTX "Software\Classes\LightEdit.Document" "" "LightEdit 文本文档"
+  WriteRegStr SHCTX "Software\Classes\LightEdit.Document" "" "Markumo 文本文档"
   WriteRegStr SHCTX "Software\Classes\LightEdit.Document\DefaultIcon" "" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
   WriteRegStr SHCTX "Software\Classes\LightEdit.Document\shell" "" "open"
-  WriteRegStr SHCTX "Software\Classes\LightEdit.Document\shell\open" "" "使用 LightEdit 打开"
+  WriteRegStr SHCTX "Software\Classes\LightEdit.Document\shell\open" "" "使用 Markumo 打开"
   WriteRegStr SHCTX "Software\Classes\LightEdit.Document\shell\open\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
 
   ; 3. Windows RegisteredApplications capabilities (Windows 10/11 Default Apps settings)
   WriteRegStr SHCTX "Software\LightEdit\Capabilities" "ApplicationName" "${PRODUCTNAME}"
-  WriteRegStr SHCTX "Software\LightEdit\Capabilities" "ApplicationDescription" "LightEdit 轻量文本与 Markdown 编辑器"
+  WriteRegStr SHCTX "Software\LightEdit\Capabilities" "ApplicationDescription" "Markumo 轻量文本与 Markdown 编辑器"
   WriteRegStr SHCTX "Software\LightEdit\Capabilities" "ApplicationIcon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
   WriteRegStr SHCTX "Software\RegisteredApplications" "${PRODUCTNAME}" "Software\LightEdit\Capabilities"
 
   ; 4. SystemFileAssociations for generic text
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit" "" "使用 LightEdit 打开"
+  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit" "" "使用 Markumo 打开"
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit" "Icon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
 

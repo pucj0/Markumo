@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LightEdit",
+  "productName": "Markumo",
   "version": "0.1.0",
   "identifier": "com.lightedit.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "LightEdit",
+        "title": "Markumo",
         "width": 1200,
         "height": 780,
         "minWidth": 680,
@@ -43,42 +43,42 @@
       {
         "ext": ["txt", "log", "ini", "cfg", "conf", "properties"],
         "name": "Text Document",
-        "description": "文本文档 (LightEdit)",
+        "description": "文本文档 (Markumo)",
         "role": "Editor",
         "mimeType": "text/plain"
       },
       {
         "ext": ["md", "markdown"],
         "name": "Markdown Document",
-        "description": "Markdown 文档 (LightEdit)",
+        "description": "Markdown 文档 (Markumo)",
         "role": "Editor",
         "mimeType": "text/markdown"
       },
       {
         "ext": ["json", "jsonc"],
         "name": "JSON Document",
-        "description": "JSON 文档 (LightEdit)",
+        "description": "JSON 文档 (Markumo)",
         "role": "Editor",
         "mimeType": "application/json"
       },
       {
         "ext": ["xml", "yaml", "yml"],
         "name": "Data File",
-        "description": "配置文件 (LightEdit)",
+        "description": "配置文件 (Markumo)",
         "role": "Editor",
         "mimeType": "text/plain"
       },
       {
         "ext": ["js", "jsx", "ts", "tsx", "vue", "html", "css", "scss"],
         "name": "Web Source File",
-        "description": "Web 源文件 (LightEdit)",
+        "description": "Web 源文件 (Markumo)",
         "role": "Editor",
         "mimeType": "text/plain"
       },
       {
         "ext": ["java", "py", "go", "rs", "sql", "sh"],
         "name": "Source Code File",
-        "description": "源代码文件 (LightEdit)",
+        "description": "源代码文件 (Markumo)",
         "role": "Editor",
         "mimeType": "text/plain"
       }

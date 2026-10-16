@@ -9,7 +9,7 @@ const options = devOptions(process.argv.slice(2), project)
 if (options.directories.length) {
   for (const directory of options.directories) mkdirSync(directory, { recursive: true })
   Object.assign(process.env, options.env)
-  console.log(`LightEdit development data: ${options.directories[0]}`)
+  console.log(`Markumo development data: ${options.directories[0]}`)
   console.log(options.watch ? 'Code hot reload enabled (default for pnpm tauri dev).' : 'File-test mode (--no-watch): automatic restart and frontend reload disabled.')
 }
 

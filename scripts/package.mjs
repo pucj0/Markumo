@@ -35,6 +35,8 @@ export function buildEnvironment(environment, home = homedir()) {
   delete env.TAURI_CONFIG
   delete env.LIGHTEDIT_DEV_DATA_DIR
   delete env.LIGHTEDIT_DESKTOP_NO_RELOAD
+  delete env.MARKUMO_DEV_DATA_DIR
+  delete env.MARKUMO_DESKTOP_NO_RELOAD
   return env
 }
 
@@ -45,7 +47,7 @@ export function bundleDirectory(targetDirectory, buildTarget) {
 export function main(args = process.argv.slice(2)) {
   const options = packageOptions(args)
   if (options.help) {
-    console.log(`LightEdit local packaging
+    console.log(`Markumo local packaging
 Windows: build.bat [--check] [--skip-install]
 macOS/Linux: sh build.sh [--check] [--skip-install]
 Optional: --platform windows|macos|linux (must match the host OS)
@@ -71,7 +73,7 @@ No installation, Git operations, signing-key generation or publishing is perform
     if (process.platform === 'win32') return run(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `pnpm ${command}`])
     return run('pnpm', command.split(' '))
   }
-  console.log(`[LightEdit] ${options.name}: ${options.bundles.join(', ')} (${process.arch})`)
+  console.log(`[Markumo] ${options.name}: ${options.bundles.join(', ')} (${process.arch})`)
   pnpm('--version')
   const rust = run('rustc', ['-vV'], true)
   console.log(run('cargo', ['--version'], true))
@@ -105,7 +107,7 @@ No installation, Git operations, signing-key generation or publishing is perform
     if (existsSync(path)) for (const file of readdirSync(path)) console.log(`  ${join(path, file)}`)
   }
   const config = JSON.parse(readFileSync(join(project, 'src-tauri/tauri.conf.json'), 'utf8'))
-  console.log(`LightEdit ${config.version}. Installers were built locally; nothing was installed or published.`)
+  console.log(`Markumo ${config.version}. Installers were built locally; nothing was installed or published.`)
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

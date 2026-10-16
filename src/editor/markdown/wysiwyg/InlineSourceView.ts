@@ -27,6 +27,35 @@ export function parseInlineSource(raw: string, inherited: readonly Mark[] = [], 
 export function inlineSourceRange(bridge: MarkdownSourceBridge, doc: PMNode, from: number, to: number, kind: string): { raw:string; sourceFrom:number; sourceTo:number; inherited:readonly Mark[];blockId:string } | null {
   const expected = doc.slice(from, to).content
   const inherited = expected.firstChild?.marks.filter(mark => mark.type.name !== kind) || []
+  if (kind === 'image') {
+    // Source syntax and PM atoms share document order, including duplicate
+    // images and images nested in lists, quotes and table cells.
+    let base = 0
+    for (const block of bridge.blocks) {
+      if (from >= base + block.node.nodeSize) { base += block.node.nodeSize; continue }
+      if (block.raw.length > 1024*1024) return null
+      let ordinal = 0, target = -1
+      block.node.descendants((child, offset) => {
+        if (child.type.name === 'image') {
+          if (base + offset + 1 === from) target = ordinal
+          ordinal++
+        }
+      })
+      let index = 0, result: {raw:string;sourceFrom:number;sourceTo:number;inherited:readonly Mark[];blockId:string} | null = null
+      syntax.parse(block.raw).iterate({ enter(node) {
+        if (node.name !== 'Image') return
+        if (index++ === target) {
+          const raw = block.raw.slice(node.from,node.to)
+          if (parseInlineSource(raw,inherited,bridge.environment)?.eq(expected)) result = {
+            raw,sourceFrom:block.from+node.from,sourceTo:block.from+node.to,inherited,blockId:block.id,
+          }
+        }
+        return false
+      } })
+      return result
+    }
+    return null
+  }
   const position = bridge.sourcePosition(from)
   const block = bridge.blocks.find(block => position >= block.from && position <= block.to)
   if (!block || block.raw.length > 32768) return null
@@ -56,6 +85,18 @@ export class InlineSourceView {
   private draft: string
   private composingInput = false
   private status = document.createElement('span')
+  private pointerDown=false
+  private blurPending=false
+  private blurTimer:ReturnType<typeof setTimeout>|undefined
+  private onPointerDown=()=>{this.pointerDown=true}
+  private onPointerUp=()=>{
+    this.pointerDown=false
+    if(this.blurPending)this.blurTimer=setTimeout(()=>this.finishBlur(),16)
+  }
+  private finishBlur(){
+    this.blurPending=false
+    if (!this.dead && document.activeElement !== this.input && !this.pending && !this.composing) this.close()
+  }
   constructor(
     public from: number, public to: number, public sourceFrom: number, public sourceTo: number,
     readonly kind: string, raw: string, readonly inherited: readonly Mark[], expected: Fragment, environment:()=>Record<string,unknown>,readonly blockId:string,
@@ -74,9 +115,20 @@ export class InlineSourceView {
     this.status.className = 'md-inline-source-warning'
     this.status.setAttribute('role','status'); this.status.hidden = true
     this.dom.append(this.input, this.status)
+    document.addEventListener('pointerdown',this.onPointerDown,true)
+    document.addEventListener('pointerup',this.onPointerUp,true)
+    document.addEventListener('pointercancel',this.onPointerUp,true)
     const accept = () => {
       if (this.dead || this.composing) return
       this.draft = this.input.innerText.replace(/\r\n?/g, '\n')
+      if (this.kind === 'image' && !this.draft.trim()) {
+        if (this.publish(this, '', Fragment.empty)) {
+          this.accepted = ''
+          this.expected = Fragment.empty
+          this.close(true, this.from)
+          return
+        }
+      }
       const content = parseInlineSource(this.draft, this.inherited, environment())
       if (content && this.publish(this, this.draft, content)) { this.accepted = this.draft; this.expected = content }
       this.dom.classList.toggle('md-local-source-invalid', this.pending)
@@ -131,6 +183,14 @@ export class InlineSourceView {
         if (!this.pending) this.close(true)
         return
       }
+      if ((event.key === 'Backspace' || event.key === 'Delete') && !this.draft.trim()) {
+        event.preventDefault()
+        if (this.kind === 'image') {
+          this.publish(this, '', Fragment.empty)
+        }
+        this.close(true, this.from)
+        return
+      }
       const sel = this.selection()
       if (!event.shiftKey && sel && sel.anchor === sel.head && !this.pending) {
         if ((event.key === 'ArrowLeft' && sel.head === 0) || (event.key === 'ArrowRight' && sel.head === this.draft.length)) {
@@ -138,14 +198,17 @@ export class InlineSourceView {
         }
       }
     }
-    this.input.onblur = () => queueMicrotask(() => {
-      if (!this.dead && document.activeElement !== this.input && !this.pending && !this.composing) this.close()
-    })
+    this.input.onblur = () => {
+      // Removing a source widget on mousedown moves the node under the cursor
+      // before click is delivered. Keep geometry until the gesture completes.
+      if(this.pointerDown){this.blurPending=true;return}
+      queueMicrotask(()=>this.finishBlur())
+    }
     this.paint()
   }
   get pending() { return this.draft !== this.accepted }
   get composing() { return this.composingInput }
-  private selection() {
+  selection() {
     const selection = document.getSelection()
     if (!selection?.anchorNode || !selection.focusNode || !this.input.contains(selection.anchorNode) || !this.input.contains(selection.focusNode)) return null
     const offset = (node: globalThis.Node, at: number) => {
@@ -185,8 +248,7 @@ export class InlineSourceView {
   focus(offset = 0) {
     this.input.focus({preventScroll:true})
     if (this.kind === 'image') {
-      const end = this.draft.indexOf(']')
-      this.select(2, end < 2 ? 2 : end)
+      this.select(this.draft.length, this.draft.length)
     } else this.select(offset, offset)
   }
   decorations(doc: PMNode) {
@@ -198,8 +260,13 @@ export class InlineSourceView {
   map(tr: Transaction) {
     if (this.dead || !tr.docChanged || tr.getMeta('inlineSourceEditor') === this) return
     const from = tr.mapping.mapResult(this.from, 1), to = tr.mapping.mapResult(this.to, -1)
-    if (from.deleted || to.deleted || from.pos > to.pos || !tr.doc.slice(from.pos, to.pos).content.eq(this.expected)) this.close()
-    else { this.from = from.pos; this.to = to.pos }
+    const shouldFocus = document.activeElement === this.input || this.dom.contains(document.activeElement)
+    if (from.deleted || to.deleted || from.pos > to.pos || !tr.doc.slice(from.pos, to.pos).content.eq(this.expected)) {
+      this.close(shouldFocus, from.pos)
+    } else {
+      this.from = from.pos
+      this.to = to.pos
+    }
   }
   mapSource(patch: SourcePatch | null, own = false) {
     if (!patch || this.dead || own) return
@@ -207,5 +274,13 @@ export class InlineSourceView {
     else if (patch.from < this.sourceTo) this.close()
   }
   acceptRange(to: number, sourceTo: number) { this.to = to; this.sourceTo = sourceTo }
-  destroy() { if (this.dead) return; this.dead = true; this.dom.remove() }
+  destroy() {
+    if (this.dead) return
+    this.dead=true
+    if(this.blurTimer)clearTimeout(this.blurTimer)
+    document.removeEventListener('pointerdown',this.onPointerDown,true)
+    document.removeEventListener('pointerup',this.onPointerUp,true)
+    document.removeEventListener('pointercancel',this.onPointerUp,true)
+    this.dom.remove()
+  }
 }

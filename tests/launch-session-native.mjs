@@ -9,7 +9,7 @@ const profile=join(output,'profile'),workspace=join(output,'工作区 space'),se
 const paths=['a 中文.txt','b.md','c.js','d.bat'].map(name=>join(workspace,name))
 const {chromium}=createRequire(process.env.LIGHTEDIT_PLAYWRIGHT_PACKAGE||import.meta.url)('playwright')
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms)),canonical=path=>'\\\\?\\'+path
-assert.equal(execFileSync('powershell.exe',['-NoProfile','-Command','Get-Process lightedit -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'],{encoding:'utf8'}).trim(),'','Save and close existing LightEdit; this test only controls isolated windows.')
+assert.equal(execFileSync('powershell.exe',['-NoProfile','-Command','Get-Process lightedit,markumo -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'],{encoding:'utf8'}).trim(),'','Save and close existing LightEdit; this test only controls isolated windows.')
 await Promise.all([mkdir(profile,{recursive:true}),mkdir(workspace,{recursive:true})])
 await Promise.all(paths.map((path,i)=>writeFile(path,['plain中文\r\n','# Markdown\n正文','const value=1;','@echo off\r\necho NEVER_EXECUTED\r\n'][i])))
 await writeFile(join(profile,'editor-settings.json'),JSON.stringify({autoSave:false}))
@@ -37,7 +37,7 @@ async function stop(){await close();for(let i=0;i<80&&exitCode===undefined;i++)a
 async function lastSession(predicate){for(let i=0;i<100;i++){try{const s=JSON.parse(await readFile(sessionPath,'utf8'));if(predicate(s))return s}catch{}await pause(100)}throw Error('Expected Last Session was not persisted')}
 async function secondInstance(args){
   const previous=new Set(browser.contexts().flatMap(c=>c.pages()))
-  const external=spawn(join(root,'src-tauri/target/debug/lightedit.exe'),args,{cwd:root,env,windowsHide:true,stdio:'ignore'})
+  const external=spawn(join(root,'src-tauri/target/debug/markumo.exe'),args,{cwd:root,env,windowsHide:true,stdio:'ignore'})
   await new Promise((resolve,reject)=>{external.once('error',reject);external.once('exit',code=>code===0?resolve():reject(Error(`second instance exit ${code}`)))})
   for(let i=0;i<150;i++){
     const target=browser.contexts().flatMap(c=>c.pages()).find(p=>!previous.has(p)&&p.url().startsWith('http://localhost:1420'))
@@ -50,7 +50,7 @@ try{
   await connect()
   await test('App Launch without Last Session ignores recents/old active roots and shows a safe welcome',async()=>{
     assert.deepEqual((await state()).names,[]);assert.deepEqual((await state()).roots,[])
-    assert.equal(await page.locator('.cm-editor').count(),0);assert.equal(await page.getByRole('region',{name:'LightEdit 欢迎页'}).count(),1)
+    assert.equal(await page.locator('.cm-editor').count(),0);assert.equal(await page.getByRole('region',{name:'Markumo 欢迎页'}).count(),1)
   })
   await test('Main app records real workspace tabs, order and active file independently of Recents',async()=>{
     await page.evaluate(async root=>{await document.querySelector('#app').__vue_app__._instance.setupState.workspace.openWorkspacePath(root)},canonical(workspace))

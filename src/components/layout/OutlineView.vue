@@ -9,7 +9,7 @@
 
     <div v-else class="outline-list">
       <button
-        v-for="item in items"
+        v-for="item in visibleItems"
         :key="item.id"
         class="outline-item"
         :class="[`level-${item.level}`, item.kind]"
@@ -17,6 +17,7 @@
         :title="`跳转至第 ${item.lineNumber} 行: ${item.name}`"
         @click="$emit('select-item', item)"
       >
+        <span v-if="hasChildren(item)" class="outline-fold" role="button" :aria-label="collapsed.has(item.id) ? '展开标题' : '折叠标题'" tabindex="0" @click.stop="toggle(item.id)" @keydown.enter.stop.prevent="toggle(item.id)" @keydown.space.stop.prevent="toggle(item.id)">{{ collapsed.has(item.id) ? '▸' : '▾' }}</span>
         <span v-if="item.kind === 'heading'" class="heading-prefix">
           {{ '#'.repeat(item.level) }}
         </span>
@@ -32,12 +33,24 @@
 
 <script setup lang="ts">
 import type { OutlineItem } from '../../editor/outline/outlineService'
+import { computed,ref } from 'vue'
 
-defineProps<{
+const props=defineProps<{
   items: OutlineItem[]
   isMarkdown: boolean
   notice?: string
 }>()
+const collapsed=ref(new Set<string>())
+const hasChildren=(item:OutlineItem)=>{const next=props.items[props.items.indexOf(item)+1];return !!next&&next.level>item.level}
+function toggle(id:string){const next=new Set(collapsed.value);if(next.has(id))next.delete(id);else next.add(id);collapsed.value=next}
+const visibleItems=computed(()=>{
+  let hiddenLevel=Infinity
+  return props.items.filter(item=>{
+    if(item.level>hiddenLevel)return false
+    hiddenLevel=collapsed.value.has(item.id)?item.level:Infinity
+    return true
+  })
+})
 
 defineEmits<{
   (e: 'select-item', item: OutlineItem): void

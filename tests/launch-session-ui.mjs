@@ -8,10 +8,10 @@ let page
 try{
   page=await browser.newPage();page.on('pageerror',e=>errors.push(e.message))
   await page.goto(process.env.LIGHTEDIT_TEST_URL||'http://localhost:1422')
-  await page.getByRole('region',{name:'LightEdit 欢迎页'}).waitFor()
+  await page.getByRole('region',{name:'Markumo 欢迎页'}).waitFor()
   assert.equal(await page.locator('.cm-editor,[role=tab]').count(),0)
   await page.keyboard.type('abc');await page.keyboard.insertText('中文');assert.equal(await page.locator('.cm-editor').count(),0)
-  await page.getByRole('region',{name:'LightEdit 欢迎页'}).getByRole('button',{name:'新建文件',exact:true}).click()
+  await page.getByRole('region',{name:'Markumo 欢迎页'}).getByRole('button',{name:'新建文件',exact:true}).click()
   await page.getByRole('textbox',{name:'文本编辑器',exact:true}).fill('explicit draft中文')
   assert.equal(await page.getByRole('tab',{name:'Untitled-1.txt',exact:true}).count(),1)
   results.push({name:'Real browser App: no orphan/draft on welcome, explicit New works',result:'PASS'})

@@ -5,14 +5,14 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if (!$Executable) { $Executable = Join-Path $project 'src-tauri/target/release/lightedit.exe' }
+if (!$Executable) { $Executable = Join-Path $project 'src-tauri/target/release/markumo.exe' }
 $Executable = (Resolve-Path -LiteralPath $Executable).Path
 # The test binary carries its own bundle identifier, so another LightEdit window
 # (a user's installed copy) neither receives these launches nor may be touched.
 # Only refuse to start when a leftover instance of THIS executable is running.
-$stale = @(Get-Process lightedit -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Executable })
+$stale = @(Get-Process markumo -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Executable })
 if ($stale.Count) { throw "A previous isolated test instance is still running: $($stale.Id -join ', ')" }
-function Get-TestProcesses { return @(Get-Process lightedit -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Executable }) }
+function Get-TestProcesses { return @(Get-Process markumo -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Executable }) }
 
 Add-Type -TypeDefinition @"
 using System;

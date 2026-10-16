@@ -3,7 +3,7 @@
     <div v-if="currentMode === 'live' && tooLarge" class="markdown-budget" role="status">文档超过 Live 安全预算，当前使用源码编辑。</div>
     <div v-show="doc" ref="host" class="editor-host" :style="hostStyle" @scroll.capture="onEditorScroll"></div>
     <div v-if="currentMode === 'split' && !tooLarge" class="split-resizer" title="拖动调整双栏比例" @mousedown.prevent="startSplitResize"></div>
-    <SplitPreview v-if="currentMode === 'split'" ref="preview" :style="previewStyle" :content="text" :too-large="tooLarge" :resources="resources" :resource-key="`${doc?.fileToken||''}|${doc?.path||''}`" @scroll-line="onPreviewScroll" @edit-image="editImage" />
+    <SplitPreview v-if="currentMode === 'split'" ref="preview" :style="previewStyle" :image-border="manager.getMarkdownTypography().imageBorder" :content="text" :too-large="tooLarge" :resources="resources" :resource-key="`${doc?.fileToken||''}|${doc?.path||''}`" @scroll-line="onPreviewScroll" @edit-image="editImage" />
     <ClassHexPanel v-if="doc?.kind === 'javaClass'" :key="doc.id" :doc="doc" :files="files" />
     <EmptyEditorPane v-if="!doc" @new-doc="newDocument" @quick-open="quickOpen" />
   </div>

@@ -282,7 +282,10 @@ export class CodeBlockView implements NodeView {
     } catch (error) {
       if (!this.dead && generation === this.renderGeneration) this.diagram.textContent = `图表无法渲染：${String(error)}`
     } finally {
-      if (!this.dead && generation === this.renderGeneration) this.renderButton.disabled = false
+      if (!this.dead && generation === this.renderGeneration) {
+        this.renderButton.disabled = false
+        this.cm.requestMeasure()
+      }
     }
   }
 

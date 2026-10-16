@@ -1,15 +1,25 @@
 import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
 import { mkdir, writeFile } from 'node:fs/promises'
-const {chromium}=createRequire(process.env.LIGHTEDIT_PLAYWRIGHT_PACKAGE || import.meta.url)('playwright')
+import {chromium,browserOptions} from './helpers/markdown-browser.mjs'
 const output='test-results/settings';await mkdir(output,{recursive:true})
-const browser=await chromium.launch({headless:true,channel:process.env.LIGHTEDIT_TEST_BROWSER || 'msedge'})
+const browser=await chromium.launch(browserOptions)
 const page=await browser.newPage({viewport:{width:1200,height:780}}),errors=[],results=[]
 page.on('pageerror',error=>errors.push(error.message))
 try {
-  await page.goto(process.env.LIGHTEDIT_TEST_URL || 'http://localhost:1422');await page.locator('.cm-content').waitFor()
+  await page.goto(process.env.LIGHTEDIT_TEST_URL || 'http://localhost:1422');await page.getByTitle('设置',{exact:true}).waitFor()
   assert.equal(await page.locator('.kernel-notice,.sidefoot,.hero').count(),0)
   await page.getByTitle('设置',{exact:true}).click()
+  await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'Markdown',exact:true}).click()
+  assert.equal(await page.getByLabel('显示图片边框',{exact:true}).isChecked(),true)
+  await page.getByLabel('显示图片边框',{exact:true}).uncheck()
+  await page.getByRole('button',{name:'完成',exact:true}).click()
+  await page.waitForFunction(()=>JSON.parse(localStorage.getItem('lightedit.settings.v1')||'{}').markdownTypography?.imageBorder===false)
+  await page.reload();await page.getByTitle('设置',{exact:true}).waitFor();await page.getByTitle('设置',{exact:true}).click()
+  await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'Markdown',exact:true}).click()
+  assert.equal(await page.getByLabel('显示图片边框',{exact:true}).isChecked(),false)
+  await page.getByLabel('显示图片边框',{exact:true}).check()
+  results.push({name:'图片边框默认开启、显式关闭及重载持久化',result:'PASS'})
+  await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'外观',exact:true}).click()
   assert.equal(await page.getByLabel('编辑器字号',{exact:true}).getAttribute('type'),'number')
   await page.getByLabel('编辑器字号',{exact:true}).fill('17');await page.getByLabel('编辑器字号',{exact:true}).blur()
   await page.waitForFunction(()=>document.documentElement.style.getPropertyValue('--editor-size')==='17px')
@@ -32,13 +42,13 @@ try {
   await page.getByLabel('文件夹展开方式',{exact:true}).selectOption('single')
   await page.getByRole('button',{name:'完成',exact:true}).click()
   await page.waitForFunction(()=>JSON.parse(localStorage.getItem('lightedit.settings.v1')||'{}').treeClickMode==='single')
-  await page.reload();await page.locator('.cm-content').waitFor();await page.getByTitle('设置',{exact:true}).click()
+  await page.reload();await page.getByTitle('设置',{exact:true}).waitFor();await page.getByTitle('设置',{exact:true}).click()
   await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'编辑',exact:true}).click()
   assert.equal(await page.getByLabel('文件夹展开方式',{exact:true}).inputValue(),'single')
   await page.getByLabel('文件夹展开方式',{exact:true}).selectOption('double')
   await page.getByRole('button',{name:'完成',exact:true}).click()
   await page.waitForFunction(()=>JSON.parse(localStorage.getItem('lightedit.settings.v1')||'{}').treeClickMode==='double')
-  await page.reload();await page.locator('.cm-content').waitFor();await page.getByTitle('设置',{exact:true}).click()
+  await page.reload();await page.getByTitle('设置',{exact:true}).waitFor();await page.getByTitle('设置',{exact:true}).click()
   assert.equal(await page.getByLabel('自动保存',{exact:true}).isChecked(),false)
   assert.equal(await page.getByLabel('自动保存延迟',{exact:true}).inputValue(),'3000')
   assert.equal(await page.getByLabel('编辑器字号',{exact:true}).inputValue(),'17')
@@ -55,8 +65,8 @@ try {
     }
   }
   await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'快捷键',exact:true}).click()
-  await page.getByLabel('快捷键 保存文件',{exact:true}).fill('Mod+N');await page.getByRole('button',{name:'应用快捷键',exact:true}).click();await page.getByRole('alert').waitFor()
-  await page.keyboard.press('Escape');await page.locator('.settingsoverlay').waitFor({state:'hidden'})
+  await page.getByLabel('快捷键 保存文件',{exact:true}).getByTitle('修改快捷键',{exact:true}).click();await page.keyboard.press('Control+n');await page.getByRole('alert').waitFor()
+  await page.keyboard.press('Escape');await page.getByRole('button',{name:'关闭设置',exact:true}).focus();await page.keyboard.press('Escape');await page.locator('.settingsoverlay').waitFor({state:'hidden'})
   assert.deepEqual(errors,[]);results.push({name:'分类/明暗/窄窗布局、中文快捷键冲突、Esc关闭',result:'PASS'})
   console.log(`PASS ${results.length} settings UI groups; page errors: 0`)
 } catch(error){results.push({result:'FAIL',error:String(error)});await page.screenshot({path:`${output}/failure.png`});throw error}

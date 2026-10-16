@@ -1,4 +1,6 @@
-# LightEdit
+# Markumo
+
+原名 LightEdit，现更名为 **Markumo**。GitHub 仓库使用 `pucj0/Markumo`；已有本地目录 `E:\code\lightEdit` 可继续使用。为保留既有配置，应用标识 `com.lightedit.app`、默认开发数据目录及持久化键保持兼容。更名范围与验证见 [更名记录](docs/Markumo更名记录_2026-10-16.md)。
 
 面向 Windows 首发的轻量通用文本编辑器，使用 Rust + Tauri 2 + Vue 3 + TypeScript + Vite + CodeMirror 6。
 
@@ -32,8 +34,8 @@ pnpm dev
 从远程仓库新下载项目时：
 
 ```powershell
-git clone https://github.com/pucj0/lightEdit.git
-Set-Location lightEdit
+git clone https://github.com/pucj0/Markumo.git
+Set-Location Markumo
 pnpm install --frozen-lockfile
 pnpm dev
 ```
@@ -108,9 +110,9 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 
 `pnpm test` 运行 Vitest 单元测试。`pnpm test:ui` 运行既有编辑器回归（显式 demo 模式），`pnpm test:ui:files` 运行文件 UI 与显式 IPC 服务替身的契约测试；两者均需要 Node >=20、Playwright 与浏览器。命令和验收范围见 [Phase 3 实施报告](docs/第三阶段实施与验收记录.md)。当前没有独立 lint runner；TypeScript strict 检查不等价于 lint。
 
-`pnpm test:native:save` 是 Windows/WebView2 的真实保存回归：需要 Playwright，运行前关闭已有 LightEdit 窗口和 1420 服务。它会以显式 `--no-watch` 启动隔离的桌面实例和 CDP 调试端口 9225，操作专用临时文件，检查保存前后进程/页面不变、另一份 dirty 草稿保留以及实际 BOM/CRLF 字节。结果写入 `test-results/native-save-stability/`，不会更改开发偏好或用户文件。
+`pnpm test:native:save` 是 Windows/WebView2 的真实保存回归：需要 Playwright，运行前关闭已有 Markumo 窗口和 1420 服务。它会以显式 `--no-watch` 启动隔离的桌面实例和 CDP 调试端口 9225，操作专用临时文件，检查保存前后进程/页面不变、另一份 dirty 草稿保留以及实际 BOM/CRLF 字节。结果写入 `test-results/native-save-stability/`，不会更改开发偏好或用户文件。
 
-`pnpm test:native:workspace` 验证 Phase 4，使用独立工作区/历史和真实 Tauri IPC，创建 10,000 个临时文件，检查快速打开、搜索、重命名/移动后保存、删除确认及窄窗口。需 Windows、Node >=20、Playwright；运行前保存并关闭已有 LightEdit 和 1420 服务。测试数据/日志保留在 `test-results/phase4-native/`，不接触用户工作区。Playwright 不在项目依赖中，可通过 `LIGHTEDIT_PLAYWRIGHT_PACKAGE` 指定现有 Playwright 的 package.json 绝对路径。
+`pnpm test:native:workspace` 验证 Phase 4，使用独立工作区/历史和真实 Tauri IPC，创建 10,000 个临时文件，检查快速打开、搜索、重命名/移动后保存、删除确认及窄窗口。需 Windows、Node >=20、Playwright；运行前保存并关闭已有 Markumo 和 1420 服务。测试数据/日志保留在 `test-results/phase4-native/`，不接触用户工作区。Playwright 不在项目依赖中，可通过 `LIGHTEDIT_PLAYWRIGHT_PACKAGE` 指定现有 Playwright 的 package.json 绝对路径。
 
 ## 桌面文件操作（待实机验收）
 
@@ -138,7 +140,7 @@ pnpm dev --host 127.0.0.1 --port 1422
 # 再在测试终端运行；默认使用现有 Playwright 与 Edge
 pnpm test:ui:editor
 pnpm test:ui:phase6
-# 真实桌面 / Rust / 文件字节 / 设置重启：先保存并关闭已有 LightEdit 和 1420 服务
+# 真实桌面 / Rust / 文件字节 / 设置重启：先保存并关闭已有 Markumo 和 1420 服务
 pnpm test:native:editor
 ```
 
@@ -148,7 +150,7 @@ Playwright 不在项目依赖中，需要已有可用安装；可通过 `LIGHTED
 
 ## 常见启动问题
 
-若保存桌面文件提示 `os error 5`，文件/目录 ACL 正常却仍失败，请检查本地生成的 `src-tauri/target/debug/lightedit.exe` 是否被标记为 `Low Mandatory Level`：Low 程序不能写普通用户数据，单纯管理员运行也不能解除 exe 的 Low 标签。本机生成目录现已修复为普通 Medium。若彻底重建 target 后复发，普通 PowerShell 可对本项目生成目录执行 `icacls 'E:\code\lightEdit\src-tauri\target' /setintegritylevel '(OI)(CI)M' /T /Q`，再重启程序；不需要更改桌面目录权限。完整证据、测试与保存保护见 [保存权限专项修复](docs/第三阶段保存权限修复.md)。旧窗口有未保存内容时先另存到可写位置，再关闭重启。
+若保存桌面文件提示 `os error 5`，文件/目录 ACL 正常却仍失败，请检查本地生成的 `src-tauri/target/debug/markumo.exe` 是否被标记为 `Low Mandatory Level`：Low 程序不能写普通用户数据，单纯管理员运行也不能解除 exe 的 Low 标签。本机生成目录现已修复为普通 Medium。若彻底重建 target 后复发，普通 PowerShell 可对本项目生成目录执行 `icacls 'E:\code\lightEdit\src-tauri\target' /setintegritylevel '(OI)(CI)M' /T /Q`，再重启程序；不需要更改桌面目录权限。完整证据、测试与保存保护见 [保存权限专项修复](docs/第三阶段保存权限修复.md)。旧窗口有未保存内容时先另存到可写位置，再关闭重启。
 
 | 提示 | 处理 |
 |---|---|

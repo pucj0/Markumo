@@ -111,12 +111,12 @@ try {
     await editBtn.click()
 
     // 源码编辑器出现
-    const textarea = htmlBlock.locator('.md-html-textarea')
+    const textarea = htmlBlock.getByRole('textbox',{name:'HTML 局部源码'})
     await textarea.waitFor({ state: 'visible' })
     assert.equal(await htmlBlock.locator('.md-html-preview').isVisible(), false, 'Preview hidden during editing')
 
     // 在 textarea 中修改文本
-    await textarea.fill('<h1>修改后的一级标题</h1>')
+    await textarea.click(); await page.keyboard.press('Control+a'); await page.keyboard.insertText('<h1>修改后的一级标题</h1>')
 
     // 点击完成按钮
     await htmlBlock.locator('.md-html-done-btn').click()

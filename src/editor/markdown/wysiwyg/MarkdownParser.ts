@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it'
+import { inlineHtmlRanges } from './HtmlSourceRanges'
 import { MarkdownParser, defaultMarkdownParser } from 'prosemirror-markdown'
 import type { Node } from 'prosemirror-model'
 import { markdownSchema as s } from './MarkdownSchema'
@@ -36,55 +37,19 @@ tokenizer.core.ruler.after('inline','lightedit_tasks', state => {
     if(match){stack[stack.length-1].meta={checked:match[1]!==' '};first!.content=first!.content.slice(match[0].length)}
   }
 })
-tokenizer.core.ruler.after('lightedit_tasks','lightedit_inline_html_pairs', state => {
-  const voidTags = new Set(['img', 'br', 'hr', 'input', 'meta', 'link', 'area', 'base', 'col', 'embed', 'param', 'source', 'track', 'wbr'])
-  for (const token of state.tokens) {
-    if (token.type !== 'inline' || !token.children) continue
-    const children = token.children
-    const nextChildren: typeof children = []
-    let i = 0
-    while (i < children.length) {
-      const child = children[i]
-      if (child.type === 'html_inline') {
-        const openMatch = /^<([a-zA-Z][a-zA-Z0-9-]*)\b([^>]*)>$/.exec(child.content.trim())
-        const tag = openMatch ? openMatch[1].toLowerCase() : ''
-        if (openMatch && !voidTags.has(tag) && !child.content.endsWith('/>')) {
-          let closeIdx = -1
-          let depth = 1
-          for (let j = i + 1; j < children.length; j++) {
-            const nextChild = children[j]
-            if (nextChild.type === 'html_inline') {
-              if (new RegExp(`^<\\/${tag}\\s*>$`, 'i').test(nextChild.content.trim())) {
-                depth--
-                if (depth === 0) {
-                  closeIdx = j
-                  break
-                }
-              } else if (new RegExp(`^<${tag}\\b[^>]*>$`, 'i').test(nextChild.content.trim())) {
-                depth++
-              }
-            }
-          }
-          if (closeIdx !== -1) {
-            let merged = ''
-            for (let k = i; k <= closeIdx; k++) {
-              merged += children[k].content
-            }
-            const mergedToken = new state.Token('html_inline', '', 0)
-            mergedToken.content = merged
-            nextChildren.push(mergedToken)
-            i = closeIdx + 1
-            continue
-          }
-        }
-      }
-      nextChildren.push(child)
-      i++
-    }
-    token.children = nextChildren
-  }
+// Consume paired HTML directly from source before Markdown strips delimiters.
+// Cache ranges per inline parser state, never search rendered text.
+const htmlRanges = new WeakMap<object, ReturnType<typeof inlineHtmlRanges>>()
+tokenizer.inline.ruler.before('html_inline','lightedit_html_source', (state,silent)=>{
+  if(state.src[state.pos]!=='<')return false
+  let ranges=htmlRanges.get(state)
+  if(!ranges){ranges=inlineHtmlRanges(state.src);htmlRanges.set(state,ranges)}
+  const range=ranges.find(range=>range.from===state.pos)
+  if(!range)return false
+  if(!silent){const token=state.push('html_inline','',0);token.content=state.src.slice(range.from,range.to)}
+  state.pos=range.to;return true
 })
-tokenizer.core.ruler.after('lightedit_inline_html_pairs','lightedit_cells', state=>{
+tokenizer.core.ruler.after('lightedit_tasks','lightedit_cells', state=>{
   const result:typeof state.tokens=[]
   for(const token of state.tokens){
     if(token.type==='th_close'||token.type==='td_close')result.push(new state.Token('paragraph_close','p',-1))

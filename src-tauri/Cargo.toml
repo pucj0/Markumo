@@ -1,12 +1,12 @@
 [package]
-name = "lightedit"
+name = "markumo"
 version = "0.1.0"
-description = "Fleet-style lightweight text editor"
-authors = ["LightEdit Team"]
+description = "Lightweight text and Markdown editor"
+authors = ["Markumo Team"]
 edition = "2021"
 
 [lib]
-name = "lightedit_lib"
+name = "markumo_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

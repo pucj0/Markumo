@@ -192,7 +192,7 @@ export function useAppShell() {
     destroy: async () => { if (alive) await (await import('@tauri-apps/api/window')).getCurrentWindow().destroy() },
     blocked: reason => toast(reason === 'composing' ? '请先完成当前输入法输入，再关闭窗口。' : '请等待当前文件操作完成后再关闭。'),
     failed: () => toast('关闭窗口失败，编辑内容仍保留在当前窗口。'),
-    diagnose: data => console.info('[LightEdit close]', data),
+    diagnose: data => console.info('[Markumo close]', data),
   })
   let wasNarrow = window.innerWidth < 900
   function adaptWindowWidth() {

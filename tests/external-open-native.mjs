@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const port = Number(process.env.LIGHTEDIT_CDP_PORT || 9241)
-const executable = process.env.LIGHTEDIT_TEST_EXE || join(root, 'src-tauri/target/release/lightedit.exe')
+const executable = process.env.LIGHTEDIT_TEST_EXE || join(root, 'src-tauri/target/release/markumo.exe')
 const output = join(root, 'test-results/external-open-cdp', String(Date.now()))
 const profile = join(output, 'profile')
 const fixtures = join(output, 'fixtures')
@@ -31,7 +31,7 @@ const pending = new Map()
 
 function testProcesses() {
   const listed = spawnSync('powershell.exe', ['-NoProfile', '-Command',
-    `Get-Process lightedit -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${executable.replace(/'/g, "''")}' } | Select-Object -ExpandProperty Id; exit 0`],
+    `Get-Process markumo -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${executable.replace(/'/g, "''")}' } | Select-Object -ExpandProperty Id; exit 0`],
     { encoding: 'utf8' })
   return listed.stdout.trim().split(/\s+/).filter(Boolean).map(Number)
 }

@@ -13,7 +13,7 @@ const require = createRequire(process.env.LIGHTEDIT_PLAYWRIGHT_PACKAGE || import
 const { chromium } = require('playwright')
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 function appPids() {
-  return execFileSync('powershell.exe', ['-NoProfile', '-Command', 'Get-Process lightedit -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean).map(Number)
+  return execFileSync('powershell.exe', ['-NoProfile', '-Command', 'Get-Process lightedit,markumo -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean).map(Number)
 }
 assert.deepEqual(appPids(), [], 'Close your existing desktop app before this isolated native regression.')
 await mkdir(output, { recursive: true })

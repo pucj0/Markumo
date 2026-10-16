@@ -10,7 +10,7 @@ import {createApp,h,ref} from 'vue';import {DocumentManager} from '/src/editor/c
 const m=new DocumentManager([{id:'md',name:'typora-parity.md',path:'typora-parity.md',text:${JSON.stringify(markdown)}}]);m.open('md',false);const rev=ref(0);m.subscribe(()=>rev.value++);document.body.classList.add('light');window.fixture={manager:m,live:()=>m.liveViews.get('main')?.editor};createApp({render(){rev.value;return h(EditorContainer,{doc:m.activeDocument,manager:m,showOutline:false,desktop:false})}}).mount('#app');`)
 const browser=await chromium.launch(browserOptions),page=await browser.newPage({viewport:{width:786,height:694},deviceScaleFactor:1}),errors=[]
 page.on('pageerror',e=>errors.push(e.message))
-const observations={viewport:{width:786,height:694},zoom:1,theme:'LightEdit light / Typora Github',strictVisualParity:'UNVERIFIED',reason:'Both use 16px, 1.6, 860px page limit and actual-size zoom; Typora bundles Open Sans while LightEdit uses system fonts. Header origin is aligned with a documented 16px fixture spacer. Theme/font equality is not established.',elements:{}}
+const observations={viewport:{width:786,height:694},zoom:1,theme:'Markumo light / Typora Github',strictVisualParity:'UNVERIFIED',reason:'Both use 16px, 1.6, 860px page limit and actual-size zoom; Typora bundles Open Sans while LightEdit uses system fonts. Header origin is aligned with a documented 16px fixture spacer. Theme/font equality is not established.',elements:{}}
 try{
  await page.goto(`${process.env.LIGHTEDIT_TEST_URL}/${output}/lightedit.html`);await page.locator('.md-prose').waitFor();await page.locator('.md-diagram svg').waitFor();await page.evaluate(()=>document.fonts.ready)
  await page.screenshot({path:`${output}/lightedit-page-top.png`})

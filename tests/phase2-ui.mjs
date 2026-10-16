@@ -65,7 +65,7 @@ try {
     await page.getByRole('tab', { name: /README.md/ }).click()
     assert.match(await editor().innerText(), /\*\*bold\*\*/)
     await editor().click(); await editor().press('Control+z')
-    assert.match(await editor().innerText(), /# LightEdit/)
+    assert.match(await editor().innerText(), /# Markumo/)
     await editor().press('Control+y')
     assert.match(await editor().innerText(), /\*\*bold\*\*/)
     await page.getByRole('tab', { name: /EditorView.ts/ }).click()

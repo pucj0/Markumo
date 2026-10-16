@@ -181,7 +181,7 @@ try {
 
   // 4. Click image: selection outline and anchored image toolbar
   await test('4. Image click exposes source above preview; context menu explicitly opens mapped properties', async () => {
-    const img = page.locator('.md-image-preview img').first()
+    const img = page.locator('.md-image-preview img[alt="金丝熊标准笼位"]').first()
     await img.scrollIntoViewIfNeeded()
     await img.click()
     await page.locator('.md-inline-source-input').waitFor()

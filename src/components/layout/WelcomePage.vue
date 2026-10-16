@@ -1,8 +1,8 @@
 <template>
-  <section class="welcome" aria-label="LightEdit 欢迎页" :aria-busy="loading">
+  <section class="welcome" aria-label="Markumo 欢迎页" :aria-busy="loading">
     <p v-if="loading" role="status">正在打开…</p>
     <template v-else>
-      <h1>LightEdit</h1>
+      <h1>Markumo</h1>
       <div class="welcome-actions">
         <button @click="$emit('new-doc')">新建文件</button>
         <button @click="$emit('open-file')">打开文件</button>

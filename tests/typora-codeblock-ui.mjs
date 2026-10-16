@@ -157,21 +157,25 @@ try {
     assert.ok(text.includes('```customlang'), 'Should create code_block with customlang params')
   })
 
-  await test('6. Code block focus states & language dock visibility', async () => {
+  await test('6. Code block focus states & language dock visibility (always visible, zero layout shift)', async () => {
     const codeBlock = page.locator('.md-code-block').first()
     const languageRow = codeBlock.locator('.md-code-language-row')
 
-    // 1. 点击正文，代码块失焦状态
+    // 1. 点击正文，代码块失焦状态：语言栏始终直接显示
     await page.locator('.md-prose h1').first().click()
-    assert.equal(await languageRow.isHidden(), true, 'Language row must be completely hidden (display: none) when blurred')
+    assert.equal(await languageRow.isVisible(), true, 'Language row must be visible even when code block is blurred')
+    const boxBlurred = await codeBlock.boundingBox()
 
-    // 2. 鼠标仅悬停（hover），不聚焦
+    // 2. 鼠标悬停（hover）代码块，语言栏保持显示
     await codeBlock.locator('.md-code-surface').hover()
-    assert.equal(await languageRow.isHidden(), true, 'Language row must NOT show on hover without focus')
+    assert.equal(await languageRow.isVisible(), true, 'Language row must remain visible on hover')
 
-    // 3. 点击代码内容获焦
+    // 3. 点击代码内容获焦：语言栏依然可见，整体高度保持一致无跳动
     await codeBlock.locator('.cm-content').click()
-    assert.equal(await languageRow.isVisible(), true, 'Language row must appear when code block is focused')
+    assert.equal(await languageRow.isVisible(), true, 'Language row must be visible when code block is focused')
+    const boxFocused = await codeBlock.boundingBox()
+    assert.ok(boxBlurred && boxFocused, 'Both bounding boxes exist')
+    assert.ok(Math.abs(boxBlurred.height - boxFocused.height) <= 1, `Code block height must not jump on focus (blurred: ${boxBlurred.height}, focused: ${boxFocused.height})`)
   })
 
   await test('7. Geometric layout constraints: dock right-aligned below surface, input centered with text-align center', async () => {

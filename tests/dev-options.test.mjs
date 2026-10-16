@@ -4,6 +4,14 @@ import { devOptions } from '../scripts/devOptions.mjs'
 import { resolveConfig } from 'vite'
 
 describe('Desktop development launch policy', () => {
+  it('accepts Markumo profile overrides ahead of the legacy name and keeps both reload aliases aligned', () => {
+    const env = { MARKUMO_DEV_DATA_DIR: 'test-results/markumo profile', LIGHTEDIT_DEV_DATA_DIR: 'old profile' }
+    const result = devOptions(['dev', '--no-watch'], process.cwd(), env)
+    expect(result.directories[0]).toBe(resolve(process.cwd(), env.MARKUMO_DEV_DATA_DIR))
+    expect(result.env.MARKUMO_DESKTOP_NO_RELOAD).toBe('1')
+    expect(result.env.LIGHTEDIT_DESKTOP_NO_RELOAD).toBe('1')
+    expect(devOptions(['dev'], process.cwd(), {}).directories[0]).toBe(resolve(process.cwd(), '.lightedit-dev'))
+  })
   it('enables hot reload by default while preserving cargo/application arguments verbatim', () => {
     const input = ['dev', '--', '--features', 'test', '--', 'E:\\文件\\name with spaces.txt', '--watch']
     const result = devOptions(input, process.cwd(), {})

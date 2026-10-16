@@ -16,7 +16,7 @@ const fixtureDirectory = process.env.LIGHTEDIT_TEST_FIXTURE_DIR ? join(process.e
 const fixture = join(fixtureDirectory, 'complex.md')
 const { chromium } = createRequire(process.env.LIGHTEDIT_PLAYWRIGHT_PACKAGE || import.meta.url)('playwright')
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
-const pids = () => execFileSync('powershell.exe', ['-NoProfile', '-Command', 'Get-Process lightedit -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean)
+const pids = () => execFileSync('powershell.exe', ['-NoProfile', '-Command', 'Get-Process lightedit,markumo -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean)
 assert.deepEqual(pids(), [], 'Save and close existing LightEdit before this isolated native test.')
 await mkdir(output, { recursive: true })
 if (process.env.LIGHTEDIT_TEST_FIXTURE_DIR) await mkdir(fixtureDirectory)
@@ -102,7 +102,7 @@ try {
   })
   await test('自定义标题栏：无系统装饰、最大化/还原、关闭未保存保护',async()=>{
     assert.equal(await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('plugin:window|is_decorated',{label:'main'})),false)
-    assert.equal(await page.locator('.app-brand .brand').innerText(),'LightEdit')
+    assert.equal(await page.locator('.app-brand .brand').innerText(),'Markumo')
     await page.getByRole('button',{name:'最大化或还原窗口',exact:true}).click()
     await page.waitForFunction(async()=>await window.__TAURI_INTERNALS__.invoke('plugin:window|is_maximized',{label:'main'}))
     await page.getByRole('button',{name:'最大化或还原窗口',exact:true}).click()
@@ -258,7 +258,7 @@ try {
     }
     await pause(500)
     assert.equal(JSON.parse(await readFile(join(profile,'editor-settings.json'),'utf8')).theme,'system')
-    assert.equal(await page.getByAltText('LightEdit 标志').evaluate(img=>img.complete&&img.naturalWidth===256),true)
+    assert.equal(await page.getByAltText('Markumo 标志').evaluate(img=>img.complete&&img.naturalWidth===512),true)
   })
   await test('Phase 6: 真实桌面退出再启动后首选项与文件模式恢复',async()=>{
     await page.screenshot({path:join(output,'phase6.png')})

@@ -8,6 +8,7 @@
   --md-link-color: var(--accent);
   --md-code-bg: var(--sidebar);
   --md-table-border: var(--line);
+  --md-image-border-color: color-mix(in srgb, var(--ink) 35%, var(--editor));
   --md-paragraph-spacing: .8em;
   flex: 1;
   min-width: 0;
@@ -231,6 +232,8 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
   box-shadow: none;
   padding: 0;
   width: 100%;
+  height: 24px;
+  box-sizing: border-box;
   display: flex;
   gap: 2px;
   align-items: center;
@@ -302,9 +305,7 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
   cursor: pointer;
 }
 
-.markdown-live .md-code-surface:hover .md-code-copy,
-.markdown-live .md-code-block.is-focused .md-code-copy,
-.markdown-live .md-code-block:focus-within .md-code-copy {
+.markdown-live .md-code-surface:hover .md-code-copy {
   opacity: 0.95;
   pointer-events: auto;
 }
@@ -322,17 +323,12 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
 }
 
 .markdown-live .md-code-language-row {
-  display: none;
+  display: flex;
   width: 100%;
   box-sizing: border-box;
   justify-content: flex-end;
   margin-top: 4px;
-}
-
-/* 只有聚焦或处于编辑交互时才显示语言选择行 */
-.markdown-live .md-code-block.is-focused .md-code-language-row,
-.markdown-live .md-code-block:focus-within .md-code-language-row {
-  display: flex;
+  height: 24px;
 }
 
 .markdown-live .md-code-language-dock {
@@ -715,7 +711,7 @@ body.light .file-icon-gray { color: #6c7c92; }
 .markdown-live .md-image-preview.md-image-selected img {
   outline: none;
 }
-.markdown-live .md-image-preview > .md-image-open { position: absolute; top: 4px; right: 4px; opacity: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); color: var(--text); font: var(--ui-small-font-size)/1.5 var(--font-sans); cursor: zoom-in; }
+.markdown-live .md-image-preview > .md-image-open { position: static; display: block; margin: 4px auto 0; opacity: 1; padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); color: var(--text); font: var(--ui-small-font-size)/1.5 var(--font-sans); cursor: zoom-in; }
 .markdown-live .md-image-preview:hover > .md-image-open, .markdown-live .md-image-preview:focus-within > .md-image-open { opacity: 1; }
 .markdown-live .md-image-lightbox { position: fixed; inset: 0; width: calc(100vw - 32px); height: calc(100vh - 32px); max-width: none; max-height: none; padding: 0; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: var(--editor); }
 .markdown-live .md-image-lightbox::backdrop { background: #000b; }
@@ -868,118 +864,22 @@ body.light .file-icon-gray { color: #6c7c92; }
   transition: opacity 0.2s ease;
 }
 
-/* HTML Block 与 Inline 渲染支持 */
-.markdown-live .md-html-block-view {
-  position: relative;
-  margin: 1em 0;
-  white-space: normal;
-}
-
-.markdown-live .md-html-block-view:hover > .md-html-edit-trigger {
-  opacity: 1;
-}
-
-.markdown-live .md-html-edit-trigger {
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  z-index: 10;
-  opacity: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 7px;
-  font-size: 11px;
-  color: var(--muted);
-  background: var(--bar);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  cursor: pointer;
-  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
-  user-select: none;
-}
-
-.markdown-live .md-html-edit-trigger:hover {
-  background: var(--hover);
-  color: var(--bright);
-}
-
-.markdown-live .md-html-preview {
-  position: relative;
-}
-
-.markdown-live .md-html-source-editor {
-  background: var(--editor);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.markdown-live .md-html-editor-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--line);
-}
-
-.markdown-live .md-html-toolbar-title {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--muted);
-}
-
-.markdown-live .md-html-toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.markdown-live .md-html-done-btn,
-.markdown-live .md-html-cancel-btn {
-  padding: 2px 8px;
-  font-size: 11px;
-  border-radius: 4px;
-  cursor: pointer;
-  border: 1px solid var(--line);
-}
-
-.markdown-live .md-html-done-btn {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-
-.markdown-live .md-html-cancel-btn {
-  background: var(--bar);
-  color: var(--sub);
-}
-
-.markdown-live .md-html-textarea {
-  width: 100%;
-  box-sizing: border-box;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 1.5;
-  background: transparent;
-  color: var(--text);
-  border: none;
-  outline: none;
-  resize: vertical;
-}
-
-/* HTML 行内节点样式 */
-.markdown-live .md-html-inline-view {
-  display: inline;
-  cursor: pointer;
-}
-
-.markdown-live .md-html-inline-content {
-  display: inline;
-}
+/* HTML remains in document flow; only the active atom owns a local CM. */
+.markdown-live .md-html-block-view { margin: 1em 0; white-space: normal; }
+.markdown-live .md-html-block-view:focus-visible { outline: 1px solid var(--accent); }
+.markdown-live .md-html-edit-trigger { display: none; color: var(--muted); background: var(--soft); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font: 11px/1.4 var(--font-sans); cursor: pointer; }
+.markdown-live .md-html-block-view:hover > .md-html-edit-trigger,
+.markdown-live .md-html-block-view:focus-within > .md-html-edit-trigger { display: inline-block; }
+.markdown-live .md-html-source-editor { background: var(--editor); border: 1px solid var(--line); border-radius: 4px; min-width: 0; }
+.markdown-live .md-html-source-editor .cm-editor { background: transparent; color: var(--text); font: 13px/1.5 var(--font-mono); }
+.markdown-live .md-html-source-editor .cm-content { padding: 3px 5px; }
+.markdown-live .md-html-source-editor .cm-scroller { overflow: auto; max-height: 480px; }
+.markdown-live .md-html-inline-view, .markdown-live .md-html-inline-content { display: inline; }
+.markdown-live .md-html-inline-view.md-html-editing { display: inline-flex; max-width: 100%; align-items: baseline; vertical-align: baseline; }
+.markdown-live .md-html-inline-view .md-html-source-editor { display: inline-block; max-width: 100%; }
+.markdown-live .md-html-inline-view .md-html-done-btn { display: none; }
+.markdown-live .md-html-done-btn { color: var(--muted); background: var(--soft); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; font: 11px/1.5 var(--font-sans); cursor: pointer; }
+.markdown-live .md-html-raw-fallback { font: 13px/1.5 var(--font-mono); white-space: pre-wrap; color: var(--muted); }
 
 /* 键帽 <kbd> 样式 */
 kbd,
@@ -1085,3 +985,7 @@ kbd,
     width: calc(100% - 16px);
   }
 }
+
+/* Editor-only image preference; no wrapper padding, export or Mermaid rules. */
+.markdown-live[data-image-border="true"] :is(.md-live-image img,.md-html-preview img,.md-html-inline-content img) { box-sizing: border-box; border: 1px solid var(--md-image-border-color, var(--line)); border-radius: 4px; }
+.markdown-live[data-image-border="false"] :is(.md-live-image img,.md-html-preview img,.md-html-inline-content img) { border: 0; border-radius: 0; }

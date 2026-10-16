@@ -878,7 +878,8 @@ export class DocumentManager {
     for (const record of this.records.values()) this.effects(record, [record.theme.reconfigure(editorTheme(theme))])
   }
   refreshTypography() { this.setTheme(this.theme) }
-  setMarkdownTypography(settings:MarkdownTypography){this.markdownTypography={...settings};for(const live of this.liveViews.values())live.editor.typography(settings)}
+  setMarkdownTypography(settings:MarkdownTypography){this.markdownTypography={...settings};for(const live of this.liveViews.values())live.editor.typography(settings);this.notify()}
+  getMarkdownTypography(){return this.markdownTypography}
   command(command: 'undo' | 'redo' | 'find' | 'replace' | 'find-next' | 'find-previous' | 'delete-line' | 'copy-line-down' | 'move-line-up' | 'move-line-down' | 'comment-line' | 'fold-code' | 'unfold-code') {
     if (!this.activeId || this.isComposing) return
     if (command === 'undo') { this.historyCommand(false); return }

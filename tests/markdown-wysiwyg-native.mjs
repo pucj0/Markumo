@@ -5,13 +5,14 @@ import {dirname,join} from 'node:path'
 import {fileURLToPath} from 'node:url'
 const root=dirname(dirname(fileURLToPath(import.meta.url))),output=join(root,'test-results/markdown-wysiwyg-native',String(Date.now())),profile=join(output,'profile'),file=join(output,'writing.md')
 import { chromium } from 'playwright'
-assert.equal(execFileSync('powershell.exe',['-NoProfile','-Command','Get-Process lightedit -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'],{encoding:'utf8'}).trim(),'','Preserve user data: an existing LightEdit window must be saved and closed before this isolated test.')
+// A separate Tauri identifier prevents routing test files into the installed editor.
+assert.equal(execFileSync('powershell.exe',['-NoProfile','-Command','Get-Process markumo -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'],{encoding:'utf8'}).trim(),'','Preserve running Markumo sessions: another process is active.')
 await mkdir(profile,{recursive:true});const fixture=await readFile(join(root,'tests/fixtures/markdown-wysiwyg.md'),'utf8'),original=fixture.replace(/\r?\n/g,'\r\n'),bom=Buffer.from([239,187,191]);await writeFile(file,Buffer.concat([bom,Buffer.from(original)]));await writeFile(join(profile,'editor-settings.json'),'{}')
 await mkdir(join(output,'assets'),{recursive:true});await writeFile(join(output,'assets/pixel.png'),await readFile(join(root,'tests/fixtures/assets/pixel.png')))
 await writeFile(join(profile,'workspaces.json'),JSON.stringify({recent_workspaces:['\\\\?\\'+output],active_roots:['\\\\?\\'+output]}))
 const env={...process.env,LIGHTEDIT_DEV_DATA_DIR:profile,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:'--remote-debugging-port=9235',CARGO_NET_OFFLINE:'true'}
 const pathKey=Object.keys(env).find(key=>key.toLowerCase()==='path')||'PATH';env[pathKey]=join(process.env.USERPROFILE,'.cargo/bin')+';'+env[pathKey]
-const child=spawn(process.execPath,[join(root,'scripts/tauri.mjs'),'dev','--no-watch','--','--',file],{cwd:root,env,windowsHide:true,stdio:['pipe','pipe','pipe']})
+const child=spawn(process.execPath,[join(root,'scripts/tauri.mjs'),'dev','--no-watch','--config',JSON.stringify({identifier:'com.markumo.test.wysiwyg'}),'--','--',file],{cwd:root,env,windowsHide:true,stdio:['pipe','pipe','pipe']})
 let logs='',exitCode,browser,page,failure;child.stdout.on('data',value=>{logs+=value});child.stderr.on('data',value=>{logs+=value});child.on('exit',code=>{exitCode=code})
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms)),results=[],errors=[]
 async function test(name,run){await run();results.push({name,result:'PASS'});console.log(`PASS ${name}`)}
@@ -46,19 +47,19 @@ try{
   })
   await test('native image NodeView uses authorized Rust bytes, keeps remote images closed and edits alt locally',async()=>{
     const image=page.locator('.md-image-preview img').first();await image.waitFor();assert.equal(await image.evaluate(img=>img.naturalWidth),1);assert.equal(await page.locator('img[src^="https:"]').count(),0)
-    const before=await raw();await image.click();await page.getByLabel('图片替代文字').fill('原生替代文字');await page.getByRole('button',{name:'应用图片',exact:true}).click();assert.ok((await raw()).includes('![原生替代文字](./assets/pixel.png)'));assert.equal(await page.locator('.md-image-preview img').first().getAttribute('alt'),'原生替代文字')
+    const before=await raw();await image.click({button:'right'});await page.getByLabel('图片替代文字').fill('原生替代文字');await page.getByRole('button',{name:'应用图片',exact:true}).click();assert.ok((await raw()).includes('![原生替代文字](./assets/pixel.png)'));assert.equal(await page.locator('.md-image-preview img').first().getAttribute('alt'),'原生替代文字')
     await page.evaluate(()=>document.querySelector('#app').__vue_app__._instance.setupState.manager.command('undo'));assert.equal(await raw(),before)
   })
   await test('native image property target maps pane edits and rejects stale deletion handlers',async()=>{
     await page.evaluate(()=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;m.focusPane('main',false);m.splitEditor()})
     await page.waitForFunction(()=>document.querySelectorAll('.md-prose').length===2)
     const main=page.locator('.main-pane'),before=await raw()
-    await main.locator('.md-live-image img').first().click()
+    await main.locator('.md-live-image img').first().click({button:'right'})
     await page.evaluate(()=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager,v=[...m.liveViews.entries()].find(([p])=>p!=='main')[1].editor.view;v.dispatch(v.state.tr.insertText('远端',v.state.doc.child(0).nodeSize+1))})
     await main.getByLabel('图片替代文字').fill('映射正确')
     await main.getByRole('button',{name:'应用图片',exact:true}).click()
     assert.ok((await raw()).includes('![映射正确]'))
-    await main.locator('.md-live-image img').first().click()
+    await main.locator('.md-live-image img').first().click({button:'right'})
     await page.evaluate(()=>{
       window.staleNativeImageDelete=[...document.querySelectorAll('.main-pane .md-properties button')].find(b=>b.textContent==='删除图片').onclick
       const m=document.querySelector('#app').__vue_app__._instance.setupState.manager,v=[...m.liveViews.entries()].find(([p])=>p!=='main')[1].editor.view
@@ -70,6 +71,21 @@ try{
     await page.evaluate(()=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;m.focusPane('main',false);m.command('undo');m.command('undo');m.command('undo');m.mergeAllPanes()})
     assert.equal(await raw(),before)
     await page.waitForFunction(()=>document.querySelectorAll('.md-prose').length===1)
+  })
+  await test('native HTML local CM, precise image end, default border, shared undo and Rust preference persistence',async()=>{
+    const before=await raw(),text='before\n\n![中文](./assets/pixel.png "title")\n\n<h1 data-title="属性">HTML 标题</h1>\n\nafter'
+    await page.evaluate(text=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;m.dispatch(m.activeId,{changes:{from:0,to:m.getState(m.activeId).doc.length,insert:text}})},text)
+    const image=page.locator('.md-live-image img').first();await image.waitFor();await page.waitForFunction(()=>document.querySelector('.md-live-image img')?.naturalWidth)
+    assert.equal(await image.evaluate(img=>getComputedStyle(img).borderTopWidth),'1px');await image.click()
+    const selected=await page.evaluate(()=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager,e=m.liveViews.get('main').editor.inlineSource;return {selection:m.getState(m.activeId).selection.main.head,end:e.sourceTo,native:e.selection(),length:e.input.textContent.length}})
+    assert.equal(selected.selection,selected.end);assert.equal(selected.native.head,selected.length);assert.equal(selected.native.anchor,selected.length)
+    await page.locator('.md-html-preview h1').click();const local=page.getByRole('textbox',{name:'HTML 局部源码'});await local.click();await page.keyboard.press('Control+a');await page.keyboard.insertText('<h1 data-title="属性">本地编辑</h1>');assert.ok((await raw()).includes('本地编辑'))
+    await page.keyboard.press('Escape');assert.equal(await local.count(),0);assert.equal(await page.locator('.md-html-preview h1').innerText(),'本地编辑')
+    await page.evaluate(()=>document.querySelector('#app').__vue_app__._instance.setupState.manager.command('undo'));assert.ok((await raw()).includes('HTML 标题'))
+    const preferences=await page.evaluate(async()=>{const invoke=window.__TAURI_INTERNALS__.invoke,s=await invoke('load_editor_settings');const original=s.markdownTypography.imageBorder;s.markdownTypography.imageBorder=false;await invoke('save_editor_settings',{settings:s});const loaded=await invoke('load_editor_settings');return {original,saved:loaded.markdownTypography.imageBorder}})
+    assert.equal(preferences.original,true);assert.equal(preferences.saved,false)
+    await page.screenshot({path:join(output,'native-html-image.png')})
+    await page.evaluate(text=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;m.dispatch(m.activeId,{changes:{from:0,to:m.getState(m.activeId).doc.length,insert:text}})},before)
   })
   await test('native external version conflict keeps disk bytes and dirty Live content',async()=>{
     const external=Buffer.concat([bom,Buffer.from(original+'\r\nexternal disk version')]);await writeFile(file,external)

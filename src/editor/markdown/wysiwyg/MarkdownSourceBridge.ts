@@ -1,7 +1,7 @@
-import type { Node } from 'prosemirror-model'
+import { Fragment, type Node } from 'prosemirror-model'
 import { parseMarkdown, type SourceBlock } from './MarkdownParser'
 import { patchTable, serializeBlock } from './MarkdownSerializer'
-export interface SourcePatch { from:number;to:number;insert:string;blockId?:string }
+export interface SourcePatch { from:number;to:number;insert:string;blockId?:string;htmlOrdinal?:number }
 export function textPatch(before:string,after:string):SourcePatch|null {
   if(before===after)return null
   let from=0,to=before.length,end=after.length
@@ -31,12 +31,27 @@ export class MarkdownSourceBridge {
           const parsedNode=parsed.firstChild!
           if(parsedNode.type.create({...parsedNode.attrs,sourceId:node.attrs.sourceId},parsedNode.content,parsedNode.marks).eq(node))inlineRaw=candidate
         }
+        // During HTML composition an incomplete tag is still an editable raw
+        // atom. Validate the exact old raw range AND the sole changed PM atom;
+        // never accept an arbitrary replacement merely because it is HTML.
+        if(inlineRaw===undefined&&inlinePatch.htmlOrdinal!==undefined){
+          let ordinal=0,found=false
+          const replace=(current:Node):Node=>{
+            if(current.type.name==='html_inline'&&ordinal++===inlinePatch.htmlOrdinal){
+              if(current.attrs.source!==old.raw.slice(inlinePatch.from-old.from,inlinePatch.to-old.from))return current
+              found=true;return current.type.create({...current.attrs,source:inlinePatch.insert},current.content,current.marks)
+            }
+            if(current.isLeaf)return current
+            return current.copy(Fragment.from(current.content.content.map(replace)))
+          }
+          if(replace(old.node).eq(node)&&found)inlineRaw=candidate
+        }
         if(inlineRaw===undefined)throw new Error('局部源码与文档节点不一致，拒绝修改。')
         inlineApplied=true
       }
       let raw=inlineRaw??(old?.node.eq(node)?old.raw:old&&node.type.name==='table'&&old.node.type===node.type?(patchTable(old.node,node,old.raw)??serializeBlock(node)):serializeBlock(node))
       if(old && !old.node.eq(node) && old.raw.includes('\r\n')) raw=raw.replace(/\r?\n/g,'\r\n')
-      const prefix=old?old.prefix||(blocks.length&&!raw.startsWith('\n')?'\n\n':''):blocks.length?'\n\n':''
+      const prefix = !blocks.length ? (old === this.blocks[0] ? old.prefix : '') : (old ? old.prefix || (!raw.startsWith('\n') ? '\n\n' : '') : (!raw.startsWith('\n') ? '\n\n' : ''))
       source+=prefix;const from=source.length;source+=raw
       if(node.type.name==='protected_source' && !old?.node.eq(node) && /^\s*\[[^\]]+\]:/m.test(raw))definitionsChanged=true
       blocks.push({id,from,to:source.length,raw,prefix,node})

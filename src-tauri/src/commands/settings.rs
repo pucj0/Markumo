@@ -34,10 +34,10 @@ pub struct EditorSettings {
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct MarkdownTypography {
     width: u16, font_size: u8, font_family: String, line_height: f64,
-    code_line_numbers: bool, code_wrap: bool,
+    code_line_numbers: bool, code_wrap: bool, image_border: bool,
 }
 impl Default for MarkdownTypography {
-    fn default() -> Self { Self { width: 860, font_size: 16, font_family: "system".into(), line_height: 1.6, code_line_numbers: true, code_wrap: false } }
+    fn default() -> Self { Self { width: 860, font_size: 16, font_family: "system".into(), line_height: 1.6, code_line_numbers: true, code_wrap: false, image_border: true } }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -177,6 +177,16 @@ pub async fn save_editor_settings(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn image_border_defaults_only_when_missing_and_explicit_false_survives_disk_roundtrip() {
+        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("settings.json");
+        std::fs::write(&path,br#"{"markdownTypography":{"fontSize":18}}"#).unwrap();
+        let mut settings=super::load(&path).unwrap();
+        assert!(settings.markdown_typography.image_border);
+        settings.markdown_typography.image_border=false;
+        super::save(&path,&settings).unwrap();
+        assert!(!super::load(&path).unwrap().markdown_typography.image_border);
+    }
     #[test]
     fn ui_typography_migrates_v4_and_survives_restart_without_changing_document_fonts() {
         let dir = tempfile::tempdir().unwrap();

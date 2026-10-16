@@ -1,5 +1,11 @@
 # LightEdit 轻量图标 — 2026-10-16
 
+## Markumo 更名更新
+
+当前应用名为 **Markumo**。`markumo-app.png` 是由内置 `image_gen` 根据旧版浅色 L 图标编辑得到的 M 图标，仍采用白色圆角纸面、石墨色细字和鼠尾草绿光标。`public/logo.png`、`public/favicon.png` 及 Tauri 的 `icon.png`/`icon.ico` 已改用新图。下文 LightEdit 素材与提示词保留为历史设计记录，文件图标仍是没有字母的通用白纸。
+
+本次编辑提示词：将深色 L 改为细石墨色大写 M，保留浅白圆角底、留白、淡灰边缘、右上方绿色光标与透明背景；32px 可辨认；不添加文字、阴影、徽标或装饰。使用项目 Tauri icon CLI 缩放和转换格式，命令为 `node scripts/tauri.mjs icon design/icons/markumo-app.png --output test-results/markumo-rename/icons`。
+
 使用内置 `image_gen` 分别生成应用与文档图标，透明背景；没有使用 API/CLI 生图。原始生成图保存在此目录，不依赖外部用户目录。
 
 ## 设计与用途

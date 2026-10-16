@@ -8,7 +8,7 @@ export interface KeymapPreset {
   bindings: Record<string, string>
 }
 
-// 1. LightEdit 默认方案（融合当前用户已明确习惯）
+// 1. Markumo 默认方案（融合当前用户已明确习惯）
 const lightEditBindings: Record<string, string> = Object.fromEntries(
   allCommands
     .filter(cmd => cmd.defaultBinding)
@@ -82,7 +82,7 @@ const typoraBindings: Record<string, string> = {
 export const keymapPresets: Record<KeymapPresetId, KeymapPreset> = {
   lightedit: {
     id: 'lightedit',
-    name: 'LightEdit 默认 (推荐)',
+    name: 'Markumo 默认 (推荐)',
     description: '融合通用代码编辑与 Markdown 所见即所得排版的平衡方案',
     bindings: lightEditBindings,
   },

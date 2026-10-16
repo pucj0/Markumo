@@ -5,7 +5,7 @@ export const sampleDocuments: DocumentSeed[] = [
     id: 'rust-doc',
     name: 'main.rs',
     path: 'src/main.rs',
-    text: `use std::path::PathBuf;\nuse tauri::Manager;\n\nmod commands;\nmod workspace;\n\nfn main() {\n    tauri::Builder::default()\n        .setup(|app| {\n            let window = app.get_webview_window("main").unwrap();\n            println!("LightEdit is ready: {:?}", window.label());\n            Ok(())\n        })\n        .invoke_handler(tauri::generate_handler![\n            commands::open_file,\n            commands::save_file,\n        ])\n        .run(tauri::generate_context!())\n        .expect("error while running LightEdit");\n}\n`,
+    text: `use std::path::PathBuf;\nuse tauri::Manager;\n\nmod commands;\nmod workspace;\n\nfn main() {\n    tauri::Builder::default()\n        .setup(|app| {\n            let window = app.get_webview_window("main").unwrap();\n            println!("Markumo is ready: {:?}", window.label());\n            Ok(())\n        })\n        .invoke_handler(tauri::generate_handler![\n            commands::open_file,\n            commands::save_file,\n        ])\n        .run(tauri::generate_context!())\n        .expect("error while running Markumo");\n}\n`,
     pinned: true,
   },
   {
@@ -33,7 +33,7 @@ export const sampleDocuments: DocumentSeed[] = [
     id: 'readme-doc',
     name: 'README.md',
     path: 'README.md',
-    text: `# LightEdit\n\n轻量、顺手、面向**所有文本**的桌面编辑器。\n兼顾 Fleet 的工作区体验和 Typora 的 Markdown 即时排版。\n\n## 核心特性\n\n- **纯文本**：打开 \`.txt\`、日志、CSV 和无扩展名文件。\n- **代码编辑**：TypeScript、Rust、Go、Python、JSON 等高亮与折叠。\n- **Markdown 即时排版**：同一编辑器里展示排版，光标进入即编辑。\n`,
+    text: `# Markumo\n\n轻量、顺手、面向**所有文本**的桌面编辑器。\n兼顾 Fleet 的工作区体验和 Typora 的 Markdown 即时排版。\n\n## 核心特性\n\n- **纯文本**：打开 \`.txt\`、日志、CSV 和无扩展名文件。\n- **代码编辑**：TypeScript、Rust、Go、Python、JSON 等高亮与折叠。\n- **Markdown 即时排版**：同一编辑器里展示排版，光标进入即编辑。\n`,
     pinned: false,
   }
 ]

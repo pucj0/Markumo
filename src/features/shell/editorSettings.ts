@@ -106,6 +106,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
     if(['system','serif','mono'].includes(md.fontFamily))target.fontFamily=md.fontFamily
     if(typeof md.codeLineNumbers==='boolean')target.codeLineNumbers=md.codeLineNumbers
     if(typeof md.codeWrap==='boolean')target.codeWrap=md.codeWrap
+    if(typeof md.imageBorder==='boolean')target.imageBorder=md.imageBorder
   }
   defaults.imageRules = imageRulesFrom(s.imageRules)
   if (s.documentImageRules && typeof s.documentImageRules === 'object') for (const [path,rules] of Object.entries(s.documentImageRules).slice(-100)) {

@@ -6,7 +6,7 @@ const ALLOWED_TAGS = [
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'p', 'div', 'span', 'strong', 'b', 'em', 'i', 'u', 's', 'del', 'mark',
   'small', 'sub', 'sup', 'ruby', 'rt', 'rp', 'kbd', 'code', 'pre', 'br', 'hr',
-  'a', 'img', 'button', 'svg', 'path',
+  'a', 'img', 'button', 'svg', 'g', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'tspan', 'title', 'desc',
   'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col',
   'details', 'summary', 'blockquote', 'ul', 'ol', 'li',
   'figure', 'figcaption', 'section', 'article', 'q', 'cite', 'abbr', 'time', 'var', 'samp',
@@ -18,6 +18,7 @@ const ALLOWED_ATTR = [
   'src', 'alt', 'width', 'height', 'loading',
   'colspan', 'rowspan', 'headers', 'scope', 'align', 'valign',
   'open', 'data-source-line', 'data-md-copy', 'viewbox', 'viewBox', 'fill', 'stroke', 'stroke-width', 'd',
+  'x', 'y', 'x1', 'x2', 'y1', 'y2', 'cx', 'cy', 'r', 'rx', 'ry', 'points', 'transform', 'xmlns',
 ]
 
 const SAFE_CSS_PROPERTIES = new Set([
@@ -46,6 +47,7 @@ export function sanitizeCssStyle(rawStyle: string): string {
 
     const lowerVal = val.toLowerCase()
     if (
+      /[\\\u0000-\u001f]/.test(val) ||
       lowerVal.includes('url(') ||
       lowerVal.includes('@import') ||
       lowerVal.includes('expression') ||
@@ -63,6 +65,25 @@ export function sanitizeCssStyle(rawStyle: string): string {
   return valid.join('; ')
 }
 
+/** Keep image URLs inert until resource permissions have been checked. The
+ * template is never attached; remote URLs cannot fetch before consent. */
+export function htmlForPreview(raw:string):string {
+  const clean=sanitizeHtml(raw)
+  if(typeof document==='undefined')return clean
+  const template=document.createElement('template')
+  template.innerHTML=clean
+  for(const img of template.content.querySelectorAll('img')){
+    img.setAttribute('data-md-safe-src',img.getAttribute('src')||'')
+    img.removeAttribute('src')
+  }
+  return template.innerHTML
+}
+export function renderSafeHtml(container:HTMLElement,raw:string){container.innerHTML=htmlForPreview(raw)}
+export function hasUnsupportedHtml(raw:string){
+  const template=document.createElement('template');template.innerHTML=raw
+  return [...template.content.querySelectorAll('*')].some(node=>!ALLOWED_TAGS.includes(node.localName.toLowerCase()))
+}
+
 // 安全初始化 DOMPurify 实例（兼容浏览器与 Node 测试环境）
 let purifyInstance: any = null
 
@@ -74,6 +95,9 @@ function getPurifier(): any {
     if (purifyInstance && purifyInstance.addHook && !purifyInstance.__hookAdded) {
       purifyInstance.__hookAdded = true
       purifyInstance.addHook('afterSanitizeAttributes', (node: Element) => {
+        if(node.namespaceURI==='http://www.w3.org/2000/svg'){
+          node.removeAttribute('href');node.removeAttribute('xlink:href')
+        }
         if (node.tagName === 'A') {
           const href = node.getAttribute('href')
           if (href) {
@@ -132,12 +156,9 @@ export function sanitizeHtml(rawHtml: string): string {
     })
   }
 
-  // Node 单元测试环境下的备用安全防线（严格剔除 script、iframe、事件属性）
-  return rawHtml
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
-    .replace(/\s+on\w+\s*=\s*(?:'[^']*'|"[^"]*"|[^\s>]+)/gi, '')
-    .replace(/href\s*=\s*['"]javascript:[^'"]*['"]/gi, '')
+  // No DOM sanitizer is available in non-browser consumers. Fail closed;
+  // regex blacklists cannot safely recognize HTML parser edge cases.
+  return rawHtml.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')
 }
 
 export interface MountedImageHandle {
@@ -153,10 +174,13 @@ export function mountHtmlImages(
   onImageClick?: (img: HTMLImageElement) => void
 ): MountedImageHandle {
   const objectUrls: string[] = []
+  let disposed=false
   const imgElements = Array.from(container.querySelectorAll<HTMLImageElement>('img'))
 
   for (const img of imgElements) {
-    const rawSrc = img.getAttribute('src') || ''
+    const rawSrc = img.getAttribute('data-md-safe-src') ?? img.getAttribute('src') ?? ''
+    img.removeAttribute('data-md-safe-src')
+    img.removeAttribute('src')
     if (!rawSrc) continue
 
     const dest = imageDestination(rawSrc)
@@ -175,12 +199,13 @@ export function mountHtmlImages(
     }
 
     if (dest.kind === 'remote') {
-      if (resources && !resources.allowedRemote.has(dest.path)) {
+      if (!resources || !resources.allowedRemote.has(dest.path)) {
         const placeholder = document.createElement('span')
         placeholder.className = 'md-html-remote-image-btn'
         placeholder.textContent = `点击加载网络图片 (${dest.path})`
         placeholder.onclick = (e) => {
           e.stopPropagation()
+          if(disposed||!placeholder.isConnected||!resources)return
           resources.allowedRemote.add(dest.path)
           img.src = dest.path
           placeholder.replaceWith(img)
@@ -198,7 +223,7 @@ export function mountHtmlImages(
       resources
         .loadLocal(dest.path)
         .then(bytes => {
-          if (!img.isConnected) return
+          if (disposed || !img.isConnected) return
           const type =
             bytes[0] === 0x89
               ? 'image/png'
@@ -214,16 +239,17 @@ export function mountHtmlImages(
           img.classList.add('md-html-img-ready')
         })
         .catch(err => {
-          if (!img.isConnected) return
+          if (disposed || !img.isConnected) return
           img.classList.remove('md-html-img-loading')
           const msg = err instanceof Error ? err.message : String(err)
           replaceWithImageError(img, rawSrc, msg.includes('系统找不到') ? '目标路径图片不存在' : msg)
         })
-    }
+    } else if(dest.kind==='local') replaceWithImageError(img,rawSrc,'本地图片需要文档授权')
   }
 
   return {
     destroy: () => {
+      disposed=true
       for (const url of objectUrls) {
         URL.revokeObjectURL(url)
       }
@@ -236,10 +262,8 @@ function replaceWithImageError(img: HTMLImageElement, src: string, reason: strin
   const errWrap = document.createElement('span')
   errWrap.className = 'md-html-image-error'
   errWrap.title = `${reason}\n${src}`
-  errWrap.innerHTML = `
-    <span class="md-image-error-icon">🖼️</span>
-    <span class="md-image-error-path">${src}</span>
-    <span class="md-image-error-tip">(${reason})</span>
-  `
+  for(const [className,text] of [['md-image-error-icon','🖼️'],['md-image-error-path',src],['md-image-error-tip',`(${reason})`]]){
+    const span=document.createElement('span');span.className=className;span.textContent=text;errWrap.append(span)
+  }
   img.replaceWith(errWrap)
 }

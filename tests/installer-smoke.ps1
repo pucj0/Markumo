@@ -1,12 +1,14 @@
 param([string]$InstallerPath)
 $ErrorActionPreference = 'Stop'
 $projectPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if (!$InstallerPath) { $InstallerPath = Join-Path $projectPath 'src-tauri/target/release/bundle/nsis/LightEdit_0.1.0_x64-setup.exe' }
+if (!$InstallerPath) { $InstallerPath = Join-Path $projectPath 'src-tauri/target/release/bundle/nsis/Markumo_0.1.0_x64-setup.exe' }
 $InstallerPath = (Resolve-Path -LiteralPath $InstallerPath).Path
-if (Get-Process lightedit -ErrorAction SilentlyContinue) { throw 'Save and close existing LightEdit before installer verification.' }
-$uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LightEdit'
-$machineKey = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LightEdit'
-if ((Test-Path $uninstallKey) -or (Test-Path $machineKey)) { throw 'Existing installation must remain intact; use a clean Windows user for this test.' }
+if (Get-Process lightedit,markumo -ErrorAction SilentlyContinue) { throw 'Save and close existing LightEdit / Markumo before installer verification.' }
+$uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Markumo'
+$machineKey = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Markumo'
+if ((Test-Path $uninstallKey) -or (Test-Path $machineKey) -or
+    (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LightEdit') -or
+    (Test-Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LightEdit')) { throw 'Existing installation must remain intact; use a clean Windows user for this test.' }
 $outputPath = Join-Path $projectPath ('test-results/installer/' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
 $installPath = [IO.Path]::GetFullPath((Join-Path $outputPath 'installed'))
 $safeRoot = [IO.Path]::GetFullPath((Join-Path $projectPath 'test-results/installer')) + [IO.Path]::DirectorySeparatorChar
@@ -26,11 +28,11 @@ foreach ($name in @('files.json','editor-settings.json','workspaces.json')) {
   if ($exists -and ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Do not mutate redirected metadata files.' }
   $metadata += [pscustomobject]@{ Path=$path; Exists=$exists; Bytes=$(if($exists){[IO.File]::ReadAllBytes($path)}else{$null}) }
 }
-$productKey = 'HKCU:\Software\lightedit\LightEdit'
+$productKey = 'HKCU:\Software\lightedit\Markumo'
 $productExisted = Test-Path $productKey
 $parentExisted = Test-Path 'HKCU:\Software\lightedit'
 $registryBackup = Join-Path $outputPath 'installer-registry-before.reg'
-if ($productExisted) { & reg.exe export 'HKCU\Software\lightedit\LightEdit' $registryBackup /y | Out-Null; if($LASTEXITCODE){throw 'Cannot back up installer metadata.'} }
+if ($productExisted) { & reg.exe export 'HKCU\Software\lightedit\Markumo' $registryBackup /y | Out-Null; if($LASTEXITCODE){throw 'Cannot back up installer metadata.'} }
 $report = [ordered]@{installer=$InstallerPath;installPath=$installPath;installExit=$null;uninstallExit=$null;installedBinaryMatches=$false;metadataRestored=$false;failure=$null}
 $installed = $false
 try {
@@ -40,9 +42,9 @@ try {
   $report.installExit=$installProcess.ExitCode
   if($report.installExit -ne 0){throw "Installer failed: $($report.installExit)"}
   $installed=$true
-  $installedExe=Join-Path $installPath 'lightedit.exe'
+  $installedExe=Join-Path $installPath 'markumo.exe'
   if(!(Test-Path -LiteralPath $installedExe)){throw 'Installed executable missing.'}
-  $releaseExe=Join-Path $projectPath 'src-tauri/target/release/lightedit.exe'
+  $releaseExe=Join-Path $projectPath 'src-tauri/target/release/markumo.exe'
   # Tauri patches its fixed-width bundle marker only in the bundled binary, then
   # restores the release source executable. All remaining bytes must match.
   $releaseBytes=[IO.File]::ReadAllBytes($releaseExe)
@@ -59,9 +61,9 @@ try {
   if(!$report.installedBinaryMatches){throw 'Installed binary differs from tested build.'}
 
   # Verify Windows File Associations & Context Menu registration in HKCU
-  $appKey = 'HKCU:\Software\Classes\Applications\lightedit.exe'
-  if (!(Test-Path $appKey)) { throw 'Registry Applications\lightedit.exe missing.' }
-  $supportedTypes = 'HKCU:\Software\Classes\Applications\lightedit.exe\SupportedTypes'
+  $appKey = 'HKCU:\Software\Classes\Applications\markumo.exe'
+  if (!(Test-Path $appKey)) { throw 'Registry Applications\markumo.exe missing.' }
+  $supportedTypes = 'HKCU:\Software\Classes\Applications\markumo.exe\SupportedTypes'
   if (!(Test-Path $supportedTypes)) { throw 'SupportedTypes registry key missing.' }
   foreach ($ext in @('.txt', '.md', '.json', '.rs')) {
     if ((Get-Item $supportedTypes).GetValue($ext) -eq $null) { throw "SupportedTypes $ext missing in registry." }
@@ -71,7 +73,7 @@ try {
   $regCommand = (Get-ItemProperty $txtContextKey).'(default)'
   if (!$regCommand.Contains($installedExe)) { throw "Context menu command does not point to installed exe: $regCommand" }
   $regApps = 'HKCU:\Software\RegisteredApplications'
-  if ((Get-ItemProperty $regApps -ErrorAction SilentlyContinue).LightEdit -ne 'Software\LightEdit\Capabilities') { throw 'RegisteredApplications LightEdit capability mapping missing.' }
+  if ((Get-ItemProperty $regApps -ErrorAction SilentlyContinue).Markumo -ne 'Software\LightEdit\Capabilities') { throw 'RegisteredApplications Markumo capability mapping missing.' }
   $report.associationsVerified = $true
 
   $env:LIGHTEDIT_INSTALL_TEST_EXE=$installedExe
@@ -87,14 +89,14 @@ finally {
       $uninstallProcess=Start-Process -FilePath $uninstaller -ArgumentList @('/S','/UPDATE') -WindowStyle Hidden -PassThru
       if(!$uninstallProcess.WaitForExit(30000)){$uninstallProcess.Kill();$report.failure='Test uninstaller timeout.'}else{$report.uninstallExit=$uninstallProcess.ExitCode}
       # The launcher exits before its temporary NSIS child completes uninstall.
-      for($i=0;$i -lt 900 -and ((Test-Path $uninstallKey) -or (Test-Path (Join-Path $installPath 'lightedit.exe')));$i++){Start-Sleep -Milliseconds 100}
-      if((Test-Path $uninstallKey) -or (Test-Path (Join-Path $installPath 'lightedit.exe'))){$report.failure='Isolated installation did not finish uninstalling.'}
+      for($i=0;$i -lt 900 -and ((Test-Path $uninstallKey) -or (Test-Path (Join-Path $installPath 'markumo.exe')));$i++){Start-Sleep -Milliseconds 100}
+      if((Test-Path $uninstallKey) -or (Test-Path (Join-Path $installPath 'markumo.exe'))){$report.failure='Isolated installation did not finish uninstalling.'}
 
       # Verify uninstaller cleaned up LightEdit registry associations
-      if (Test-Path 'HKCU:\Software\Classes\Applications\lightedit.exe') { $report.failure = 'Uninstaller failed to remove Applications\lightedit.exe.' }
+      if (Test-Path 'HKCU:\Software\Classes\Applications\markumo.exe') { $report.failure = 'Uninstaller failed to remove Applications\markumo.exe.' }
       if (Test-Path 'HKCU:\Software\LightEdit\Capabilities') { $report.failure = 'Uninstaller failed to remove LightEdit\Capabilities.' }
       if (Test-Path 'HKCU:\Software\Classes\SystemFileAssociations\.txt\shell\LightEdit') { $report.failure = 'Uninstaller failed to remove SystemFileAssociations\.txt\shell\LightEdit.' }
-      if ((Get-ItemProperty 'HKCU:\Software\RegisteredApplications' -ErrorAction SilentlyContinue).LightEdit) { $report.failure = 'Uninstaller failed to remove RegisteredApplications entry.' }
+      if ((Get-ItemProperty 'HKCU:\Software\RegisteredApplications' -ErrorAction SilentlyContinue).Markumo) { $report.failure = 'Uninstaller failed to remove RegisteredApplications entry.' }
     }
   }
   foreach($item in $metadata){

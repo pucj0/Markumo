@@ -18,11 +18,12 @@ describe('Native package entry points',()=>{
     expect(packageOptions(['--help','--platform','macos'],'win32').help).toBe(true)
   })
   it('preserves signing/proxy variables but removes inherited development config without mutating its input',()=>{
-    const input={Path:'original',TAURI_CONFIG:'dev override',LIGHTEDIT_DEV_DATA_DIR:'test profile',APPLE_SIGNING_IDENTITY:'Developer ID',CARGO_HTTP_PROXY:'http://localhost:7897'}
+    const input={Path:'original',TAURI_CONFIG:'dev override',LIGHTEDIT_DEV_DATA_DIR:'test profile',MARKUMO_DEV_DATA_DIR:'new profile',MARKUMO_DESKTOP_NO_RELOAD:'1',APPLE_SIGNING_IDENTITY:'Developer ID',CARGO_HTTP_PROXY:'http://localhost:7897'}
     const env=buildEnvironment(input,'user home')
     expect(env.Path).toContain(join('user home','.cargo','bin'));expect(env.TAURI_CONFIG).toBeUndefined()
     expect(env.LIGHTEDIT_DEV_DATA_DIR).toBeUndefined();expect(env.APPLE_SIGNING_IDENTITY).toBe('Developer ID');expect(env.CARGO_HTTP_PROXY).toBe(input.CARGO_HTTP_PROXY)
     expect(input.TAURI_CONFIG).toBe('dev override')
+    expect(env.MARKUMO_DEV_DATA_DIR).toBeUndefined();expect(env.MARKUMO_DESKTOP_NO_RELOAD).toBeUndefined()
   })
   it('reports native and explicitly configured Cargo output paths',()=>{
     expect(bundleDirectory('target')).toBe(join('target','release','bundle'))

@@ -12,7 +12,7 @@ const fixture = join(output, 'workspace'), other = join(output, 'other-workspace
 const { chromium } = createRequire(process.env.LIGHTEDIT_PLAYWRIGHT_PACKAGE || import.meta.url)('playwright')
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 function appPids() {
-  return execFileSync('powershell.exe', ['-NoProfile', '-Command', 'Get-Process lightedit -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean).map(Number)
+  return execFileSync('powershell.exe', ['-NoProfile', '-Command', 'Get-Process lightedit,markumo -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean).map(Number)
 }
 assert.deepEqual(appPids(), [], 'Keep existing user windows intact: close them before isolated desktop regression.')
 await Promise.all([mkdir(join(fixture, 'src'), { recursive: true }), mkdir(join(fixture, 'dest'), { recursive: true }), mkdir(other, { recursive: true }), mkdir(join(profile, 'temp'), { recursive: true })])

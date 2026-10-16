@@ -95,7 +95,7 @@ impl LaunchRegistry {
 }
 pub type LaunchStore = Mutex<LaunchRegistry>;
 
-/// Maximum number of concurrent LightEdit windows.
+/// Maximum number of concurrent Markumo windows.
 pub const MAX_WINDOWS: usize = 16;
 
 /// What the caller must do for one external open request.
