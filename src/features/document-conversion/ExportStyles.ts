@@ -1,7 +1,10 @@
 import type { PdfOptions } from './contracts'
+import { lightEditHighlight } from '../../editor/core/syntaxTheme'
+import { exportAppearance, type ExportAppearance } from './ExportAppearance'
 
 export function getHighlightCss(): string {
   return `
+${lightEditHighlight.module?.getRules() || ''}
 /* Syntax highlighting */
 .tok-keyword { color: #d73a49; font-weight: 600; }
 .tok-string { color: #032f62; }
@@ -18,7 +21,7 @@ export function getHighlightCss(): string {
 `
 }
 
-export function getDocumentCss(codeWrap = true): string {
+export function getDocumentCss(codeWrap = true, appearance:ExportAppearance=exportAppearance()): string {
   return `
 :root {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -176,6 +179,27 @@ a:hover {
 }
 
 ${getHighlightCss()}
+${getAppearanceCss(appearance,codeWrap)}
+`
+}
+
+function getAppearanceCss({typography:t,colors:c}:ExportAppearance,wrap:boolean){
+  const font=t.fontFamily==='serif'?'Georgia, "Noto Serif CJK SC", "SimSun", serif':t.fontFamily==='mono'?'"JetBrains Mono", "Cascadia Code", Consolas, monospace':'-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", system-ui, sans-serif'
+  return `
+:root { ${Object.entries(c).map(([name,value])=>`--${name}:${value};`).join('')} --text:var(--ink); --bg:var(--editor); --code-bg:var(--md-code-bg); --border:var(--line); --table-border:var(--line); --quote-text:var(--muted); }
+body { padding:30px; font-family:${font}; font-size:${t.fontSize}px; line-height:${t.lineHeight}; }
+.markumo-document { max-width:${t.width}px; }
+h1,h2,h3,h4,h5,h6 { color:var(--text); margin:1rem 0; line-height:1.4; }
+h1 { font-size:2.25em; line-height:1.2; } h2 { font-size:1.75em; line-height:1.225; } h3 { font-size:1.5em; line-height:1.43; } h4 {font-size:1.25em}
+p { margin:.8em 0; }
+table tr {background:var(--bg)}
+pre.markumo-code { padding:8px 12px; font:13px/1.65 var(--font-mono); }
+pre.markumo-code > code { display:block; white-space:normal; }
+.markumo-code-line { display:grid; grid-template-columns:minmax(0,1fr); min-height:1.65em; }
+.numbered .markumo-code-line { grid-template-columns:4ch minmax(0,1fr); }
+.markumo-code-number { color:var(--muted); font-size:12px; text-align:right; padding-right:12px; user-select:none; }
+.markumo-code-number::before { content:attr(data-line); }
+.markumo-code-text { min-width:0; white-space:${wrap?'pre-wrap':'pre'}; overflow-wrap:${wrap?'anywhere':'normal'}; }
 `
 }
 
@@ -195,8 +219,8 @@ export function getPrintCss(pdfOptions?: PdfOptions): string {
 @media print {
   body {
     padding: 0 !important;
-    background: #ffffff !important;
-    color: #000000 !important;
+    background: ${pdfOptions?.printBackground === false ? '#ffffff' : 'var(--bg)'} !important;
+    color: ${pdfOptions?.printBackground === false ? '#000000' : 'var(--text)'} !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
@@ -233,10 +257,11 @@ export function buildCompleteHtml(
   title: string,
   bodyContent: string,
   includeStyles: boolean,
-  pdfOptions?: PdfOptions
+  pdfOptions?: PdfOptions,
+  appearance:ExportAppearance=exportAppearance()
 ): string {
   const styleTag = includeStyles
-    ? `<style>\n${getDocumentCss(pdfOptions?.codeWrap ?? true)}\n${pdfOptions ? getPrintCss(pdfOptions) : ''}\n</style>`
+    ? `<style>\n${getDocumentCss(pdfOptions?.codeWrap ?? appearance.typography.codeWrap,appearance)}\n${pdfOptions ? getPrintCss(pdfOptions) : ''}\n</style>`
     : ''
 
   return `<!DOCTYPE html>

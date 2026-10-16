@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict'
+import {mkdir,writeFile} from 'node:fs/promises'
+import {chromium,browserOptions} from './helpers/markdown-browser.mjs'
+const out='test-results/export-presentation';await mkdir(out,{recursive:true})
+const source='# 导出代码示例\n\n```dockerfile\n# 基础镜像\nFROM maven:3.9-eclipse-temurin-21\nWORKDIR /app\nRUN echo "中文 export"\n\nCMD ["tail", "-f", "/dev/null"]\n```\n\n```javascript\nconst text = "中文";\n/* 多行\ncomment */\nconsole.log(text);\n```'
+await writeFile(`${out}/fixture.html`,'<meta charset="utf-8"><div id="app"></div><script type="module" src="./fixture.ts"></script>')
+await writeFile(`${out}/fixture.ts`,`import {createApp,h} from 'vue';import AppMenu from '/src/components/layout/AppMenu.vue';import {mainMenu} from '/src/features/shell/mainMenu.ts';import {CommandRegistry} from '/src/features/shell/menuModel.ts';import {ExportController} from '/src/features/document-conversion/ExportController.ts';import {DocumentManager} from '/src/editor/core/DocumentManager.ts';import {renderMarkdownForExport} from '/src/features/document-conversion/ExportRenderer.ts';import {buildCompleteHtml} from '/src/features/document-conversion/ExportStyles.ts';import '/src/styles/reset.css';import '/src/styles/variables.css';document.body.classList.add('light');const source=${JSON.stringify(source)};const manager=new DocumentManager([{id:'md',name:'export.md',text:source}]);manager.open('md',false);const groups=mainMenu({sidebar:false,outline:false,wrap:false,split:false,focus:false,markdown:true,composing:false,recentFiles:[],recentWorkspaces:[]});const commands=[];function collect(nodes){for(const n of nodes){if(n.children)collect(n.children);else if(n.commandId)commands.push({id:n.commandId,title:n.label||n.commandId,enabled:true,run(){}})}}for(const g of groups)collect(g.items);const registry=new CommandRegistry(commands);createApp({render:()=>h(AppMenu,{groups,registry})}).mount('#app');window.fixture={manager,source,exporter:new ExportController(manager,console.log),renderMarkdownForExport,buildCompleteHtml};`)
+const browser=await chromium.launch(browserOptions),page=await browser.newPage({viewport:{width:1100,height:850}}),errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(15000)
+try{
+ await page.goto(`${process.env.LIGHTEDIT_TEST_URL}/${out}/fixture.html`);await page.getByRole('menuitem',{name:'文件',exact:true}).click()
+ const root=page.getByRole('menu',{name:'文件菜单'}),importRow=root.getByRole('menuitem',{name:'导入',exact:true}),exportRow=root.getByRole('menuitem',{name:'导出',exact:true})
+ const a=await importRow.boundingBox(),b=await exportRow.boundingBox();assert.ok(Math.abs(b.y-a.y-a.height)<2);assert.ok((await root.boundingBox()).width>=232)
+ await exportRow.click();const sub=page.getByRole('menu',{name:'导出',exact:true});for(const name of ['PDF','HTML','HTML（无主题样式）','Word (.docx)','PNG 长图'])await sub.getByRole('menuitem',{name,exact:true}).waitFor()
+ assert.equal(await sub.locator('.menu-label').evaluateAll(els=>els.some(el=>el.scrollWidth>el.clientWidth)),false);await page.screenshot({path:`${out}/menu.png`});await page.keyboard.press('Escape');await page.keyboard.press('Escape')
+ const html=await page.evaluate(async()=>{const f=window.fixture;const result=await f.renderMarkdownForExport(f.source);return f.buildCompleteHtml(result.title,result.bodyHtml,true,{paperSize:'A4',orientation:'portrait',margins:'default',printBackground:true,codeWrap:true})});await writeFile(`${out}/styled.html`,html)
+ const preview=await browser.newPage({viewport:{width:1000,height:1000}});await preview.setContent(html);assert.equal(await preview.locator('button,[data-md-copy]').count(),0)
+ assert.equal(await preview.locator('.markumo-code-number').count(),10);assert.equal(await preview.locator('.markumo-code-number').first().evaluate(el=>getComputedStyle(el,'::before').content),'"1"')
+ const colors=await preview.locator('code span[class]').evaluateAll(els=>[...new Set(els.filter(el=>el.className.startsWith('ͼ')).map(el=>getComputedStyle(el).color))]);assert.ok(colors.length>=3,JSON.stringify(colors))
+ assert.equal(await preview.locator('code.language-javascript').textContent(),'const text = "中文";\n/* 多行\ncomment */\nconsole.log(text);\n')
+ await preview.screenshot({path:`${out}/styled.png`});await preview.emulateMedia({media:'print'});assert.ok((await preview.locator('code span[class]').evaluateAll(els=>[...new Set(els.filter(el=>el.className.startsWith('ͼ')).map(el=>getComputedStyle(el).color))])).length>=3)
+ await preview.pdf({path:`${out}/export.pdf`,format:'A4',printBackground:true});await preview.close()
+ const noNumbers=await page.evaluate(async()=>window.fixture.renderMarkdownForExport(window.fixture.source,undefined,true,false));assert.ok(!noNumbers.bodyHtml.includes('markumo-code-number'))
+ const download=page.waitForEvent('download');await page.evaluate(()=>window.fixture.exporter.exportDocument('png'));await (await download).saveAs(`${out}/export.png`)
+ assert.deepEqual(errors,[]);console.log('PASS adjacent menus/labels/width; first-render syntax colors; exact code text; static line numbers; print/PDF; PNG download')
+ await writeFile(`${out}/results.json`,JSON.stringify({result:'PASS',colors,errors},null,2))
+}finally{await browser.close()}

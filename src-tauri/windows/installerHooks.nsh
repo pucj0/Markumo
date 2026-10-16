@@ -39,6 +39,8 @@
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit" "" "使用 Markumo 打开"
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit" "Icon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
+  ; One global file verb below avoids duplicate entries for known extensions.
+  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit" "LegacyDisable" ""
 !macroend
 
 ; Macro to register a document extension with Open With, Capabilities, and Context Menu
@@ -76,6 +78,19 @@
 ; ------------------------------------------------------------------------------
 ; Post-Install Hook: Runs after files and basic shortcuts are created
 ; ------------------------------------------------------------------------------
+!macro NSIS_HOOK_PREINSTALL
+  ; Release the previous package's COM surrogate before replacing its DLL.
+  IfFileExists "$INSTDIR\shell\Registration.json" 0 markumo_shell_preinstall_done
+    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\shell\Register.ps1" -Mode Uninstall -AppDirectory "$INSTDIR"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      MessageBox MB_OK|MB_ICONEXCLAMATION "更新新版右键菜单前移除旧注册失败：$1" /SD IDOK
+      Abort
+    ${EndIf}
+  markumo_shell_preinstall_done:
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   ; Replace only our old RegisteredApplications display entry.
   ReadRegStr $R0 SHCTX "Software\RegisteredApplications" "LightEdit"
@@ -105,6 +120,14 @@
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit" "" "使用 Markumo 打开"
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit" "Icon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
   WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
+  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit" "LegacyDisable" ""
+
+  ; Any file, including extensions without PerceivedType=text. This is the
+  ; classic menu (Windows 11: Show more options), not a modern Shell extension.
+  WriteRegStr SHCTX "Software\Classes\*\shell\Markumo" "" "以 Markumo 打开"
+  WriteRegStr SHCTX "Software\Classes\*\shell\Markumo" "Icon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
+  WriteRegStr SHCTX "Software\Classes\*\shell\Markumo" "MultiSelectModel" "Document"
+  WriteRegStr SHCTX "Software\Classes\*\shell\Markumo\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
 
   ; 5. Register 27 document extensions; executable scripts get an edit verb only
   !insertmacro LightEdit_RegisterExt "txt"
@@ -137,6 +160,18 @@
   !insertmacro LightEdit_RegisterExecutableScript "bat"
   !insertmacro LightEdit_RegisterExecutableScript "cmd"
 
+  ; Per-user sparse package supplies Windows 11 package identity and COM verb.
+  ; Never import certificates or change Developer Mode from the installer.
+  IfFileExists "$INSTDIR\shell\Register.ps1" 0 markumo_shell_done
+    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\shell\Register.ps1" -Mode Install -AppDirectory "$INSTDIR"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      ; Optional integration: keep diagnostics without interrupting installation.
+      DetailPrint "Markumo Windows 11 context menu registration failed: $1"
+    ${EndIf}
+  markumo_shell_done:
+
   ; 6. Notify Windows Shell of association updates
   System::Call 'Shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 !macroend
@@ -145,6 +180,16 @@
 ; Pre-Uninstall Hook: Runs before removing files and directories
 ; ------------------------------------------------------------------------------
 !macro NSIS_HOOK_PREUNINSTALL
+  IfFileExists "$INSTDIR\shell\Register.ps1" 0 markumo_shell_uninstall_done
+    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\shell\Register.ps1" -Mode Uninstall -AppDirectory "$INSTDIR"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      MessageBox MB_OK|MB_ICONEXCLAMATION "移除新版右键菜单失败：$1。请关闭使用此扩展的窗口后重试。" /SD IDOK
+      Abort
+    ${EndIf}
+  markumo_shell_uninstall_done:
+  DeleteRegKey SHCTX "Software\Classes\*\shell\Markumo"
   ; 1. Remove Windows RegisteredApplications reference
   DeleteRegValue SHCTX "Software\RegisteredApplications" "${PRODUCTNAME}"
 

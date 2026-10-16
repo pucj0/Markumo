@@ -110,7 +110,7 @@ onMounted(async () => {
 onUnmounted(() => { alive=false;cancelHover();observer?.disconnect();window.removeEventListener('lightedit-menu-open',anotherMenu);window.removeEventListener('pointerdown',outside,true);window.removeEventListener('keydown',globalKey,true);window.removeEventListener('resize',align) })
 </script>
 <style>
-.app-menu-popup { position:fixed;z-index:1200;display:flex;flex-direction:column;width:max-content;min-width:200px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow-y:auto;overflow-x:hidden;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:4px;box-shadow:0 6px 20px rgba(0,0,0,.18);font: var(--ui-font-size)/var(--ui-line-height) var(--font-sans);color:var(--ink) }
+.app-menu-popup { position:fixed;z-index:1200;display:flex;flex-direction:column;width:max-content;min-width:232px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow-y:auto;overflow-x:hidden;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:4px;box-shadow:0 6px 20px rgba(0,0,0,.18);font: var(--ui-font-size)/var(--ui-line-height) var(--font-sans);color:var(--ink) }
 .app-menu-popup button { display:flex;align-items:center;gap:8px;text-align:left;min-height:var(--ui-control-height);padding:4px 8px;border-radius:3px;flex:none;color:var(--ink);white-space:nowrap;min-width:0 }
 .app-menu-popup button:hover,.app-menu-popup button:focus-visible { background:var(--hover) }.app-menu-popup button:focus-visible { outline:1px solid var(--accent);outline-offset:-1px }
 .app-menu-popup button:disabled { opacity:.45;cursor:default }.app-menu-popup button:disabled:hover { background:transparent }

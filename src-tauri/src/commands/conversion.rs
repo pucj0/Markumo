@@ -8,6 +8,40 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, WebviewWindow, WebviewWindowBuilder, WebviewUrl};
 use tauri_plugin_dialog::DialogExt;
 
+// Settings probes and document conversions run in the background. Capturing
+// stdout alone does not prevent Windows from creating a console window.
+fn pandoc_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    command
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    #[test]
+    fn background_command_has_no_console() {
+        const CHILD: &str = "MARKUMO_CONSOLE_PROBE_CHILD";
+        const MARKER: &str = "background output captured";
+        if std::env::var_os(CHILD).is_some() {
+            #[link(name = "kernel32")]
+            extern "system" { fn GetConsoleWindow() -> isize; }
+            assert_eq!(unsafe { GetConsoleWindow() }, 0);
+            println!("{MARKER}");
+            return;
+        }
+        let output = super::pandoc_command(std::env::current_exe().unwrap())
+            .env(CHILD, "1")
+            .args(["--exact", "commands::conversion::tests::background_command_has_no_console", "--nocapture"])
+            .output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains(MARKER));
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PandocStatus {
     pub available: bool,
@@ -26,7 +60,7 @@ pub struct PdfPrintOptions {
 /// Discovers Pandoc executable from PATH or standard Windows install locations.
 pub fn find_pandoc_path() -> Option<PathBuf> {
     // 1. Check if 'pandoc' is in PATH
-    if let Ok(output) = Command::new("pandoc").arg("--version").output() {
+    if let Ok(output) = pandoc_command("pandoc").arg("--version").output() {
         if output.status.success() {
             return Some(PathBuf::from("pandoc"));
         }
@@ -44,7 +78,7 @@ pub fn find_pandoc_path() -> Option<PathBuf> {
 
         for candidate in candidates.into_iter().flatten() {
             if candidate.exists() {
-                if let Ok(output) = Command::new(&candidate).arg("--version").output() {
+                if let Ok(output) = pandoc_command(&candidate).arg("--version").output() {
                     if output.status.success() {
                         return Some(candidate);
                     }
@@ -70,7 +104,7 @@ pub async fn detect_pandoc() -> Result<PandocStatus, String> {
             }
         };
 
-        let output = Command::new(&exe)
+        let output = pandoc_command(&exe)
             .arg("--version")
             .output()
             .map_err(|e| format!("执行 Pandoc 失败: {e}"))?;
@@ -222,7 +256,7 @@ pub async fn pandoc_export_docx(
         let temp_md = temp_dir.path().join("input.md");
         std::fs::write(&temp_md, &markdown_content).map_err(|e| format!("写入 Markdown 临时文件失败: {e}"))?;
 
-        let mut cmd = Command::new(&pandoc_exe);
+        let mut cmd = pandoc_command(&pandoc_exe);
         cmd.arg("-f").arg("gfm")
             .arg("-t").arg("docx")
             .arg("--standalone")
@@ -263,7 +297,7 @@ pub async fn pandoc_import_docx(
             return Err("指定的 Word 文档不存在。".to_string());
         }
 
-        let mut cmd = Command::new(&pandoc_exe);
+        let mut cmd = pandoc_command(&pandoc_exe);
         cmd.arg("-f").arg("docx")
             .arg("-t").arg("gfm")
             .arg("--wrap=none")

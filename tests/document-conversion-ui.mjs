@@ -216,7 +216,7 @@ try {
     await page.screenshot({ path: `${output}/01-settings-conversion.png` })
 
     // Close settings modal
-    await page.locator('.close-btn').click()
+    await page.getByRole('button',{name:'关闭设置',exact:true}).click()
     await page.locator('.settingsoverlay').waitFor({ state: 'hidden' })
   })
 

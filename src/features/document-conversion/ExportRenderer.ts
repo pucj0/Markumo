@@ -1,6 +1,10 @@
 import { createMarkdownRenderer } from '../../editor/markdown/rendering'
 import { imageDestination, type MarkdownResources } from '../../editor/markdown/images'
 import { sanitizeHtml } from '../../editor/markdown/html/SafeHtmlRenderer'
+import { LanguageSupport } from '@codemirror/language'
+import { highlightTree } from '@lezer/highlight'
+import { lightEditHighlight } from '../../editor/core/syntaxTheme'
+import { fenceLanguage, loadLanguage } from '../../editor/languages'
 
 export interface RenderResult {
   title: string
@@ -28,10 +32,40 @@ function cleanHtmlForExport(html: string): string {
 export async function renderMarkdownForExport(
   markdown: string,
   resources?: MarkdownResources,
-  embedImages = true
+  embedImages = true,
+  codeLineNumbers = true,
 ): Promise<RenderResult> {
   const title = extractDocumentTitle(markdown)
   const renderer = createMarkdownRenderer()
+  // Export is a single static snapshot. Await parsers instead of relying on
+  // the preview renderer's later re-render callback (which never runs here).
+  const parsed=renderer.parse(markdown,{})
+  const supports=new Map<string,LanguageSupport|null>()
+  await Promise.all([...new Set(parsed.filter(t=>t.type==='fence').map(t=>fenceLanguage(t.info)))].map(async name=>{
+    try{const support=await loadLanguage(name,'fence');supports.set(name,support instanceof LanguageSupport?support:null)}catch{supports.set(name,null)}
+  }))
+  renderer.options.highlight=(code,info)=>{
+    const support=supports.get(fenceLanguage(info))
+    if(!support)return renderer.utils.escapeHtml(code)
+    let result='',position=0
+    highlightTree(support.language.parser.parse(code),lightEditHighlight,(from,to,classes)=>{
+      result+=renderer.utils.escapeHtml(code.slice(position,from))+`<span class="${classes}">${renderer.utils.escapeHtml(code.slice(from,to)).split('\n').join(`</span>\n<span class="${classes}">`)}</span>`;position=to
+    })
+    return result+renderer.utils.escapeHtml(code.slice(position))
+  }
+  // Static formats have no working clipboard controls. Use semantic <pre>
+  // directly and keep exactly one code element for content selection/copy.
+  renderer.renderer.rules.fence=(tokens,index,options)=>{
+    const token=tokens[index],info=token.info.trim().split(/\s+/)[0]
+    const highlighted=options.highlight?.(token.content,token.info,'')||renderer.utils.escapeHtml(token.content)
+    const count=token.content.replace(/\n$/,'').split('\n').length
+    const lines=highlighted.split('\n').slice(0,count).map((line,i)=>`<span class="markumo-code-line">${codeLineNumbers?`<span class="markumo-code-number" data-line="${i+1}" aria-hidden="true"></span>`:''}<span class="markumo-code-text">${line}</span></span>`).join('\n')
+    return `<pre class="markumo-code${codeLineNumbers?' numbered':''}"><code${info?` class="language-${renderer.utils.escapeHtml(info)}"`:''}>${lines}${token.content.endsWith('\n')?'\n':''}</code></pre>\n`
+  }
+  renderer.renderer.rules.image=(tokens,index)=>{
+    const token=tokens[index]
+    return `<img src="${renderer.utils.escapeHtml(String(token.attrGet('src')||''))}" alt="${renderer.utils.escapeHtml(token.content)}"${token.attrGet('title')?` title="${renderer.utils.escapeHtml(String(token.attrGet('title')))}"`:''}>`
+  }
   let rendered = renderer.render(markdown)
 
   // If in browser / DOM environment, process interactive features

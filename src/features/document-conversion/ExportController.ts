@@ -6,6 +6,7 @@ import { loadConversionSettings, saveLastExport, loadLastExport } from './conver
 import { renderMarkdownForExport, extractDocumentTitle } from './ExportRenderer'
 import { buildCompleteHtml } from './ExportStyles'
 import { exportMarkdownToDocx } from './PandocBridge'
+import { exportAppearance } from './ExportAppearance'
 
 export class ExportController {
   constructor(
@@ -102,8 +103,9 @@ export class ExportController {
     settings: ConversionSettings
   ): Promise<void> {
     const resources = createMarkdownResources(() => this.manager.activeDocument?.fileToken)
-    const { bodyHtml } = await renderMarkdownForExport(markdown, resources, settings.embedImagesAsDataUri)
-    const fullHtml = buildCompleteHtml(title, bodyHtml, includeStyles)
+    const appearance=exportAppearance(this.manager.getMarkdownTypography())
+    const { bodyHtml } = await renderMarkdownForExport(markdown, resources, settings.embedImagesAsDataUri, includeStyles&&appearance.typography.codeLineNumbers)
+    const fullHtml = buildCompleteHtml(title, bodyHtml, includeStyles,undefined,appearance)
 
     const bytes = new TextEncoder().encode(fullHtml)
     if (isTauri()) {
@@ -123,8 +125,9 @@ export class ExportController {
     settings: ConversionSettings
   ): Promise<void> {
     const resources = createMarkdownResources(() => this.manager.activeDocument?.fileToken)
-    const { bodyHtml } = await renderMarkdownForExport(markdown, resources, true)
-    const fullHtml = buildCompleteHtml(title, bodyHtml, true, settings.pdf)
+    const appearance=exportAppearance(this.manager.getMarkdownTypography())
+    const { bodyHtml } = await renderMarkdownForExport(markdown, resources, true,appearance.typography.codeLineNumbers)
+    const fullHtml = buildCompleteHtml(title, bodyHtml, true, settings.pdf,appearance)
 
     if (isTauri()) {
       await invoke('print_to_pdf', {
@@ -159,27 +162,28 @@ export class ExportController {
     settings: ConversionSettings
   ): Promise<void> {
     const resources = createMarkdownResources(() => this.manager.activeDocument?.fileToken)
-    const { bodyHtml } = await renderMarkdownForExport(markdown, resources, true)
+    const appearance=exportAppearance(this.manager.getMarkdownTypography())
+    const { bodyHtml } = await renderMarkdownForExport(markdown, resources, true,appearance.typography.codeLineNumbers)
 
-    // Render in an offscreen container
-    const container = document.createElement('div')
-    container.className = 'markumo-document styled'
-    container.style.position = 'absolute'
-    container.style.left = '-99999px'
-    container.style.top = '0'
-    container.style.width = `${settings.png.width}px`
-    container.style.background = settings.png.backgroundColor || '#ffffff'
-    container.style.padding = '32px'
-    container.style.boxSizing = 'border-box'
-    container.innerHTML = bodyHtml
-    document.body.appendChild(container)
+    // Isolate export CSS from the editor and give html2canvas a complete,
+    // styled document rather than an unstyled offscreen fragment.
+    const frame=document.createElement('iframe')
+    frame.style.cssText=`position:absolute;left:-99999px;top:0;width:${settings.png.width}px;height:1px;border:0`
+    document.body.appendChild(frame)
 
     try {
+      const exported=frame.contentDocument!
+      exported.open();exported.write(buildCompleteHtml('',bodyHtml,true,undefined,appearance));exported.close()
+      await exported.fonts.ready
+      await Promise.all([...exported.images].map(image=>image.decode().catch(()=>{})))
+      const container=exported.body
+      container.style.background=settings.png.backgroundColor||appearance.colors.editor
       // Check document height
       const totalHeight = container.scrollHeight
       if (totalHeight > 30000) {
         throw new Error('文档超出图片最大安全画布尺寸（30,000像素），建议改用 PDF 格式导出。')
       }
+      frame.style.height=`${totalHeight}px`
 
       const { default: html2canvas } = await import('html2canvas')
       const canvas = await html2canvas(container, {
@@ -204,7 +208,7 @@ export class ExportController {
         this.downloadBlob(blob, targetPath)
       }
     } finally {
-      container.remove()
+      frame.remove()
     }
   }
 
