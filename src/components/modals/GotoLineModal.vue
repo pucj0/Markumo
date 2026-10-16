@@ -100,14 +100,14 @@ defineExpose({ open, close, visible })
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   color: var(--muted);
   border-bottom: 1px solid var(--line);
 }
 
 .max-line {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--ui-small-font-size);
 }
 
 .goto-input-row {
@@ -120,7 +120,7 @@ defineExpose({ open, close, visible })
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: var(--ui-font-size);
   font-family: var(--font-mono);
   color: var(--bright);
   outline: none;
@@ -136,7 +136,7 @@ defineExpose({ open, close, visible })
   display: flex;
   align-items: center;
   padding: 0 12px;
-  font-size: 10px;
+  font-size: var(--ui-small-font-size);
   color: var(--muted);
   border-top: 1px solid var(--line);
 }

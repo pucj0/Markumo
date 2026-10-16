@@ -172,7 +172,7 @@ defineExpose({ open, close, visible })
 }
 
 .palette-search {
-  height: 48px;
+  height: calc(var(--ui-control-height) + 16px);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -185,7 +185,7 @@ defineExpose({ open, close, visible })
   flex: 1;
   background: transparent;
   border: none;
-  font-size: 14px;
+  font-size: var(--ui-font-size);
   color: var(--bright);
   outline: none;
 }
@@ -200,13 +200,13 @@ defineExpose({ open, close, visible })
 .palrow {
   gap: 12px;
   width: 100%;
-  height: 36px;
+  min-height: calc(var(--ui-control-height) + 4px);
   border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  font-size: 13px;
+  font-size: var(--ui-font-size);
   color: var(--ink);
   transition: background 0.1s;
 }
@@ -224,7 +224,7 @@ defineExpose({ open, close, visible })
 }
 
 .meta {
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   color: var(--muted);
   font-family: var(--font-mono);
 }
@@ -232,7 +232,7 @@ defineExpose({ open, close, visible })
 .empty-rows {
   padding: 24px;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--ui-font-size);
   color: var(--muted);
 }
 
@@ -245,7 +245,7 @@ defineExpose({ open, close, visible })
   justify-content: flex-end;
   gap: 16px;
   padding: 0 16px;
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   color: var(--muted);
 }
 

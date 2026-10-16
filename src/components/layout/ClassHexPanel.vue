@@ -48,11 +48,11 @@ onUnmounted(() => { alive = false; generation++; view?.destroy() })
 </script>
 <style scoped>
 .class-hex { width:50%;min-width:0;display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--editor) }
-.hex-toolbar { flex:none;display:flex;align-items:center;gap:5px;min-height:34px;padding:3px 8px;border-bottom:1px solid var(--line);font-size:11px;color:var(--sub);flex-wrap:wrap }
+.hex-toolbar { flex:none;display:flex;align-items:center;gap:5px;min-height:34px;padding:3px 8px;border-bottom:1px solid var(--line);font-size: var(--ui-small-font-size);color:var(--sub);flex-wrap:wrap }
 .hex-toolbar span { margin-right:auto }.hex-toolbar button { padding:3px 6px;border-radius:4px;color:var(--sub) }.hex-toolbar button:hover { background:var(--hover) }
 .hex-toolbar input { width:90px;min-width:0;border:1px solid var(--line);border-radius:4px;background:var(--editor);font:11px var(--font-mono);padding:3px 5px }
 .hex-host { flex:1;min-height:0;overflow:hidden }.hex-host :deep(.cm-editor) { height:100% }
-.hex-footer { padding:3px 8px;font-size:10px;color:var(--muted);border-top:1px solid var(--line) }
-.hex-error { padding:6px 8px;font-size:12px;color:var(--pink);overflow-wrap:anywhere }
+.hex-footer { padding:3px 8px;font-size: var(--ui-small-font-size);color:var(--muted);border-top:1px solid var(--line) }
+.hex-error { padding:6px 8px;font-size: var(--ui-font-size);color:var(--pink);overflow-wrap:anywhere }
 @media(max-width:900px) { .class-hex { width:auto;height:45%;border-left:0;border-top:1px solid var(--line) } }
 </style>

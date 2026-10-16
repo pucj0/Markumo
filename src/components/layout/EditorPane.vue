@@ -73,6 +73,6 @@ onUnmounted(() => props.manager.unmount(props.pane))
 .pane-body { flex:1;display:flex;min-width:0;min-height:0;position:relative;overflow:hidden }
 .editor-host { flex:1;min-height:0;min-width:0;overflow:hidden;display:flex }
 .editor-host :deep(.cm-editor) { height:100%;width:100% }
-.markdown-budget {position:absolute;top:0;right:12px;z-index:8;font-size:12px;background:var(--side);padding:5px;color:var(--muted)}
+.markdown-budget {position:absolute;top:0;right:12px;z-index:8;font-size: var(--ui-font-size);background:var(--side);padding:5px;color:var(--muted)}
 @media(max-width:900px) { .class-pane { flex-direction:column } }
 </style>

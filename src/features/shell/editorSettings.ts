@@ -26,11 +26,11 @@ export const shortcutLabels: Record<ShortcutAction, string> = {
 }
 /** Bumped when a stored preference needs migration. Version 4 made automatic
  * save opt-in: files written by older versions always stored the old `true`
- * default, so that value cannot prove intent. */
-export const currentSettingsVersion = 4
+ * default, so that value cannot prove intent. Version 5 adds independent UI typography. */
+export const currentSettingsVersion = 5
 export interface EditorSettings {
   markdownTypography:MarkdownTypography
-  theme: ThemePreference; fontSize: number; fontFamily: 'system' | 'consolas' | 'cascadia'
+  theme: ThemePreference; uiFontSize: number; fontSize: number; fontFamily: 'system' | 'consolas' | 'cascadia'
   wordWrap: boolean; showOutline: boolean; indentSize: number; useTabs: boolean; defaultMdMode: MarkdownMode
   autoSave: boolean; autoSaveDelay: number
   imageRules: ImageRules
@@ -44,7 +44,7 @@ export interface EditorSettings {
 }
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
 export function defaultSettings(): EditorSettings {
-  return { markdownTypography:defaultMarkdownTypography(), theme: 'system', fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
+  return { markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
 }
 /** Drop the transient migration notice before writing preferences to disk. */
 export function persistedSettings(settings: EditorSettings) {
@@ -103,6 +103,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
     if (path && path.length <= 4096 && !['__proto__','constructor','prototype'].includes(path)) Object.defineProperty(defaults.documentImageRules,path,{value:imageRulesFrom(rules),enumerable:true,configurable:true,writable:true})
   }
   if (s.theme === 'dark' || s.theme === 'light' || s.theme === 'system') defaults.theme = s.theme
+  if (Number.isInteger(s.uiFontSize) && s.uiFontSize! >= 12 && s.uiFontSize! <= 20) defaults.uiFontSize = s.uiFontSize!
   if (Number.isInteger(s.fontSize) && s.fontSize! >= 10 && s.fontSize! <= 24) defaults.fontSize = s.fontSize!
   if (s.fontFamily && ['system','consolas','cascadia'].includes(s.fontFamily)) defaults.fontFamily = s.fontFamily
   for (const key of ['wordWrap','showOutline','useTabs'] as const) if (typeof s[key] === 'boolean') defaults[key] = s[key]!
@@ -110,7 +111,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
   // record who enabled it, so an ambiguous legacy `true` is preserved (never
   // overwritten) and surfaced as a one-time notice instead. From version 4 on,
   // the stored value is written only by the settings UI and is authoritative.
-  const legacySettings = !(Number.isInteger(s.settingsVersion) && s.settingsVersion! >= currentSettingsVersion)
+  const legacySettings = !(Number.isInteger(s.settingsVersion) && s.settingsVersion! >= 4)
   if (typeof s.autoSave === 'boolean') {
     defaults.autoSave = s.autoSave
     defaults.legacyAutoSaveNotice = legacySettings && s.autoSave

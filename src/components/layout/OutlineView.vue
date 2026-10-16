@@ -50,14 +50,14 @@ defineEmits<{
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  font-size: 12px;
+  font-size: var(--ui-font-size);
 }
 
 .empty-outline {
   padding: 24px 16px;
   text-align: center;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
 }
 
 .outline-list {
@@ -87,11 +87,11 @@ defineEmits<{
   color: var(--accent);
   font-weight: 700;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--ui-small-font-size);
 }
 
 .kind-badge {
-  font-size: 9px;
+  font-size: var(--ui-small-font-size);
   background: var(--soft);
   color: var(--blue);
   padding: 1px 3px;
@@ -107,7 +107,7 @@ defineEmits<{
 }
 
 .outline-line {
-  font-size: 10px;
+  font-size: var(--ui-small-font-size);
   color: var(--muted);
   font-family: var(--font-mono);
 }

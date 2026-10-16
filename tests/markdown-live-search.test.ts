@@ -3,12 +3,60 @@ import { parseMarkdown } from '../src/editor/markdown/wysiwyg/MarkdownParser'
 import {
   findMatches,
   buildDecorations,
+  replacementText, replaceMatch, createLiveSearchPlugin, liveSearchPluginKey,
   type LiveSearchOptions,
 } from '../src/editor/markdown/wysiwyg/plugins/LiveSearch'
 import { MarkdownSourceBridge } from '../src/editor/markdown/wysiwyg/MarkdownSourceBridge'
 import { DocumentManager } from '../src/editor/core/DocumentManager'
+import { EditorState } from 'prosemirror-state'
 
 describe('LiveSearch and LiveReplace', () => {
+  const options: LiveSearchOptions = { search: '', replace: '', caseSensitive: false, wholeWord: false, regexp: false }
+  it('preserves mark boundaries, links, table syntax and unrelated CRLF blocks when replacing', () => {
+    const source = '# unchanged\r\n\r\nfoo**bar**[baz](https://example.com)\r\n\r\n| Key | Value |\r\n| :--- | ---: |\r\n| 中文 | keep |\r\n'
+    const bridge = new MarkdownSourceBridge(source)
+    const state = EditorState.create({ doc: bridge.doc })
+    const match = findMatches(state.doc, { ...options, search: 'foobarbaz' }).matches[0]
+    const tr = replaceMatch(state.tr, match, 'FOOBARBAZ')
+    const prepared = bridge.prepare(tr.doc)
+    expect(prepared.source).toBe(source.replace('foo**bar**[baz]', 'FOO**BAR**[BAZ]'))
+  })
+  it('never matches across images, formulas, hard breaks or table cells', () => {
+    const { doc } = parseMarkdown('left![x](./x.png)right\n\nleft$x$right\n\nleft  \nright\n\n| left | right |\n| --- | --- |\n')
+    expect(findMatches(doc, { ...options, search: 'leftright' }).matches).toHaveLength(0)
+  })
+  it('replaces a table cell while preserving alignment, escaped pipes, links and other cells exactly', () => {
+    const source = '| Key | Value |\r\n| :--- | ---: |\r\n| 中文 | [link](https://example.com) \\| **keep** |\r\n'
+    const bridge = new MarkdownSourceBridge(source), state = EditorState.create({ doc: bridge.doc })
+    const match = findMatches(state.doc, { ...options, search: '中文' }).matches[0]
+    const prepared = bridge.prepare(replaceMatch(state.tr, match, '汉字').doc)
+    expect(prepared.source).toBe(source.replace('中文', '汉字'))
+  })
+  it('expands contextual regex captures, named groups and dollar substitutions', () => {
+    const { doc } = parseMarkdown('before abc12 after')
+    const match = findMatches(doc, { ...options, search: '(?<=before )(?<word>abc)(\\d+)(?= after)', regexp: true }).matches[0]
+    const pattern = "$<word>/$2/$&/$$/$`/$'/$12/$0"
+    expect(replacementText(match, pattern, true)).toBe('abc/12/abc12/$/before / after/abc2/$0')
+    expect(replacementText(match, '$1', false)).toBe('$1')
+  })
+  it('handles Unicode zero length matches without looping and groups whole-word alternatives', () => {
+    const { doc } = parseMarkdown('😀 foo foobar bar')
+    expect(findMatches(doc, { ...options, search: '(?=.)', regexp: true }).matches).toHaveLength([...doc.textContent.matchAll(/(?=.)/gu)].length)
+    expect(findMatches(doc, { ...options, search: 'foo|bar', regexp: true, wholeWord: true }).matches.map(m => m.text)).toEqual(['foo', 'bar'])
+  })
+  it('recomputes matches on replayed pane transactions before replacement', () => {
+    let state = EditorState.create({ doc: parseMarkdown('target **target**\n\n```js\nconst target = 1\n```').doc, plugins: [createLiveSearchPlugin()] })
+    state = state.apply(state.tr.setMeta(liveSearchPluginKey, { type: 'open' }))
+    state = state.apply(state.tr.setMeta(liveSearchPluginKey, { type: 'setOptions', options: { search: 'target' } }))
+    state = state.apply(state.tr.insertText('中文 ', 1))
+    const matches = liveSearchPluginKey.getState(state)!.matches
+    expect(matches).toHaveLength(3)
+    expect(matches[0].from).toBe(4)
+    const tr = state.tr
+    for (const match of [...matches].reverse()) replaceMatch(tr, match, 'result')
+    expect(tr.doc.textContent).toBe('中文 result resultconst result = 1')
+    expect(tr.doc.lastChild?.type.name).toBe('code_block')
+  })
   const sampleDoc = `# 标题测试 Heading Test
 
 这是包含 **加粗文字** 和 *斜体文字* 的普通段落。

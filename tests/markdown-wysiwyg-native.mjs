@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict'
 import {spawn,execFileSync} from 'node:child_process'
-import {createRequire} from 'node:module'
 import {mkdir,readFile,writeFile} from 'node:fs/promises'
 import {dirname,join} from 'node:path'
 import {fileURLToPath} from 'node:url'
 const root=dirname(dirname(fileURLToPath(import.meta.url))),output=join(root,'test-results/markdown-wysiwyg-native',String(Date.now())),profile=join(output,'profile'),file=join(output,'writing.md')
-const {chromium}=createRequire(process.env.LIGHTEDIT_PLAYWRIGHT_PACKAGE||'C:/Users/18089/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/package.json')('playwright')
+import { chromium } from 'playwright'
 assert.equal(execFileSync('powershell.exe',['-NoProfile','-Command','Get-Process lightedit -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id; exit 0'],{encoding:'utf8'}).trim(),'','Preserve user data: an existing LightEdit window must be saved and closed before this isolated test.')
 await mkdir(profile,{recursive:true});const fixture=await readFile(join(root,'tests/fixtures/markdown-wysiwyg.md'),'utf8'),original=fixture.replace(/\r?\n/g,'\r\n'),bom=Buffer.from([239,187,191]);await writeFile(file,Buffer.concat([bom,Buffer.from(original)]));await writeFile(join(profile,'editor-settings.json'),'{}')
 await mkdir(join(output,'assets'),{recursive:true});await writeFile(join(output,'assets/pixel.png'),await readFile(join(root,'tests/fixtures/assets/pixel.png')))
@@ -23,6 +22,10 @@ try{
   assert.ok(browser,'WebView2 CDP startup');for(let i=0;i<100;i++){page=browser.contexts().flatMap(c=>c.pages()).find(p=>p.url().startsWith('http://localhost:1420'));if(page)break;await pause(100)}assert.ok(page)
   page.on('pageerror',error=>errors.push(error.message));await page.locator('.md-prose').waitFor({timeout:30000})
   await test('native open/no-op modes/save retains original UTF-8 BOM and CRLF',async()=>{
+    await page.locator('.md-diagram svg').waitFor({timeout:60000})
+    await page.locator('.md-inline-math .katex').waitFor()
+    await page.locator('.md-math-output .katex-display').waitFor()
+    assert.equal(await page.locator('.md-code-block').filter({has:page.locator('.md-diagram svg')}).locator('.md-code-editor-wrap').isVisible(),false)
     assert.equal(await raw(),original)
     for(const mode of ['source','split','live']){await page.evaluate(mode=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;m.setMarkdownMode(m.activeId,mode)},mode);if(mode==='live')await page.locator('.md-prose').waitFor();assert.equal(await raw(),original)}
     await page.evaluate(async()=>{const app=document.querySelector('#app').__vue_app__._instance.setupState;await app.files.save(app.manager.activeId)})
@@ -45,6 +48,28 @@ try{
     const image=page.locator('.md-image-preview img').first();await image.waitFor();assert.equal(await image.evaluate(img=>img.naturalWidth),1);assert.equal(await page.locator('img[src^="https:"]').count(),0)
     const before=await raw();await image.click();await page.getByLabel('图片替代文字').fill('原生替代文字');await page.getByRole('button',{name:'应用图片',exact:true}).click();assert.ok((await raw()).includes('![原生替代文字](./assets/pixel.png)'));assert.equal(await page.locator('.md-image-preview img').first().getAttribute('alt'),'原生替代文字')
     await page.evaluate(()=>document.querySelector('#app').__vue_app__._instance.setupState.manager.command('undo'));assert.equal(await raw(),before)
+  })
+  await test('native image property target maps pane edits and rejects stale deletion handlers',async()=>{
+    await page.evaluate(()=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;m.focusPane('main',false);m.splitEditor()})
+    await page.waitForFunction(()=>document.querySelectorAll('.md-prose').length===2)
+    const main=page.locator('.main-pane'),before=await raw()
+    await main.locator('.md-live-image img').first().click()
+    await page.evaluate(()=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager,v=[...m.liveViews.entries()].find(([p])=>p!=='main')[1].editor.view;v.dispatch(v.state.tr.insertText('远端',v.state.doc.child(0).nodeSize+1))})
+    await main.getByLabel('图片替代文字').fill('映射正确')
+    await main.getByRole('button',{name:'应用图片',exact:true}).click()
+    assert.ok((await raw()).includes('![映射正确]'))
+    await main.locator('.md-live-image img').first().click()
+    await page.evaluate(()=>{
+      window.staleNativeImageDelete=[...document.querySelectorAll('.main-pane .md-properties button')].find(b=>b.textContent==='删除图片').onclick
+      const m=document.querySelector('#app').__vue_app__._instance.setupState.manager,v=[...m.liveViews.entries()].find(([p])=>p!=='main')[1].editor.view
+      let pos;v.state.doc.descendants((node,at)=>{if(pos===undefined&&node.type.name==='image')pos=at})
+      v.dispatch(v.state.tr.setNodeMarkup(pos,undefined,{...v.state.doc.nodeAt(pos).attrs,alt:'远端改图'}))
+    })
+    assert.equal(await main.locator('.md-properties').isVisible(),false)
+    const changed=await raw();await page.evaluate(()=>window.staleNativeImageDelete(new MouseEvent('click')));assert.equal(await raw(),changed)
+    await page.evaluate(()=>{const m=document.querySelector('#app').__vue_app__._instance.setupState.manager;m.focusPane('main',false);m.command('undo');m.command('undo');m.command('undo');m.mergeAllPanes()})
+    assert.equal(await raw(),before)
+    await page.waitForFunction(()=>document.querySelectorAll('.md-prose').length===1)
   })
   await test('native external version conflict keeps disk bytes and dirty Live content',async()=>{
     const external=Buffer.concat([bom,Buffer.from(original+'\r\nexternal disk version')]);await writeFile(file,external)

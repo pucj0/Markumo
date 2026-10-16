@@ -23,7 +23,7 @@
           <!-- 已打开真实工作区 -->
           <template v-if="workspace.rootPath">
             <div ref="treeContainer" class="workspace-tree-container" tabindex="0" aria-label="工作区目录树" @scroll="treeScrollTop = ($event.target as HTMLElement).scrollTop">
-              <div :style="{ height: `${treeStart * 26}px` }"></div>
+              <div :style="{ height: `${treeStart * rowHeight}px` }"></div>
               <template v-for="row in visibleTree" :key="row.node.path">
               <div v-if="row.root" class="treenode folder root-folder" :title="`${row.root.name}\n${readablePath(row.root.rootPath)}`" @contextmenu.prevent.stop="rootMenu($event,row.root)" @keydown.shift.f10.prevent.stop="rootMenu($event,row.root)">
                 <button class="root-toggle" @click="toggleRoot(row.root.rootPath)"><span class="twisty">{{ collapsedRoots.includes(row.root.rootPath) ? '▸' : '▾' }}</span><Icon name="folder" size="small" /><span class="label">{{ row.root.name }}</span></button>
@@ -52,7 +52,7 @@
                 @reveal-node="workspace.revealNode($event)"
               />
               </template>
-              <div :style="{ height: `${Math.max(0, flatTree.length - treeStart - visibleTree.length) * 26}px` }"></div>
+              <div :style="{ height: `${Math.max(0, flatTree.length - treeStart - visibleTree.length) * rowHeight}px` }"></div>
             </div>
           </template>
 
@@ -227,6 +227,7 @@ import { textClipboard } from '../../features/shell/clipboard'
 
 const props = defineProps<{
   width: number
+  uiFontSize?: number
   activePanel: SidebarPanel
   activeDocId: string | null
   openDocs: EditorDocument[]
@@ -325,7 +326,8 @@ const flatTree = computed(() => {
   }
   return rows
 })
-const virtualWindow = computed(() => treeWindow(flatTree.value.length, treeScrollTop.value, treeHeight.value))
+const rowHeight = computed(() => (props.uiFontSize ?? 14) + 14)
+const virtualWindow = computed(() => treeWindow(flatTree.value.length, treeScrollTop.value, treeHeight.value, rowHeight.value))
 const treeStart = computed(() => virtualWindow.value.start)
 const visibleTree = computed(() => flatTree.value.slice(treeStart.value, treeStart.value + virtualWindow.value.count))
 watch(() => props.workspace.openRevision, () => {
@@ -350,7 +352,7 @@ const activeDocPath = computed(() => {
 function scrollActiveIntoView() {
   const element = treeContainer.value, index = flatTree.value.findIndex(row => activeDocPath.value && displayPathKey(row.node.path) === displayPathKey(activeDocPath.value))
   if (!element || index < 0) return
-  const top = index * 26, bottom = top + 26
+  const top = index * rowHeight.value, bottom = top + rowHeight.value
   if (top < element.scrollTop) element.scrollTop = top
   else if (bottom > element.scrollTop + element.clientHeight) element.scrollTop = bottom - element.clientHeight
   treeScrollTop.value = element.scrollTop
@@ -469,7 +471,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.root-toggle { display:flex;align-items:center;gap:5px;flex:1;min-width:0;text-align:left;height:26px;color:var(--sub) }
+.root-toggle { display:flex;align-items:center;gap:5px;flex:1;min-width:0;text-align:left;height:var(--ui-tree-row-height);color:var(--sub) }
 .root-actions { display:none;position:absolute;right:4px;top:1px;align-items:center;background:var(--sidebar) }
 .root-folder { position:relative }
 .root-folder:hover .root-actions,.root-folder:focus-within .root-actions { display:flex;background:var(--hover) }
@@ -505,7 +507,7 @@ onUnmounted(() => {
 }
 
 .panel-title {
-  font-size: 11px;
+  font-size: var(--ui-font-size);
   font-weight: 700;
   color: var(--muted);
   letter-spacing: 0.8px;
@@ -517,12 +519,12 @@ onUnmounted(() => {
   flex:none;
 }
 
-.tree-tool { width:22px;height:24px }
+.tree-tool { width:var(--ui-row-height);height:var(--ui-row-height) }
 .tree-tool:disabled { opacity:.4;cursor:default }
 .panel-title { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
 .ib.small {
-  width: 24px;
-  height: 24px;
+  width: var(--ui-row-height);
+  height: var(--ui-row-height);
 }
 
 .panel-body {
@@ -536,11 +538,11 @@ onUnmounted(() => {
 .workspace-tree-container { flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain }
 
 .treelist {
-  font-size: 12px;
+  font-size: var(--ui-font-size);
 }
 
 .treenode {
-  height: 26px;
+  height: var(--ui-tree-row-height);
   display: flex;
   align-items: center;
   gap: 7px;
@@ -570,7 +572,7 @@ onUnmounted(() => {
   width: 12px;
   text-align: center;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--ui-small-font-size);
 }
 
 .label {
@@ -582,7 +584,7 @@ onUnmounted(() => {
 }
 
 .dirty-dot {
-  font-size: 8px;
+  font-size: var(--ui-small-font-size);
   color: var(--yellow);
 }
 
@@ -592,7 +594,7 @@ onUnmounted(() => {
 }
 
 .empty-ws-tip {
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   color: var(--muted);
   margin-bottom: 10px;
 }
@@ -603,7 +605,7 @@ onUnmounted(() => {
   color: var(--bright);
   padding: 6px 12px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--ui-font-size);
   cursor: pointer;
 }
 
@@ -618,7 +620,7 @@ onUnmounted(() => {
 }
 
 .sub-header {
-  font-size: 10px;
+  font-size: var(--ui-small-font-size);
   font-weight: 700;
   color: var(--muted);
   padding: 0 12px 6px;
@@ -666,7 +668,7 @@ onUnmounted(() => {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px 24px 6px 8px;
-  font-size: 12px;
+  font-size: var(--ui-font-size);
   color: var(--bright);
   outline: none;
 }
@@ -679,7 +681,7 @@ onUnmounted(() => {
   position: absolute;
   right: 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   cursor: pointer;
 }
 
@@ -692,7 +694,7 @@ onUnmounted(() => {
 .opt-btn {
   padding: 2px 6px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   font-family: var(--font-mono);
   background: var(--soft);
   color: var(--muted);
@@ -707,14 +709,14 @@ onUnmounted(() => {
 
 .cancel-btn {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   color: var(--yellow);
   padding: 2px 6px;
 }
 
 .search-status-bar {
   padding: 6px 12px;
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   color: var(--muted);
 }
 
@@ -736,7 +738,7 @@ onUnmounted(() => {
   padding: 0 10px;
   cursor: pointer;
   background: var(--bar);
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   color: var(--ink);
   font-weight: 600;
 }
@@ -753,7 +755,7 @@ onUnmounted(() => {
 }
 
 .group-count {
-  font-size: 10px;
+  font-size: var(--ui-small-font-size);
   background: var(--soft);
   padding: 1px 5px;
   border-radius: 10px;
@@ -772,7 +774,7 @@ onUnmounted(() => {
   gap: 8px;
   padding: 0 10px 0 24px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   font-family: var(--font-mono);
   color: var(--muted);
 }

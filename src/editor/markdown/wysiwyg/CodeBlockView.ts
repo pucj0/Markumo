@@ -1,14 +1,41 @@
-import { EditorState as CMState, Compartment, Prec } from '@codemirror/state'
-import { EditorView as CMView, keymap, lineNumbers } from '@codemirror/view'
+import { EditorState as CMState, Compartment, Prec, StateEffect, StateField } from '@codemirror/state'
+import { EditorView as CMView, keymap, lineNumbers, Decoration, WidgetType, type DecorationSet } from '@codemirror/view'
 import { defaultKeymap, indentWithTab, indentLess } from '@codemirror/commands'
-import { syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
-import { search, setSearchQuery, SearchQuery } from '@codemirror/search'
+import { lightEditSyntax } from '../../core/syntaxTheme'
+import { LanguageSelector } from './LanguageSelector'
+import { copyStatusIcon } from '../../../components/common/iconPaths'
 import type { Node } from 'prosemirror-model'
 import { TextSelection, Selection } from 'prosemirror-state'
 import type { EditorView, NodeView } from 'prosemirror-view'
-import { detectLanguage, languageNames, loadLanguage, type LanguageName } from '../../languages'
+import { parseFenceInfo, loadLanguage } from '../../languages'
 import { textClipboard } from '../../../features/shell/clipboard'
 import type { MarkdownTypography } from './contracts'
+
+interface CodeSearchRange { from: number; to: number; current: boolean }
+const setCodeSearch = StateEffect.define<CodeSearchRange[]>()
+class ZeroSearchMatch extends WidgetType {
+  constructor(private current: boolean) { super() }
+  eq(other: ZeroSearchMatch) { return this.current === other.current }
+  toDOM() {
+    const marker = document.createElement('span')
+    marker.className = `cm-searchMatch md-search-zero md-search-match${this.current ? ' cm-searchMatch-selected md-search-match-current' : ''}`
+    marker.setAttribute('aria-hidden', 'true')
+    return marker
+  }
+}
+const codeSearchDecorations = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes)
+    for (const effect of tr.effects) if (effect.is(setCodeSearch)) {
+      value = Decoration.set(effect.value.filter(r => r.from <= r.to && r.to <= tr.newDoc.length).map(r => r.from === r.to
+        ? Decoration.widget({ widget: new ZeroSearchMatch(r.current), side: 1 }).range(r.from)
+        : Decoration.mark({ class: `cm-searchMatch md-search-match${r.current ? ' cm-searchMatch-selected md-search-match-current' : ''}` }).range(r.from, r.to)), true)
+    }
+    return value
+  },
+  provide: field => CMView.decorations.from(field),
+})
 
 export class CodeBlockView implements NodeView {
   readonly dom = document.createElement('div')
@@ -19,8 +46,14 @@ export class CodeBlockView implements NodeView {
   private updating = false
   private dead = false
   private generation = 0
+  private highlightKey = ''
+  private highlightDoc?: CMState['doc']
+  private pendingHighlights: CodeSearchRange[] = []
+  private highlightScheduled = false
 
-  private select = document.createElement('input')
+  private selector: LanguageSelector
+  private languageStatus = document.createElement('span')
+  private copyTimer: ReturnType<typeof setTimeout> | undefined
   private diagram = document.createElement('div')
   private diagramToolbar = document.createElement('div')
   private renderButton = document.createElement('button')
@@ -29,6 +62,9 @@ export class CodeBlockView implements NodeView {
   private cmContainer = document.createElement('div')
   private isMermaid = false
   private isEditingMermaid = false
+  private renderGeneration = 0
+  private themeObserver?: MutationObserver
+  private renderTimer?: ReturnType<typeof setTimeout>
 
   constructor(
     private node: Node,
@@ -36,7 +72,8 @@ export class CodeBlockView implements NodeView {
     readonly getPos: () => number | undefined,
     settings: MarkdownTypography,
     private history: (forward: boolean) => void,
-    private onSearchRequest?: (replace: boolean) => void
+    private onSearchRequest?: (replace: boolean) => void,
+    private onSearchNavigate?: (forward: boolean) => void
   ) {
     this.isMermaid = /^mermaid(?:\s|$)/i.test(node.attrs.params)
     this.dom.className = 'md-code-block'
@@ -46,45 +83,32 @@ export class CodeBlockView implements NodeView {
     this.copyButton.type = 'button'
     this.copyButton.className = 'md-code-copy'
     this.copyButton.setAttribute('aria-label', '复制代码')
-    this.copyButton.textContent = '复制代码'
+    this.copyButton.title = '复制代码'
+    this.copyButton.append(copyStatusIcon())
     this.copyButton.onclick = () => {
       void textClipboard.writeText(this.cm.state.doc.toString()).then(() => {
-        const orig = this.copyButton.textContent
-        this.copyButton.textContent = '已复制'
-        setTimeout(() => {
-          if (!this.dead) this.copyButton.textContent = orig
+        if (this.dead) return
+        this.copyButton.replaceChildren(copyStatusIcon(true))
+        this.copyButton.title = '已复制'
+        if (this.copyTimer) clearTimeout(this.copyTimer)
+        this.copyTimer = setTimeout(() => {
+          if (!this.dead) { this.copyButton.replaceChildren(copyStatusIcon()); this.copyButton.title = '复制代码' }
         }, 1500)
       }).catch(error => window.dispatchEvent(new CustomEvent('editor-notice', { detail: String(error) })))
     }
 
-    // Language selector (bottom-right)
     const langWrapper = document.createElement('div')
-    langWrapper.className = 'md-code-lang'
-    this.select.setAttribute('aria-label', '代码语言')
-    this.select.value = node.attrs.params
-    this.select.placeholder = '语言'
-    this.select.className = 'md-code-lang-input'
-
-    const list = document.createElement('datalist')
-    list.id = `md-languages-${Math.random().toString(36).slice(2)}`
-    for (const name of languageNames) {
-      const option = document.createElement('option')
-      option.value = name
-      list.append(option)
-    }
-    this.select.setAttribute('list', list.id)
-    this.select.onchange = () => {
+    langWrapper.className = 'md-code-footer'
+    this.selector = new LanguageSelector(node.attrs.params, params => {
       const pos = this.getPos()
-      if (pos !== undefined) {
-        this.outer.dispatch(
-          this.outer.state.tr.setNodeMarkup(pos, undefined, {
-            ...this.node.attrs,
-            params: this.select.value.replace(/[\r\n]/g, ''),
-          })
-        )
-      }
-    }
-    langWrapper.append(this.select, list)
+      if (this.dead || pos === undefined || this.outer.state.doc.nodeAt(pos) !== this.node || this.cm.compositionStarted) return
+      const unchanged = params === this.node.attrs.params
+      this.outer.dispatch(this.outer.state.tr.setNodeMarkup(pos, undefined, { ...this.node.attrs, params }).setMeta('isolated', true))
+      if (!this.dead && unchanged) this.setLanguage()
+    })
+    this.languageStatus.className = 'md-code-language-status'
+    this.languageStatus.setAttribute('role', 'status')
+    langWrapper.append(this.languageStatus, this.selector.dom)
 
     // Mermaid specific controls
     this.diagram.className = 'md-diagram'
@@ -93,20 +117,13 @@ export class CodeBlockView implements NodeView {
     this.renderButton.type = 'button'
     this.renderButton.className = 'md-diagram-btn'
     this.renderButton.textContent = '渲染 Mermaid'
-    this.renderButton.onclick = () => this.renderMermaidDiagram()
+    this.renderButton.onclick = () => this.setMermaidEditing(false)
 
     this.editSourceButton.type = 'button'
     this.editSourceButton.className = 'md-diagram-btn'
     this.editSourceButton.textContent = '编辑图表源码'
     this.editSourceButton.onclick = () => {
-      this.isEditingMermaid = !this.isEditingMermaid
-      this.editSourceButton.textContent = this.isEditingMermaid ? '完成编辑' : '编辑图表源码'
-      this.cmContainer.hidden = !this.isEditingMermaid
-      if (!this.isEditingMermaid) {
-        this.renderMermaidDiagram()
-      } else {
-        this.cm.focus()
-      }
+      this.setMermaidEditing(!this.isEditingMermaid)
     }
 
     this.diagramToolbar.append(this.editSourceButton, this.renderButton)
@@ -116,7 +133,10 @@ export class CodeBlockView implements NodeView {
     // CodeMirror Container
     this.cmContainer.className = 'md-code-editor-wrap'
 
-    this.dom.append(this.copyButton, this.diagramToolbar, this.diagram, this.cmContainer, langWrapper)
+    this.dom.append(this.copyButton, this.diagramToolbar, this.cmContainer, langWrapper, this.diagram)
+    this.dom.addEventListener('focusout', () => queueMicrotask(() => {
+      if (!this.dead && this.isEditingMermaid && !this.cm.compositionStarted && !this.dom.contains(document.activeElement)) this.setMermaidEditing(false)
+    }))
 
     // Build embedded CodeMirror
     this.cm = new CMView({
@@ -127,8 +147,8 @@ export class CodeBlockView implements NodeView {
           this.language.of([]),
           this.numbers.of(settings.codeLineNumbers ? lineNumbers() : []),
           this.wrap.of(settings.codeWrap ? CMView.lineWrapping : []),
-          syntaxHighlighting(defaultHighlightStyle),
-          search({ top: false }),
+          lightEditSyntax,
+          codeSearchDecorations,
           CMView.contentAttributes.of({ 'aria-label': '代码块编辑器' }),
           Prec.highest(
             keymap.of([
@@ -149,6 +169,8 @@ export class CodeBlockView implements NodeView {
                   return true
                 },
               },
+              { key: 'F3', run: () => { this.onSearchNavigate?.(true); return true } },
+              { key: 'Shift-F3', run: () => { this.onSearchNavigate?.(false); return true } },
               indentWithTab,
               { key: 'Shift-Tab', run: indentLess },
               { key: 'ArrowUp', run: () => this.escape(-1) },
@@ -207,60 +229,82 @@ export class CodeBlockView implements NodeView {
     this.setLanguage()
 
     if (this.isMermaid) {
-      this.copyButton.hidden = true
-      this.diagram.hidden = true
-      this.cmContainer.hidden = false
-      this.isEditingMermaid = true
+      this.setMermaidEditing(false)
     }
+  }
+
+  private setMermaidEditing(editing: boolean) {
+    if (this.isMermaid && !this.themeObserver) {
+      let light = document.body.classList.contains('light')
+      this.themeObserver = new MutationObserver(() => {
+        const next = document.body.classList.contains('light')
+        if (light === next) return
+        light = next
+        void this.renderMermaidDiagram()
+      })
+      this.themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] })
+    } else if (!this.isMermaid) {
+      this.themeObserver?.disconnect()
+      this.themeObserver = undefined
+    }
+    this.isEditingMermaid = editing
+    this.copyButton.hidden = this.isMermaid && !editing
+    this.cmContainer.hidden = this.isMermaid && !editing
+    this.diagram.hidden = !this.isMermaid
+    this.renderButton.hidden = !editing
+    this.editSourceButton.textContent = editing ? '完成编辑' : '编辑图表源码'
+    if (editing) this.cm.focus()
+    if (this.isMermaid) void this.renderMermaidDiagram()
   }
 
   private async renderMermaidDiagram() {
+    const generation = ++this.renderGeneration
     this.renderButton.disabled = true
-    this.diagram.hidden = false
-    this.diagram.textContent = '图表加载中…'
+    if (!this.diagram.querySelector('svg')) this.diagram.textContent = '图表加载中…'
     try {
       const { renderDiagram } = await import('./renderers')
-      await renderDiagram(this.diagram, this.node.textContent)
+      await renderDiagram(this.diagram, this.node.textContent, () => !this.dead && generation === this.renderGeneration && this.isMermaid)
     } catch (error) {
-      this.diagram.textContent = String(error)
+      if (!this.dead && generation === this.renderGeneration) this.diagram.textContent = `图表无法渲染：${String(error)}`
     } finally {
-      this.renderButton.disabled = false
+      if (!this.dead && generation === this.renderGeneration) this.renderButton.disabled = false
     }
   }
 
-  setSearchHighlight(query: string, caseSensitive: boolean, wholeWord: boolean, regexp: boolean) {
-    if (!query) {
-      this.cm.dispatch({ effects: setSearchQuery.of(new SearchQuery({ search: '' })) })
-      return
-    }
-    try {
-      this.cm.dispatch({
-        effects: setSearchQuery.of(
-          new SearchQuery({
-            search: query,
-            caseSensitive,
-            wholeWord,
-            regexp,
-          })
-        ),
-      })
-    } catch {
-      // Ignore regex error inside CM
-    }
+  setSearchHighlights(ranges: CodeSearchRange[]) {
+    this.pendingHighlights = ranges
+    if (this.highlightScheduled) return
+    this.highlightScheduled = true
+    // A PM update can originate in the embedded CM's update listener. Apply
+    // decorations after that update completes, never dispatch re-entrantly.
+    queueMicrotask(() => {
+      this.highlightScheduled = false
+      if (this.dead) return
+      const key = JSON.stringify(this.pendingHighlights)
+      if (key === this.highlightKey && this.highlightDoc === this.cm.state.doc) return
+      this.highlightKey = key; this.highlightDoc = this.cm.state.doc
+      this.cm.dispatch({ effects: setCodeSearch.of(this.pendingHighlights) })
+    })
   }
 
   private setLanguage() {
     const generation = ++this.generation
-    const raw = this.node.attrs.params.trim().split(/\s/)[0]
-    const name =
-      languageNames.find(n => n.toLowerCase() === raw.toLowerCase()) || detectLanguage('code.' + raw)
-    void loadLanguage(name as LanguageName)
-      .then(extension => {
-        if (!this.dead && generation === this.generation) {
-          this.cm.dispatch({ effects: this.language.reconfigure(extension) })
-        }
-      })
-      .catch(() => {})
+    const { label, language } = parseFenceInfo(this.node.attrs.params)
+    this.cm.dispatch({ effects: this.language.reconfigure([]) })
+    this.languageStatus.textContent = label && !language && !this.isMermaid ? '未注册语言 · 纯文本' : ''
+    this.dom.dataset.languageStatus = language ? 'loading' : 'plain'
+    if (!language) return
+    void loadLanguage(language.name,'fence').then(extension => {
+      if (!this.dead && generation === this.generation) {
+        this.cm.dispatch({ effects: this.language.reconfigure(extension) })
+        this.dom.dataset.languageStatus = 'ready'
+      }
+    }).catch(() => {
+      if (!this.dead && generation === this.generation) {
+        this.languageStatus.textContent = '语言加载失败 · 纯文本（重新选择可重试）'
+        this.dom.dataset.languageStatus = 'error'
+      }
+    })
   }
 
   private escape(direction: number, horizontal = false) {
@@ -305,17 +349,21 @@ export class CodeBlockView implements NodeView {
     const changed = node.textContent !== this.node.textContent
     const languageChanged = node.attrs.params !== this.node.attrs.params
     this.node = node
-    this.select.value = node.attrs.params
+    this.selector.update(node.attrs.params)
 
+    const wasMermaid = this.isMermaid
     this.isMermaid = /^mermaid(?:\s|$)/i.test(node.attrs.params)
     this.diagramToolbar.hidden = !this.isMermaid
-    this.diagram.hidden = !this.isMermaid
+    if (wasMermaid !== this.isMermaid) this.setMermaidEditing(false)
 
     const current = this.cm.state.doc.toString()
     const next = node.textContent
 
-    if (changed && this.isMermaid && !this.isEditingMermaid) {
-      void this.renderMermaidDiagram()
+    if (changed && wasMermaid === this.isMermaid && this.isMermaid) {
+      // Invalidate an older in-flight result immediately, then debounce typing.
+      this.renderGeneration++
+      if (this.renderTimer) clearTimeout(this.renderTimer)
+      this.renderTimer = setTimeout(() => { if (!this.dead) void this.renderMermaidDiagram() }, 120)
     }
 
     if (current !== next) {
@@ -343,9 +391,9 @@ export class CodeBlockView implements NodeView {
     this.updating = true
     try {
       if (this.cmContainer.hidden) {
-        this.cmContainer.hidden = false
-        this.isEditingMermaid = true
-        this.editSourceButton.textContent = '完成编辑'
+        // Selection/search navigation must not turn a rendered diagram into source.
+        this.dom.scrollIntoView({ block: 'nearest' })
+        return
       }
       this.cm.dispatch({ selection: { anchor, head } })
       this.cm.focus()
@@ -372,9 +420,12 @@ export class CodeBlockView implements NodeView {
   }
 
   destroy() {
+    if (this.renderTimer) clearTimeout(this.renderTimer)
     this.dead = true
+    this.themeObserver?.disconnect()
     this.generation++
     this.cm.destroy()
-    this.select.onchange = null
+    this.selector.destroy()
+    if (this.copyTimer) clearTimeout(this.copyTimer)
   }
 }

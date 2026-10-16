@@ -16,5 +16,5 @@ defineEmits<{ (e: 'new-doc'): void; (e: 'quick-open'): void }>()
 button { padding:7px 14px;border-radius:6px;background:var(--soft);color:var(--bright);border:1px solid var(--line) }
 button:hover { background:var(--hover) }
 button:focus-visible,.pane-empty:focus-visible { outline:1px solid var(--accent);outline-offset:-2px }
-p { font-size:12px }
+p { font-size: var(--ui-font-size) }
 </style>

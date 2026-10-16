@@ -7,6 +7,7 @@ static WRITE_LOCK: Mutex<()> = Mutex::new(());
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct EditorSettings {
     theme: String,
+    ui_font_size: u8,
     font_size: u8,
     font_family: String,
     word_wrap: bool,
@@ -34,7 +35,7 @@ pub struct MarkdownTypography {
     code_line_numbers: bool, code_wrap: bool,
 }
 impl Default for MarkdownTypography {
-    fn default() -> Self { Self { width: 860, font_size: 16, font_family: "system".into(), line_height: 1.7, code_line_numbers: true, code_wrap: false } }
+    fn default() -> Self { Self { width: 860, font_size: 16, font_family: "system".into(), line_height: 1.6, code_line_numbers: true, code_wrap: false } }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -51,6 +52,7 @@ impl Default for EditorSettings {
     fn default() -> Self {
         Self {
             theme: "system".into(),
+            ui_font_size: 14,
             font_size: 14,
             font_family: "system".into(),
             word_wrap: false,
@@ -63,7 +65,7 @@ impl Default for EditorSettings {
             auto_save_delay: 1500,
             image_rules: ImageRules::default(),
             document_image_rules: BTreeMap::new(),
-            settings_version: 4,
+            settings_version: 5,
             shortcut_version: 3,
             custom_shortcuts: Vec::new(),
             shortcuts: BTreeMap::new(),
@@ -88,11 +90,12 @@ fn validate(settings: &EditorSettings) -> Result<(), String> {
         return Err("Markdown 排版设置超出支持范围".into());
     }
     if !["dark", "light", "system"].contains(&settings.theme.as_str())
+        || !(12..=20).contains(&settings.ui_font_size)
         || !(10..=24).contains(&settings.font_size)
         || !["system", "consolas", "cascadia"].contains(&settings.font_family.as_str())
         || !(1..=8).contains(&settings.indent_size)
         || !(500..=10000).contains(&settings.auto_save_delay)
-        || !(1..=4).contains(&settings.settings_version)
+        || !(1..=5).contains(&settings.settings_version)
         || !(1..=3).contains(&settings.shortcut_version)
         || settings.custom_shortcuts.len() > 32
         || settings.custom_shortcuts.iter().any(|id| id.len()>64)
@@ -169,6 +172,30 @@ pub async fn save_editor_settings(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn ui_typography_migrates_v4_and_survives_restart_without_changing_document_fonts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, br#"{"settingsVersion":4,"fontSize":17,"autoSave":true,"theme":"dark","markdownTypography":{"fontSize":19}}"#).unwrap();
+        let mut settings = super::load(&path).unwrap();
+        assert_eq!(settings.ui_font_size, 14);
+        assert_eq!(settings.font_size, 17);
+        assert_eq!(settings.markdown_typography.font_size, 19);
+        assert!(settings.auto_save);
+        settings.ui_font_size = 16;
+        settings.settings_version = 5;
+        super::save(&path, &settings).unwrap();
+        let loaded = super::load(&path).unwrap();
+        assert_eq!(loaded.ui_font_size, 16);
+        assert_eq!(loaded.font_size, 17);
+        assert_eq!(loaded.markdown_typography.font_size, 19);
+        assert!(loaded.auto_save);
+        for invalid in [0, 11, 21, 255] {
+            settings.ui_font_size = invalid;
+            assert!(super::save(&path, &settings).is_err());
+            assert_eq!(super::load(&path).unwrap().ui_font_size, 16);
+        }
+    }
+    #[test]
     fn markdown_typography_roundtrips_and_rejects_invalid_values_without_enabling_autosave() {
         let mut settings = super::EditorSettings::default();
         assert!(!settings.auto_save);
@@ -210,7 +237,7 @@ mod tests {
         // A fresh installation never enables automatic save.
         let fresh = super::load(&path).unwrap();
         assert!(!fresh.auto_save);
-        assert_eq!(fresh.settings_version, 4);
+        assert_eq!(fresh.settings_version, 5);
         // A legacy file without provenance keeps its stored value as version 1.
         std::fs::write(&path, br#"{"theme":"light"}"#).unwrap();
         let mut settings = super::load(&path).unwrap();
@@ -225,7 +252,7 @@ mod tests {
         assert!(super::save(&path, &settings).is_err());
         assert_eq!(super::load(&path).unwrap().auto_save_delay, 3000);
         settings.auto_save_delay = 3000;
-        settings.settings_version = 5;
+        settings.settings_version = 6;
         assert!(super::save(&path, &settings).is_err());
         assert_eq!(super::load(&path).unwrap().settings_version, 1);
     }
@@ -244,7 +271,7 @@ mod tests {
         // New settings objects written by this version stay off unless enabled.
         let current = super::EditorSettings::default();
         assert!(!current.auto_save);
-        assert_eq!(current.settings_version, 4);
+        assert_eq!(current.settings_version, 5);
     }
     #[test]
     fn theme_preferences_survive_restart_and_invalid_theme_preserves_previous_file() {

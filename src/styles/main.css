@@ -1,6 +1,6 @@
 .icon {
-  width: 16px;
-  height: 16px;
+  width: var(--ui-icon-size);
+  height: var(--ui-icon-size);
   stroke: currentColor;
   stroke-width: 1.7;
   stroke-linecap: round;
@@ -12,13 +12,13 @@
 }
 
 .icon.small-icon {
-  width: 14px;
-  height: 14px;
+  width: var(--ui-icon-size);
+  height: var(--ui-icon-size);
 }
 
 .ib {
-  width: 32px;
-  height: 32px;
+  width: var(--ui-control-height);
+  height: var(--ui-control-height);
   border-radius: 6px;
   display: inline-flex;
   align-items: center;
@@ -38,7 +38,7 @@
 }
 
 .kbd {
-  font-size: 10px;
+  font-size: var(--ui-small-font-size);
   font-family: var(--font-mono);
   border: 1px solid var(--line);
   padding: 1px 4px;

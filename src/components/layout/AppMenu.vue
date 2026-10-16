@@ -27,6 +27,6 @@ function keydown(event:KeyboardEvent) {
 }
 </script>
 <style scoped>
-.app-menu{flex:none}.menu-categories{display:flex;align-items:center;gap:1px;height:32px}.menu-categories button{padding:6px 8px;font-size:12px;border-radius:4px;color:var(--sub);white-space:nowrap}.menu-categories button:hover,.menu-categories button.on{background:var(--hover);color:var(--bright)}.menu-categories button:focus-visible{outline:1px solid var(--accent)}
+.app-menu{flex:none}.menu-categories{display:flex;align-items:center;gap:1px;height:var(--ui-control-height)}.menu-categories button{padding:6px 8px;font-size: var(--ui-font-size);border-radius:4px;color:var(--sub);white-space:nowrap}.menu-categories button:hover,.menu-categories button.on{background:var(--hover);color:var(--bright)}.menu-categories button:focus-visible{outline:1px solid var(--accent)}
 @media(max-width:640px){.menu-categories button{padding:6px 5px}}
 </style>

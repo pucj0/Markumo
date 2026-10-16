@@ -150,7 +150,7 @@ onUnmounted(() => {
 .language-message {
   color: var(--yellow);
   padding: 4px 18px;
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
 }
 
 .panes-container {
@@ -178,7 +178,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   font-weight: 700;
   color: var(--muted);
   border-bottom: 1px solid var(--line);
@@ -191,7 +191,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   color: var(--muted);
   border: none;
   background: transparent;

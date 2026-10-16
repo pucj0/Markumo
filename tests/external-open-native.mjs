@@ -3,7 +3,7 @@
 // document and the editor text are read from the actual rendered DOM.
 //
 // The binary must be built with its own bundle identifier and an isolated app
-// data directory (see SAVE_AND_EXTERNAL_OPEN_UPDATE.md), so a user's running
+// data directory (see 保存机制与外部文件打开修复.md), so a user's running
 // LightEdit is neither joined nor disturbed.
 //
 // This is the only test in the repository that observes the production DOM of the

@@ -49,11 +49,11 @@ tokenizer.core.ruler.after('lightedit_tasks','lightedit_cells', state=>{
 export const markdownParser = new MarkdownParser(s, tokenizer as unknown as ConstructorParameters<typeof MarkdownParser>[1], tokens as unknown as ConstructorParameters<typeof MarkdownParser>[2])
 export interface SourceBlock { id:string; from:number; to:number; raw:string; prefix:string; node:Node }
 let identity=0
-export function parseMarkdown(source:string) {
+export function parseMarkdown(source:string, referenceEnvironment:Record<string,unknown> = {}) {
   const starts=[0]; for(let i=0;i<source.length;i++)if(source[i]==='\n')starts.push(i+1)
   const yaml=/^---\n[\s\S]*?\n(?:---|\.\.\.)(?:\n|$)/.exec(source)
   const scan=yaml ? yaml[0].replace(/[^\n]/g,' ') + source.slice(yaml[0].length) : source
-  const env: Record<string, unknown> = {}
+  const env: Record<string, unknown> = { ...referenceEnvironment, references: { ...referenceEnvironment.references as object } }
   const parsed=tokenizer.parse(scan,env)
   const ranges:{from:number;to:number;raw?:boolean;label?:string}[]=[]
   if(yaml)ranges.push({from:0,to:yaml[0].replace(/\n$/,'').length,raw:true,label:'YAML Front Matter'})
@@ -61,7 +61,10 @@ export function parseMarkdown(source:string) {
   for(const token of parsed){
     if(level===0 && token.map){
       let to=starts[token.map[1]] ?? source.length
-      while(to>(starts[token.map[0]]||0) && source[to-1]==='\n')to--
+      while(to>(starts[token.map[0]]||0) && source[to-1]==='\n'){
+        to--
+        if(source[to-1]==='\r')to--
+      }
       ranges.push({from:starts[token.map[0]],to,raw:token.type==='html_block',label:'HTML（安全源码）'})
     }
     level+=token.nesting
@@ -90,5 +93,5 @@ export function parseMarkdown(source:string) {
   }
   if(source.slice(cursor).trim())add(cursor,source.length,true,'引用定义 / 扩展源码')
   const doc=s.nodes.doc.create(null,blocks.length?blocks.map(b=>b.node):s.nodes.paragraph.create())
-  return {doc,blocks,tail:source.slice(cursor)}
+  return {doc,blocks,tail:source.slice(cursor),environment:env}
 }

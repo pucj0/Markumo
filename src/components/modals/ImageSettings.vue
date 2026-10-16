@@ -30,5 +30,5 @@ function update<K extends keyof ImageRules>(key:K,value:ImageRules[K]) {
 }
 </script>
 <style scoped>
-h4{font-size:12px;color:var(--bright);margin:20px 0 10px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:42px;font-size:12px}.row label{flex:1}.row select,.row input[type=text]{width:225px;max-width:60%;height:30px;border:1px solid var(--line);border-radius:6px;background:var(--editor);color:var(--ink);padding:4px 8px;font:inherit}fieldset{border:0;padding:0;margin:0;min-width:0}fieldset:disabled{opacity:.5}.hint{font-size:11px;color:var(--muted);line-height:1.6;overflow-wrap:anywhere}input[type=checkbox]{accent-color:var(--accent)}
+h4{font-size: var(--ui-font-size);color:var(--bright);margin:20px 0 10px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:42px;font-size: var(--ui-font-size)}.row label{flex:1}.row select,.row input[type=text]{width:225px;max-width:60%;height:30px;border:1px solid var(--line);border-radius:6px;background:var(--editor);color:var(--ink);padding:4px 8px;font:inherit}fieldset{border:0;padding:0;margin:0;min-width:0}fieldset:disabled{opacity:.5}.hint{font-size: var(--ui-small-font-size);color:var(--muted);line-height:1.6;overflow-wrap:anywhere}input[type=checkbox]{accent-color:var(--accent)}
 </style>

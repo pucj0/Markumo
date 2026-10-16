@@ -2,11 +2,15 @@
 
 面向 Windows 首发的轻量通用文本编辑器，使用 Rust + Tauri 2 + Vue 3 + TypeScript + Vite + CodeMirror 6。
 
-**阶段状态以 [进度台账](docs/PHASE_PROGRESS.md) 为准，完整桌面人工验收尚未完成。** 已接入真实 Rust/Tauri 文件服务与工作区：打开、保存、另存为、最近文件、按需目录树、文件管理、快速打开和全文搜索。单文件与工作区共用 CodeMirror 文档状态。2026-10-14 Phase 4 复审及修复结果见 [验收报告](docs/PHASE4_REVIEW.md)；其他并行阶段的实现不等同于本轮已验收。
+**阶段状态以 [进度台账](docs/阶段进度与验收台账.md) 为准，完整桌面人工验收尚未完成。** 已接入真实 Rust/Tauri 文件服务与工作区：打开、保存、另存为、最近文件、按需目录树、文件管理、快速打开和全文搜索。单文件与工作区共用 CodeMirror 文档状态。2026-10-14 Phase 4 复审及修复结果见 [验收报告](docs/第四阶段复审与验收.md)；其他并行阶段的实现不等同于本轮已验收。
+
+## 界面字号与搜索
+
+界面字号可在 **设置 → 外观 → 界面字号** 调整（默认 14px，12–20px，支持恢复默认）。它与编辑器字号、Markdown 正文字号独立，并在重启后保留。查找/替换使用统一搜索栏：Ctrl+F、Ctrl+R；正则开关启用时按 JavaScript 正则匹配，捕获组替换支持 `$1`、`$2`、`$&`、`$$`。实现、验收与截图见[专项报告](docs/正则搜索与界面字号整改_2026-10-16.md)；针对性验证命令为 `pnpm test:ui:search`、`pnpm test:native:search`。
 
 ## 打包安装程序
 
-Windows 双击根目录 `build.bat` 生成 EXE 安装包；macOS/Linux 在对应系统运行 `sh build.sh`，分别生成 APP/DMG、DEB/AppImage。可先运行 `build.bat --check` 或 `sh build.sh --check` 检查基本环境。输出位置、平台依赖和签名说明见 [打包说明](docs/PACKAGING.md)。
+Windows 双击根目录 `build.bat` 生成 EXE 安装包；macOS/Linux 在对应系统运行 `sh build.sh`，分别生成 APP/DMG、DEB/AppImage。可先运行 `build.bat --check` 或 `sh build.sh --check` 检查基本环境。输出位置、平台依赖和签名说明见 [打包说明](docs/本地打包说明.md)。
 
 ## 先在浏览器启动
 
@@ -102,7 +106,7 @@ $env:TMP = $env:TEMP
 cargo test --manifest-path src-tauri/Cargo.toml --locked
 ```
 
-`pnpm test` 运行 Vitest 单元测试。`pnpm test:ui` 运行既有编辑器回归（显式 demo 模式），`pnpm test:ui:files` 运行文件 UI 与显式 IPC 服务替身的契约测试；两者均需要 Node >=20、Playwright 与浏览器。命令和验收范围见 [Phase 3 实施报告](docs/PHASE3_IMPLEMENTATION.md)。当前没有独立 lint runner；TypeScript strict 检查不等价于 lint。
+`pnpm test` 运行 Vitest 单元测试。`pnpm test:ui` 运行既有编辑器回归（显式 demo 模式），`pnpm test:ui:files` 运行文件 UI 与显式 IPC 服务替身的契约测试；两者均需要 Node >=20、Playwright 与浏览器。命令和验收范围见 [Phase 3 实施报告](docs/第三阶段实施与验收记录.md)。当前没有独立 lint runner；TypeScript strict 检查不等价于 lint。
 
 `pnpm test:native:save` 是 Windows/WebView2 的真实保存回归：需要 Playwright，运行前关闭已有 LightEdit 窗口和 1420 服务。它会以显式 `--no-watch` 启动隔离的桌面实例和 CDP 调试端口 9225，操作专用临时文件，检查保存前后进程/页面不变、另一份 dirty 草稿保留以及实际 BOM/CRLF 字节。结果写入 `test-results/native-save-stability/`，不会更改开发偏好或用户文件。
 
@@ -124,7 +128,7 @@ Markdown 默认在同一 CodeMirror 编辑区即时排版，工具栏可切换 S
 
 设置现在自动保存到本机 `editor-settings.json`，开发默认在 `.lightedit-dev/`。包含主题、字号、等宽字体、换行、缩进、大纲、Markdown 默认模式/最近 100 个文件的视图模式、快捷键；不存正文。快捷键配置中 Mod 表示 Ctrl / Command，支持字母/单字符键、F1–F12 与 ArrowRight，重复和编辑器保留按键会被拒绝。字体未安装时使用等宽 fallback。预览和大纲在超过 1,048,576 个 CM 字符（UTF-16 计数）时暂停，大纲最多 1000 项。
 
-设置按外观、编辑、保存、Markdown、快捷键分类；字号可直接输入10–24整数。文件自动保存默认开启，在停止输入1.5秒后保存已有保存位置的可写文件，可在“保存”分类关闭或更改延迟。未命名草稿仍需先选择保存位置；外部版本冲突/写入失败保留编辑内容并暂停自动重试，可手动另存为处理。浏览器没有磁盘自动保存能力。实现与验证见 [设置与自动保存记录](docs/SETTINGS_AUTOSAVE_UPDATE.md)。
+设置按外观、编辑、保存、Markdown、快捷键分类；字号可直接输入10–24整数。文件自动保存默认开启，在停止输入1.5秒后保存已有保存位置的可写文件，可在“保存”分类关闭或更改延迟。未命名草稿仍需先选择保存位置；外部版本冲突/写入失败保留编辑内容并暂停自动重试，可手动另存为处理。浏览器没有磁盘自动保存能力。实现与验证见 [设置与自动保存记录](docs/设置与自动保存更新.md)。
 
 新增回归命令：
 
@@ -140,11 +144,11 @@ pnpm test:native:editor
 
 Playwright 不在项目依赖中，需要已有可用安装；可通过 `LIGHTEDIT_PLAYWRIGHT_PACKAGE` 指向其 package.json。DOM 脚本使用独立 fixture，原生脚本使用隔离 profile、`--no-watch` 和 CDP 9227，结果保留在 `test-results/`。普通 `pnpm tauri dev` 继续保持热更新。
 
-本轮实际结果与人工缺项见 [Phase 5 复审](docs/PHASE5_REVIEW.md) 和 [Phase 6 复审](docs/PHASE6_REVIEW.md)。两阶段保持 REVIEW；没有开始 Phase 7。
+本轮实际结果与人工缺项见 [Phase 5 复审](docs/第五阶段复审与修复.md) 和 [Phase 6 复审](docs/第六阶段复审与修复.md)。两阶段保持 REVIEW；没有开始 Phase 7。
 
 ## 常见启动问题
 
-若保存桌面文件提示 `os error 5`，文件/目录 ACL 正常却仍失败，请检查本地生成的 `src-tauri/target/debug/lightedit.exe` 是否被标记为 `Low Mandatory Level`：Low 程序不能写普通用户数据，单纯管理员运行也不能解除 exe 的 Low 标签。本机生成目录现已修复为普通 Medium。若彻底重建 target 后复发，普通 PowerShell 可对本项目生成目录执行 `icacls 'E:\code\lightEdit\src-tauri\target' /setintegritylevel '(OI)(CI)M' /T /Q`，再重启程序；不需要更改桌面目录权限。完整证据、测试与保存保护见 [保存权限专项修复](docs/PHASE3_SAVE_PERMISSION_FIX.md)。旧窗口有未保存内容时先另存到可写位置，再关闭重启。
+若保存桌面文件提示 `os error 5`，文件/目录 ACL 正常却仍失败，请检查本地生成的 `src-tauri/target/debug/lightedit.exe` 是否被标记为 `Low Mandatory Level`：Low 程序不能写普通用户数据，单纯管理员运行也不能解除 exe 的 Low 标签。本机生成目录现已修复为普通 Medium。若彻底重建 target 后复发，普通 PowerShell 可对本项目生成目录执行 `icacls 'E:\code\lightEdit\src-tauri\target' /setintegritylevel '(OI)(CI)M' /T /Q`，再重启程序；不需要更改桌面目录权限。完整证据、测试与保存保护见 [保存权限专项修复](docs/第三阶段保存权限修复.md)。旧窗口有未保存内容时先另存到可写位置，再关闭重启。
 
 | 提示 | 处理 |
 |---|---|
@@ -155,4 +159,4 @@ Playwright 不在项目依赖中，需要已有可用安装；可通过 `LIGHTED
 | 1420 端口被占用 | 停止之前运行的项目开发服务；不要随意更改端口，Tauri devUrl 已与 1420 配套 |
 | 浏览器 Ctrl+S 提示需要桌面版 | 浏览器只编辑内存草稿；磁盘操作需启动 Tauri，关闭或刷新前请保留需要的文本 |
 
-产品需求见 [PRD](docs/PRD.md)，阶段状态见 [PHASE_PROGRESS](docs/PHASE_PROGRESS.md)，审查结果与遗留风险见 [PHASE1_REVIEW](docs/PHASE1_REVIEW.md)。`docs/prototype.html` 仅为交互/视觉参考。
+产品需求见 [产品需求文档](docs/产品需求文档.md)，阶段状态见 [阶段进度与验收台账](docs/阶段进度与验收台账.md)，审查结果与遗留风险见 [第一阶段复审记录](docs/第一阶段复审记录.md)。`docs/界面交互原型.html` 仅为交互/视觉参考。

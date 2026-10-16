@@ -6,5 +6,5 @@ import type { EditorDocument } from '../../types'
 defineProps<{ doc: EditorDocument | null }>()
 </script>
 <style scoped>
-.readonly-kind { padding:4px 12px;color:var(--muted);font-size:11px;border-bottom:1px solid var(--line);flex:none }
+.readonly-kind { padding:4px 12px;color:var(--muted);font-size: var(--ui-small-font-size);border-bottom:1px solid var(--line);flex:none }
 </style>

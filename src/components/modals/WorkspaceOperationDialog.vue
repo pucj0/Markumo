@@ -40,7 +40,7 @@ defineExpose({ ask })
 <style scoped>
 .workspace-operation-overlay { position: fixed; inset: 0; z-index: 40; display: flex; justify-content: center; align-items: center; background: #080a1080; }
 .workspace-operation-dialog { width: min(440px, 90vw); padding: 22px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); }
-h2 { font-size: 16px; margin-bottom: 12px; } p { font-size: 12px; margin-bottom: 14px; overflow-wrap: anywhere; }
+h2 { font-size: calc(var(--ui-font-size) + 2px); margin-bottom: 12px; } p { font-size: var(--ui-font-size); margin-bottom: 14px; overflow-wrap: anywhere; }
 input { width: 100%; padding: 8px; background: var(--editor); color: var(--ink); border: 1px solid var(--line); }
 .operation-buttons { display: flex; justify-content: flex-end; gap: 12px; margin-top: 18px; }
 button { padding: 7px 14px; border-radius: 5px; background: var(--soft); } button[type=submit] { background: var(--accentbg); } button:disabled { opacity: .5; }

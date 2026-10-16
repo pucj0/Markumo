@@ -23,8 +23,17 @@
   --change-inserted: #4bc28b;
   --yellow: #e2b77a;
   --pink: #e6a1c6;
+  --syntax-comment: #9ba3b3;
+  --syntax-operator: #b8c0cf;
   --shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
   --sidebar-width: 254px;
+  --ui-font-size: 14px;
+  --ui-small-font-size: max(12px, calc(var(--ui-font-size) - 2px));
+  --ui-control-height: calc(var(--ui-font-size) + 18px);
+  --ui-row-height: calc(var(--ui-font-size) + 14px);
+  --ui-tree-row-height: var(--ui-row-height);
+  --ui-icon-size: clamp(16px, calc(var(--ui-font-size) + 2px), 18px);
+  --ui-line-height: 1.5;
   --editor-size: 14px;
   --editor-line: 25px;
   --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -56,5 +65,7 @@ body.light {
   --change-inserted: #26945d;
   --yellow: #9b6a34;
   --pink: #a33e73;
+  --syntax-comment: #626c7c;
+  --syntax-operator: #536175;
   --shadow: 0 24px 60px rgba(24, 32, 49, 0.15);
 }

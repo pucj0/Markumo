@@ -1,7 +1,7 @@
 import type { Node } from 'prosemirror-model'
 import { parseMarkdown, type SourceBlock } from './MarkdownParser'
 import { patchTable, serializeBlock } from './MarkdownSerializer'
-export interface SourcePatch { from:number;to:number;insert:string }
+export interface SourcePatch { from:number;to:number;insert:string;blockId?:string }
 export function textPatch(before:string,after:string):SourcePatch|null {
   if(before===after)return null
   let from=0,to=before.length,end=after.length
@@ -13,24 +13,39 @@ export function textPatch(before:string,after:string):SourcePatch|null {
   return {from,to,insert:after.slice(from,end)}
 }
 export class MarkdownSourceBridge {
-  source:string; doc:Node; blocks:SourceBlock[]; tail:string
-  constructor(source:string){this.source=source;const parsed=parseMarkdown(source);this.doc=parsed.doc;this.blocks=parsed.blocks;this.tail=parsed.tail}
+  source:string; doc:Node; blocks:SourceBlock[]; tail:string; environment:Record<string,unknown>
+  constructor(source:string){this.source=source;const parsed=parseMarkdown(source);this.doc=parsed.doc;this.blocks=parsed.blocks;this.tail=parsed.tail;this.environment=parsed.environment}
   /** Prepare without mutating; commit only after the canonical document accepts
    * the patch against the exact expected source revision. */
-  prepare(doc:Node){
+  prepare(doc:Node, inlinePatch?:SourcePatch){
     const byId=new Map(this.blocks.map(b=>[b.id,b])),used=new Set<string>(),blocks:SourceBlock[]=[]
-    let source=''
+    let source='',definitionsChanged=false,inlineApplied=false
     doc.forEach(node=>{
       const id=node.attrs.sourceId as string,old=id&&!used.has(id)?byId.get(id):undefined
       if(id)used.add(id)
-      const raw=old?.node.eq(node)?old.raw:old&&node.type.name==='table'&&old.node.type===node.type?(patchTable(old.node,node,old.raw)??serializeBlock(node)):serializeBlock(node)
+      let inlineRaw:string|undefined
+      if(old && inlinePatch && (!inlinePatch.blockId||inlinePatch.blockId===old.id) && inlinePatch.from>=old.from && inlinePatch.to<=old.to){
+        const candidate=old.raw.slice(0,inlinePatch.from-old.from)+inlinePatch.insert+old.raw.slice(inlinePatch.to-old.from)
+        const parsed=parseMarkdown(candidate,this.environment).doc
+        if(parsed.childCount===1){
+          const parsedNode=parsed.firstChild!
+          if(parsedNode.type.create({...parsedNode.attrs,sourceId:node.attrs.sourceId},parsedNode.content,parsedNode.marks).eq(node))inlineRaw=candidate
+        }
+        if(inlineRaw===undefined)throw new Error('局部源码与文档节点不一致，拒绝修改。')
+        inlineApplied=true
+      }
+      let raw=inlineRaw??(old?.node.eq(node)?old.raw:old&&node.type.name==='table'&&old.node.type===node.type?(patchTable(old.node,node,old.raw)??serializeBlock(node)):serializeBlock(node))
+      if(old && !old.node.eq(node) && old.raw.includes('\r\n')) raw=raw.replace(/\r?\n/g,'\r\n')
       const prefix=old?old.prefix||(blocks.length&&!raw.startsWith('\n')?'\n\n':''):blocks.length?'\n\n':''
       source+=prefix;const from=source.length;source+=raw
+      if(node.type.name==='protected_source' && !old?.node.eq(node) && /^\s*\[[^\]]+\]:/m.test(raw))definitionsChanged=true
       blocks.push({id,from,to:source.length,raw,prefix,node})
     })
+    if(inlinePatch&&!inlineApplied)throw new Error('局部源码目标已失效，拒绝修改。')
     source+=this.tail
     const patch=textPatch(this.source,source)
-    return {source,patch,commit:()=>{this.source=source;this.doc=doc;this.blocks=blocks}}
+    if(this.blocks.some(block=>!used.has(block.id)&&/^\s*\[[^\]]+\]:/m.test(block.raw)))definitionsChanged=true
+    return {source,patch,commit:()=>{this.source=source;this.doc=doc;this.blocks=blocks;if(definitionsChanged)this.environment=parseMarkdown(source).environment}}
   }
   sourcePosition(pos:number){
     let offset=0

@@ -52,7 +52,7 @@ const zoneLabel = computed(() => {
 }
 
 .drop-text {
-  font-size: 13px;
+  font-size: var(--ui-font-size);
   font-weight: 500;
   color: var(--accent);
   background: var(--editor);

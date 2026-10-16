@@ -8,8 +8,8 @@ html, body {
   padding: 0;
   overflow: hidden;
   font-family: var(--font-sans);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: var(--ui-font-size);
+  line-height: var(--ui-line-height);
   color: var(--ink);
   background-color: var(--app);
   -webkit-font-smoothing: antialiased;

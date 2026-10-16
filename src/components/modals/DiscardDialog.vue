@@ -28,7 +28,7 @@ defineExpose({ open, close, visible })
 <style scoped>
 .discard-overlay { position: fixed; inset: 0; z-index: 1001; background: rgba(0,0,0,.45); display: grid; place-items: center; padding: 16px; }
 .discard-dialog { width: min(440px, 100%); background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 22px; }
-h2 { font-size: 16px; color: var(--bright); margin: 0 0 14px; }
+h2 { font-size: calc(var(--ui-font-size) + 2px); color: var(--bright); margin: 0 0 14px; }
 p { overflow-wrap: anywhere; }
 .actions { display: flex; gap: 10px; justify-content: flex-end; }
 button { padding: 7px 12px; border-radius: 6px; background: var(--accentbg); color: var(--bright); }

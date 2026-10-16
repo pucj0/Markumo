@@ -1,7 +1,7 @@
 import type { MarkdownFormat } from '../formatCommands'
 import type { MarkdownResources } from '../images'
 export interface MarkdownTypography { width:number; fontSize:number; fontFamily:string; lineHeight:number; codeLineNumbers:boolean; codeWrap:boolean }
-export const defaultMarkdownTypography=():MarkdownTypography=>({width:860,fontSize:16,fontFamily:'system',lineHeight:1.7,codeLineNumbers:true,codeWrap:false})
+export const defaultMarkdownTypography=():MarkdownTypography=>({width:860,fontSize:16,fontFamily:'system',lineHeight:1.6,codeLineNumbers:true,codeWrap:false})
 export interface LiveEditor {
   readonly composing:boolean
   readonly selection:{anchor:number;head:number}

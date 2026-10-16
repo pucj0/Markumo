@@ -37,7 +37,7 @@ onUnmounted(() => { if (timer) clearTimeout(timer) })
   color: var(--bright);
   padding: 8px 16px;
   border-radius: 9px;
-  font-size: 12px;
+  font-size: var(--ui-font-size);
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
   border: 1px solid var(--line);
   z-index: 1000;

@@ -5,7 +5,10 @@
     aria-hidden="true"
     viewBox="0 0 24 24"
   >
-    <template v-if="name === 'files'">
+    <template v-if="name === 'copy' || name === 'check'">
+      <path :d="commonIconPaths[name]" />
+    </template>
+    <template v-else-if="name === 'files'">
       <rect x="5" y="3" width="15" height="18" rx="2" />
       <path d="M9 7h7M9 11h7M9 15h4" />
     </template>
@@ -93,6 +96,7 @@
 </template>
 
 <script setup lang="ts">
+import { commonIconPaths } from './iconPaths'
 defineProps<{
   name: string
   size?: 'normal' | 'small'

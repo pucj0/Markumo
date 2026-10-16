@@ -1,24 +1,13 @@
 import { EditorState, type Extension } from '@codemirror/state'
 import { EditorView, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, dropCursor, rectangularSelection, crosshairCursor, highlightActiveLine, keymap } from '@codemirror/view'
 import { history, historyKeymap, defaultKeymap, indentWithTab } from '@codemirror/commands'
-import { bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting, HighlightStyle } from '@codemirror/language'
+import { bracketMatching, foldGutter, foldKeymap, indentOnInput } from '@codemirror/language'
 import { search, searchKeymap } from '@codemirror/search'
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete'
-import { tags } from '@lezer/highlight'
+import { lightEditSyntax } from './syntaxTheme'
 import type { Theme } from '../../types'
 import { createEditorSearchPanel, showEditorSearch } from './searchPanel'
 import { changeGutter } from './changeGutter'
-
-const highlight = HighlightStyle.define([
-  { tag: [tags.keyword, tags.modifier], color: 'var(--pink)' },
-  { tag: [tags.string, tags.inserted], color: 'var(--green)' },
-  { tag: tags.comment, color: 'var(--muted)' },
-  { tag: [tags.number, tags.bool, tags.null], color: 'var(--yellow)' },
-  { tag: [tags.typeName, tags.tagName, tags.propertyName], color: 'var(--blue)' },
-  { tag: tags.heading, color: 'var(--accent)', fontWeight: 'bold' },
-  { tag: tags.strong, fontWeight: 'bold' },
-  { tag: tags.emphasis, fontStyle: 'italic' },
-])
 
 export const coreExtensions: Extension = [
   changeGutter, lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(), history(),
@@ -28,8 +17,8 @@ export const coreExtensions: Extension = [
   indentOnInput(), bracketMatching(), foldGutter({ markerDOM(open) {
     const element = document.createElement('span'); element.className = 'cm-fold-chevron' + (open ? ' open' : '')
     element.setAttribute('aria-label', open ? '折叠代码' : '展开代码'); return element
-  } }), syntaxHighlighting(highlight),
-  closeBrackets(), autocompletion(), search({ top: true, createPanel: createEditorSearchPanel }),
+  } }), lightEditSyntax,
+  closeBrackets(), autocompletion(), search({ literal: true, top: true, createPanel: createEditorSearchPanel }),
   keymap.of([{ key: 'Mod-f', run: view => showEditorSearch(view, false) }, { key: 'Mod-r', run: view => showEditorSearch(view, true) },
     ...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap.filter(binding => binding.key !== 'Mod-h'), ...foldKeymap, ...completionKeymap, indentWithTab]),
 ]

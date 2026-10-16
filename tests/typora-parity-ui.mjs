@@ -1,12 +1,8 @@
 import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
 import { mkdir, writeFile, readFile } from 'node:fs/promises'
 
-const require = createRequire(
-  process.env.LIGHTEDIT_PLAYWRIGHT_PACKAGE ||
-    'C:/Users/18089/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/package.json'
-)
-const { chromium } = require('playwright')
+import { chromium, browserOptions } from './helpers/markdown-browser.mjs'
+import { selectCodeLanguage } from './helpers/code-language.mjs'
 
 const output = 'test-results/typora-parity'
 await mkdir(output, { recursive: true })
@@ -54,12 +50,12 @@ createApp({
 `
 )
 
-const browser = await chromium.launch({ headless: true, channel: 'msedge' })
+const browser = await chromium.launch(browserOptions)
 const page = await browser.newPage({ viewport: { width: 1280, height: 950 } })
 const results = []
 const errors = []
 
-page.on('pageerror', e => errors.push(e.message))
+page.on('pageerror', e => errors.push(e.stack || e.message))
 
 async function test(name, run) {
   await run()
@@ -75,6 +71,18 @@ try {
   )
   await page.locator('.md-prose').waitFor()
 
+  await test('0. Initial opening automatically renders SVG and inline/block KaTeX without clicks', async () => {
+    await page.locator('.md-diagram svg').waitFor({ timeout: 60000 })
+    assert.ok((await page.locator('.md-diagram svg').textContent()).includes('新生幼崽登记'))
+    await page.locator('.md-inline-math .katex').first().waitFor()
+    await page.locator('.md-math-output .katex-display').waitFor()
+    const diagram = page.locator('.md-code-block').filter({ has: page.locator('.md-diagram svg') })
+    assert.equal(await diagram.locator('.md-code-editor-wrap').isVisible(), false)
+    assert.equal(await page.getByRole('button', { name: '渲染 Mermaid', exact: true }).isVisible(), false)
+    assert.equal(await raw(), markdown.replace(/\r\n/g, '\n'))
+    await page.screenshot({ path: `${output}/initial-default.png` })
+  })
+
   // Full document screenshots
   await page.evaluate(() => {
     document.querySelector('.markdown-live').scrollTop = 0
@@ -82,7 +90,30 @@ try {
   })
   await page.screenshot({ path: `${output}/parity-document-dark.png` })
   await page.evaluate(() => document.body.classList.add('light'))
+  await page.locator('.md-diagram svg').waitFor()
   await page.screenshot({ path: `${output}/parity-document-light.png` })
+  await page.evaluate(() => document.body.classList.remove('light'))
+
+  // Record actual settings and every requested visual element. These are
+  // LightEdit observations; comparison remains UNVERIFIED without a reference.
+  const visual = { viewport: page.viewportSize(), deviceScaleFactor: 1, reference: null, comparison: 'UNVERIFIED', themes: {} }
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => document.body.classList.toggle('light', theme === 'light'), theme)
+    await page.locator('.md-diagram svg').waitFor()
+    await page.evaluate(() => document.fonts.ready)
+    const observations = {}
+    for (const [name, selector] of Object.entries({ heading: '.md-prose h1', paragraph: '.md-prose > p', list: '.md-prose ol', table: '.md-prose table', code: '.md-code-block', image: '.md-live-image', link: '.md-prose a', math: '.md-math-output', diagram: '.md-diagram svg' })) {
+      const element = page.locator(selector).first()
+      await element.scrollIntoViewIfNeeded()
+      observations[name] = await element.evaluate(el => {
+        const css = getComputedStyle(el), rect = el.getBoundingClientRect(), prose = document.querySelector('.md-prose')
+        return { width: rect.width, height: rect.height, fontSize: css.fontSize, lineHeight: css.lineHeight, fontFamily: css.fontFamily, margin: css.margin, contentWidth: prose.getBoundingClientRect().width, zoom: getComputedStyle(document.body).zoom }
+      })
+      await page.screenshot({ path: `${output}/visual-${theme}-${name}.png` })
+    }
+    visual.themes[theme] = observations
+  }
+  await writeFile(`${output}/visual-observations.json`, JSON.stringify(visual, null, 2))
   await page.evaluate(() => document.body.classList.remove('light'))
 
   // 1. Live Ctrl+F: Does not switch to source, docks top-right, highlights matches
@@ -130,19 +161,16 @@ try {
   })
 
   // 3. Link click: anchored popover appears, text and URL editable
-  await test('3. Click link shows anchored popover for in-place text and URL editing', async () => {
+  await test('3. Click link exposes native inline Markdown at a collapsed caret, without a popover', async () => {
     const link = page.locator('.md-prose a').filter({ hasText: 'GitHub 仓库' }).first()
     await link.scrollIntoViewIfNeeded()
     await link.click()
-    const popover = page.locator('.md-properties')
-    await popover.waitFor()
-    assert.equal(await popover.isVisible(), true)
-    assert.equal(await popover.getByLabel('链接文字').inputValue(), 'GitHub 仓库')
-    assert.ok((await popover.getByLabel('链接 URL').inputValue()).includes('github.com'))
-    await page.screenshot({ path: `${output}/step3-link-popover.png` })
-
-    await popover.getByLabel('链接文字').fill('开源仓库')
-    await popover.getByRole('button', { name: '应用链接' }).click()
+    await page.locator('.md-inline-source-input').waitFor()
+    assert.equal(await page.locator('.md-properties').isVisible(), false)
+    assert.equal(await page.evaluate(()=>document.getSelection().isCollapsed), true)
+    await page.screenshot({ path: `${output}/step3-link-inline.png` })
+    await page.locator('.md-inline-source-input').fill('[开源仓库](https://github.com/pucj0/lightEdit)')
+    await page.keyboard.press('Escape')
     assert.ok((await raw()).includes('[开源仓库]('))
 
     // Restore via undo
@@ -151,10 +179,14 @@ try {
   })
 
   // 4. Click image: selection outline and anchored image toolbar
-  await test('4. Click image shows selection outline and anchored properties', async () => {
+  await test('4. Image click exposes source above preview; context menu explicitly opens mapped properties', async () => {
     const img = page.locator('.md-image-preview img').first()
     await img.scrollIntoViewIfNeeded()
     await img.click()
+    await page.locator('.md-inline-source-input').waitFor()
+    assert.equal(await img.isVisible(), true)
+    assert.ok((await page.locator('.md-local-source').boundingBox()).y < (await img.boundingBox()).y)
+    await img.click({button:'right'})
     const popover = page.locator('.md-properties')
     await popover.waitFor()
     assert.equal(await popover.isVisible(), true)
@@ -191,8 +223,7 @@ try {
     assert.equal(await gutter1.count(), 1)
 
     // Language selector
-    const langInput = codeBlock.locator('.md-code-lang-input')
-    assert.equal(await langInput.inputValue(), 'javascript')
+    assert.equal(await codeBlock.locator('.md-code-lang > button').textContent(), 'JavaScript')
     await page.screenshot({ path: `${output}/step6-code-linenumbers.png` })
   })
 
@@ -225,13 +256,30 @@ try {
 
   // 9. Mermaid diagram in reading state
   await test('9. Mermaid diagram renders SVG cleanly', async () => {
-    const mermaidBtn = page.getByRole('button', { name: '渲染 Mermaid', exact: true })
-    if (await mermaidBtn.isVisible()) {
-      await mermaidBtn.click()
-    }
     await page.locator('.md-diagram svg').waitFor({ timeout: 60000 })
     assert.ok((await page.locator('.md-diagram svg').count()) >= 1)
     await page.screenshot({ path: `${output}/step9-mermaid-diagram.png` })
+    const block = page.locator('.md-code-block').filter({ has: page.locator('.md-diagram svg') })
+    await block.getByRole('button', { name: '编辑图表源码', exact: true }).click()
+    assert.equal(await block.locator('.md-code-editor-wrap').isVisible(), true)
+    await block.getByRole('button', { name: '完成编辑', exact: true }).click()
+    assert.equal(await block.locator('.md-code-editor-wrap').isVisible(), false)
+    await block.locator('.md-diagram svg').waitFor()
+  })
+
+  await test('11. Inline and block formula edits render automatically and share undo', async () => {
+    for (const selector of ['.md-inline-math', '.md-math-output']) {
+      const before = await raw(), formula = page.locator(selector).first()
+      await formula.click()
+      await formula.getByLabel('公式源码', { exact: true }).fill('x^2+1')
+      assert.equal(await page.getByRole('button', { name: '应用公式', exact: true }).count(), 0)
+      await page.waitForFunction(()=>document.querySelector('.md-math-editing annotation')?.textContent === 'x^2+1')
+      await formula.getByLabel('公式源码', { exact: true }).press('Escape')
+      await formula.locator('.katex').waitFor()
+      assert.ok((await raw()).includes('x^2+1'))
+      await page.evaluate(() => window.fixture.manager.command('undo'))
+      assert.equal(await raw(), before)
+    }
   })
 
   // 10. Continuous paragraph typing and undo preserves original markdown
@@ -249,6 +297,127 @@ try {
     assert.equal(await raw(), beforeAll)
   })
 
+  await test('12. Image targets map across panes and stale apply/delete cannot touch an identical neighbour', async () => {
+    const source = 'before\n\n![first](./assets/pixel.png)\n\n![second](./assets/pixel.png)\n'
+    await page.evaluate(source => {
+      const m = window.fixture.manager
+      m.dispatch('md', { changes: { from: 0, to: m.getState('md').doc.length, insert: source } })
+      m.focusPane('main', false); m.splitEditor()
+    }, source)
+    await page.waitForFunction(() => document.querySelectorAll('.md-prose').length === 2)
+    const main = page.locator('.main-pane'), image = main.locator('.md-live-image img').first()
+    await image.click({button:'right'})
+    await page.evaluate(() => {
+      const m = window.fixture.manager, v = [...m.liveViews.entries()].find(([p]) => p !== 'main')[1].editor.view
+      v.dispatch(v.state.tr.insertText('远端前插 ', 1))
+    })
+    await main.getByLabel('图片替代文字').fill('mapped-first')
+    await main.getByRole('button', { name: '应用图片', exact: true }).click()
+    assert.ok((await raw()).includes('![mapped-first]'))
+    assert.ok((await raw()).includes('![second]'))
+    await image.click({button:'right'})
+    await page.evaluate(() => {
+      const buttons = [...document.querySelectorAll('.main-pane .md-properties button')]
+      window.oldImageHandlers = buttons.filter(b => /应用图片|删除图片/.test(b.textContent)).map(b => b.onclick)
+      const m = window.fixture.manager, v = [...m.liveViews.entries()].find(([p]) => p !== 'main')[1].editor.view
+      let pos
+      v.state.doc.descendants((node, at) => { if (pos === undefined && node.type.name === 'image') pos = at })
+      v.dispatch(v.state.tr.delete(pos, pos + 1))
+    })
+    assert.equal(await main.locator('.md-properties').isVisible(), false)
+    const before = await raw()
+    await page.evaluate(() => window.oldImageHandlers.forEach(fn => fn(new MouseEvent('click'))))
+    assert.equal(await raw(), before)
+    assert.ok(before.includes('![second]'))
+    await page.evaluate(() => { const m = window.fixture.manager; m.focusPane('main', false); m.mergeAllPanes() })
+    await page.waitForFunction(() => document.querySelectorAll('.md-prose').length === 1)
+  })
+
+  await test('13. Live replacements preserve marks, URL, table and code, refresh after pane edits, undo once', async () => {
+    const source = '# Unchanged\n\nfoo**bar**[baz](https://example.com)\n\n| Key | Value |\n| :--- | ---: |\n| 中文 | keep |\n\n```js\nconst item42 = 1\n```\n'
+    await page.evaluate(source => {
+      const m = window.fixture.manager
+      m.dispatch('md', { changes: { from: 0, to: m.getState('md').doc.length, insert: source } })
+      m.focusPane('main', false); m.splitEditor()
+    }, source)
+    await page.waitForFunction(() => document.querySelectorAll('.md-prose').length === 2)
+    const main = page.locator('.main-pane'), panel = main.locator('.md-live-search')
+    await main.locator('.md-prose h1').click(); await page.keyboard.press('Control+r')
+    await panel.locator('input[name="search"]').fill('foobarbaz')
+    await panel.locator('input[name="replace"]').fill('FOOBARBAZ')
+    await page.evaluate(() => {
+      const m = window.fixture.manager, v = [...m.liveViews.entries()].find(([p]) => p !== 'main')[1].editor.view
+      v.dispatch(v.state.tr.insertText('远端 ', 1))
+    })
+    const before = await raw()
+    await panel.getByRole('button', { name: '全部替换', exact: true }).click()
+    assert.equal(await raw(), before.replace('foo**bar**[baz]', 'FOO**BAR**[BAZ]'))
+    await page.evaluate(() => { const m = window.fixture.manager; m.focusPane('main', false); m.command('undo') })
+    assert.equal(await raw(), before)
+    await panel.locator('input[name="search"]').fill('(?<=const )(?<name>item)(\\d+)')
+    await panel.locator('input[name="re"]').check()
+    await panel.locator('input[name="replace"]').fill('$<name>_$2')
+    await panel.getByRole('button', { name: '全部替换', exact: true }).click()
+    assert.equal(await raw(), before.replace('item42', 'item_42'))
+    assert.equal(await main.locator('.md-prose').isVisible(), true)
+    assert.equal(await page.evaluate(() => window.fixture.manager.metadata('md').mode), 'live')
+    await page.evaluate(() => { const m = window.fixture.manager; m.focusPane('main', false); m.command('undo') })
+    assert.equal(await raw(), before)
+    await panel.locator('input[name="search"]').fill('中文')
+    await panel.locator('input[name="replace"]').fill('汉字')
+    await panel.getByRole('button', { name: '全部替换', exact: true }).click()
+    assert.equal(await raw(), before.replace('中文', '汉字'))
+    await page.evaluate(() => { const m = window.fixture.manager; m.focusPane('main', false); m.command('undo'); m.mergeAllPanes() })
+    assert.equal(await raw(), before)
+  })
+
+  await test('14. Protected block transitions to/from rendered math; changing code language to Mermaid defaults to SVG', async () => {
+    await page.waitForFunction(() => document.querySelectorAll('.md-prose').length === 1)
+    await page.evaluate(() => {
+      const m = window.fixture.manager
+      m.dispatch('md', { changes: { from: 0, to: m.getState('md').doc.length, insert: '---\ntitle: fixture\n---\n\nend' } })
+      const v = window.fixture.view()
+      v.dispatch(v.state.tr.setNodeMarkup(0, undefined, { ...v.state.doc.firstChild.attrs, source: '$$\ny=1\n$$' }))
+    })
+    await page.locator('.md-math-output .katex').waitFor()
+    await page.evaluate(() => {
+      const v = window.fixture.view()
+      v.dispatch(v.state.tr.setNodeMarkup(0, undefined, { ...v.state.doc.firstChild.attrs, source: ':::unknown\nprotected' }))
+    })
+    assert.equal(await page.locator('.md-math-output').count(), 0)
+    await page.locator('.md-protected').waitFor()
+    await page.evaluate(() => {
+      const m = window.fixture.manager
+      m.dispatch('md', { changes: { from: 0, to: m.getState('md').doc.length, insert: '```text\ngraph LR\n A[中文] --> B[End]\n```' } })
+    })
+    const code = page.locator('.md-code-block')
+    await selectCodeLanguage(code,'mermaid','Mermaid')
+    await code.locator('.md-diagram svg').waitFor()
+    assert.equal(await code.locator('.md-code-editor-wrap').isVisible(), false)
+    const before = await raw()
+    await page.evaluate(() => document.body.classList.add('light'))
+    await code.locator('.md-diagram svg').waitFor()
+    assert.ok((await code.locator('.md-diagram svg').textContent()).includes('中文'))
+    assert.equal(await raw(), before)
+    await selectCodeLanguage(code,'text','Plain Text')
+    assert.equal(await code.locator('.md-code-editor-wrap').isVisible(), true)
+    assert.equal(await code.locator('.md-diagram').isVisible(), false)
+  })
+
+  await test('15. YAML and TOC have no permanent source controls; metadata edits stay local and undo exactly',async()=>{
+    const source='---\ntitle: original\n---\n\n# Heading\n\n[toc]\n\nend'
+    await page.evaluate(source=>{const m=window.fixture.manager;m.dispatch('md',{changes:{from:0,to:m.getState('md').doc.length,insert:source}})},source)
+    const yaml=page.locator('.md-yaml-preview')
+    assert.equal(await yaml.locator('..').locator('details').isVisible(),false)
+    assert.equal(await page.locator('.md-toc').locator('..').locator('details').isVisible(),false)
+    assert.equal(await raw(),source)
+    await yaml.click()
+    const input=page.locator('.md-extension').filter({has:page.locator('.md-yaml-preview')}).locator('textarea')
+    await input.fill('---\ntitle: updated\n---');await input.press('Escape')
+    assert.equal(await raw(),source.replace('title: original','title: updated'))
+    assert.equal(await yaml.isVisible(),true)
+    await page.evaluate(()=>window.fixture.manager.command('undo'));assert.equal(await raw(),source)
+  })
   assert.deepEqual(errors, [])
 } catch (error) {
   console.error(error)

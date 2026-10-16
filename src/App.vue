@@ -27,6 +27,7 @@
       <!-- 活动栏 (单文件模式可自动折叠) -->
       <ActivityBar
         v-if="!focusMode && appMode === 'workspace'"
+        :ui-font-size="uiFontSize"
         :active-panel="sidebarPanel"
         :sidebar-visible="sidebarVisible"
         @select-panel="handleSelectPanel"
@@ -114,6 +115,7 @@
       @update:document-image-rules="updateDocumentImageRules"
       ref="settingsRef"
       v-model:theme="theme"
+      v-model:ui-font-size="uiFontSize"
       v-model:font-size="fontSize"
       v-model:word-wrap="wordWrap"
       v-model:show-outline="showOutline"
@@ -146,7 +148,7 @@ import GotoLineModal from './components/modals/GotoLineModal.vue'
 import Toast from './components/common/Toast.vue'
 import { computed } from 'vue'
 import { useAppShell } from './app/useAppShell'
-const { markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay,imageRules,currentDocumentImageRules,updateDocumentImageRules,
+const { markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay,imageRules,currentDocumentImageRules,updateDocumentImageRules,
   paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
   setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,

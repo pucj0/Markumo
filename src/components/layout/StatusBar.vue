@@ -167,14 +167,14 @@ function openEncodingMenu(event: MouseEvent | KeyboardEvent) {
   gap: 8px;
   overflow: hidden;
   white-space: nowrap;
-  height: 24px;
+  height: var(--ui-row-height);
   background: var(--bar);
   border-top: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 10px;
-  font-size: 11px;
+  font-size: var(--ui-font-size);
   color: var(--muted);
   flex: none;
 }
@@ -228,7 +228,7 @@ function openEncodingMenu(event: MouseEvent | KeyboardEvent) {
 }
 
 .encoding-arrow {
-  font-size: 8px;
+  font-size: var(--ui-small-font-size);
   opacity: 0.7;
 }
 

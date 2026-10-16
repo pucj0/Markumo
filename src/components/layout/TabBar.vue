@@ -263,7 +263,7 @@ function dropEmptySpace(event: DragEvent) {
 
 <style scoped>
 .tabs {
-  height: 38px;
+  height: calc(var(--ui-font-size) + 26px);
   background: var(--bar);
   display: flex;
   align-items: center;
@@ -287,14 +287,14 @@ function dropEmptySpace(event: DragEvent) {
 }
 
 .tab {
-  height: 30px;
+  height: var(--ui-control-height);
   border-radius: 6px;
   display: flex;
   align-items: center;
   gap: 7px;
   padding: 0 9px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--ui-font-size);
   cursor: pointer;
   border: 1px solid transparent;
   transition: all 0.15s;
@@ -355,18 +355,18 @@ function dropEmptySpace(event: DragEvent) {
 }
 
 .pin-icon {
-  font-size: 10px;
+  font-size: var(--ui-small-font-size);
   opacity: 0.7;
 }
 
 .tinyclose {
-  width: 16px;
-  height: 16px;
+  width: var(--ui-row-height);
+  height: var(--ui-row-height);
   border-radius: 3px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   color: var(--muted);
   border: none;
   background: transparent;

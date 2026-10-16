@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import {createRequire} from 'node:module'
 import {mkdir,writeFile,readFile} from 'node:fs/promises'
-const {chromium}=createRequire(process.env.LIGHTEDIT_PLAYWRIGHT_PACKAGE||'C:/Users/18089/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/package.json')('playwright')
+import { chromium, browserOptions } from './helpers/markdown-browser.mjs'
+import { selectCodeLanguage } from './helpers/code-language.mjs'
 const output='test-results/markdown-wysiwyg';await mkdir(output,{recursive:true})
 const markdown=await readFile('tests/fixtures/markdown-wysiwyg.md','utf8')
 const fixtureModule=`fixture-${Date.now()}.ts`
@@ -14,7 +14,7 @@ const manager=new DocumentManager([{id:'md',name:'fixture.md',path:'fixture.md',
 const revision=ref(0);manager.subscribe(()=>revision.value++);window.fixture={manager,StateEffect,EditorState,live:()=>manager.liveViews.get('main')?.editor,view:()=>manager.liveViews.get('main')?.editor.view,copied:''};textClipboard.writeText=async text=>{window.fixture.copied=text};
 createApp({render(){revision.value;return h(EditorContainer,{doc:manager.activeDocument,manager,showOutline:false,desktop:false})}}).mount('#app');
 `)
-const browser=await chromium.launch({headless:true,channel:'msedge'}),page=await browser.newPage({viewport:{width:1280,height:900}}),results=[],errors=[]
+const browser=await chromium.launch(browserOptions),page=await browser.newPage({viewport:{width:1280,height:900}}),results=[],errors=[]
 page.on('pageerror',e=>errors.push(e.message))
 async function test(name,run){await run();results.push({name,result:'PASS'});console.log(`PASS ${name}`)}
 const raw=()=>page.evaluate(()=>window.fixture.manager.saveSnapshot('md')?.text)
@@ -43,12 +43,12 @@ try{
   await test('embedded code CM keeps fences hidden, numbered, highlighted and synchronized with canonical undo',async()=>{
     const block=page.locator('.md-code-block').first(),editor=block.locator('.cm-content');await editor.click();await page.keyboard.press('Control+End');await page.keyboard.insertText('\n// 新代码')
     assert.ok((await raw()).includes('// 新代码'));assert.equal(await block.locator('.cm-gutterElement').filter({hasText:/^1$/}).count(),1);assert.ok(!(await editor.innerText()).includes('~~~~'))
-    await block.getByLabel('代码语言').fill('typescript extra-info');await block.getByLabel('代码语言').blur();assert.ok((await raw()).includes('~~~~typescript extra-info'))
+    await selectCodeLanguage(block,'ts','TypeScript');assert.ok((await raw()).includes('~~~~typescript extra-info'))
     await block.getByRole('button',{name:'复制代码'}).click();assert.ok((await page.evaluate(()=>window.fixture.copied)).includes('// 新代码'))
     await page.evaluate(()=>window.fixture.manager.command('undo'));assert.ok((await raw()).includes('~~~~javascript extra-info'))
   })
   await test('link edits stay local; tasks update source; protected YAML/HTML never execute',async()=>{
-    await page.locator('.md-prose a').filter({hasText:'链接文字'}).first().click();await page.getByLabel('链接 URL',{exact:true}).fill('https://example.org/new');await page.getByRole('button',{name:'应用链接'}).click();assert.ok((await raw()).includes('https://example.org/new'))
+    await page.locator('.md-prose a').filter({hasText:'链接文字'}).first().click();await page.locator('.md-inline-source-input').waitFor();await page.locator('.md-inline-source-input').fill('[链接文字](https://example.org/new)');await page.keyboard.press('Escape');assert.ok((await raw()).includes('https://example.org/new'))
     const taskBefore=await raw(),task=page.locator('.md-task input[type="checkbox"]').first();await task.check();assert.ok((await raw()).includes('[x] 待完成'));await page.evaluate(()=>window.fixture.manager.command('undo'));assert.equal(await raw(),taskBefore);await page.evaluate(()=>window.fixture.manager.command('redo'));assert.ok((await raw()).includes('[x] 待完成'))
     assert.equal(await page.locator('.md-prose script,.md-prose iframe,.md-prose img[src^="https:"]').count(),0);assert.ok((await raw()).includes('title: LightEdit 原位写作验收'));assert.ok((await raw()).includes('<table><tr><td colspan="2">'))
   })
@@ -60,12 +60,13 @@ try{
     await page.evaluate(()=>window.fixture.manager.setMarkdownMode('md','live'));await page.locator('.main-pane .md-prose').waitFor()
     await page.evaluate(()=>window.fixture.manager.command('redo'));assert.ok((await raw()).includes('双栏'))
   })
-  await test('local extensions render only on demand; math, Mermaid, TOC and footnotes preserve source',async()=>{
+  await test('math and Mermaid render automatically; TOC and footnotes preserve source',async()=>{
     await page.evaluate(()=>{const m=window.fixture.manager;m.focusPane('main',false);m.mergeAllPanes()})
+    await page.locator('.md-inline-math .katex').waitFor({timeout:30000})
     const before=await raw()
     assert.equal(await page.locator('.md-inline-math').count(),1);assert.ok(await page.locator('.md-toc button').count()>=6);assert.equal(await page.locator('.md-footnote').count(),1);assert.equal(await page.locator('.md-callout').count(),1)
-    await page.locator('.md-inline-math').click();await page.getByRole('button',{name:'渲染公式',exact:true}).first().click();await page.locator('.md-inline-math .katex').waitFor({timeout:30000})
-    await page.getByRole('button',{name:'渲染 Mermaid',exact:true}).click();await page.locator('.md-diagram svg').waitFor({timeout:60000});assert.equal(await page.locator('.md-diagram script,.md-diagram foreignObject,.md-diagram a').count(),0)
+    await page.locator('.md-inline-math .katex').waitFor({timeout:30000})
+    await page.locator('.md-diagram svg').waitFor({timeout:60000});assert.equal(await page.locator('.md-diagram script,.md-diagram foreignObject,.md-diagram a').count(),0)
     assert.equal(await raw(),before)
     await page.evaluate(()=>{document.querySelector('.markdown-live').scrollTop=0;document.body.classList.add('light')});await page.screenshot({path:`${output}/live-document-light.png`});await page.evaluate(()=>document.body.classList.remove('light'));await page.screenshot({path:`${output}/live-document-dark.png`})
   })

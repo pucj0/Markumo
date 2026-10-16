@@ -1,8 +1,9 @@
 import { Annotation, Compartment, EditorState, EditorSelection, Prec, Transaction, Text, type Extension, type StateEffect, type TransactionSpec } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { undo, redo, undoSelection, redoSelection, isolateHistory } from '@codemirror/commands'
-import { findNext, findPrevious, SearchQuery } from '@codemirror/search'
+import { findNext, findPrevious } from '@codemirror/search'
 import { showEditorSearch } from './searchPanel'
+import { createSearchQuery, expandReplacement } from './searchQuery'
 import { indentUnit } from '@codemirror/language'
 import { coreExtensions, editorTheme } from './extensions'
 import { detectLanguage, loadLanguage, type LanguageName } from '../languages'
@@ -425,6 +426,7 @@ export class DocumentManager {
       void import('../markdown/wysiwyg/MarkdownEditorController').then(({MarkdownEditorController})=>{
         if(this.disposed||this.liveLoads.get(resolved)!==load||this.paneGroup(resolved).activeId!==record.meta.id||record.meta.mode!=='live'||this.hosts.get(resolved)!==parent)return
         const source=record.state.doc.toString(),saved=record.panes[resolved]
+        const sibling=[...this.liveViews.values()].find(live=>live.id===record.meta.id)?.editor
         const editor=new MarkdownEditorController(parent,{
           source,anchor:saved.selection.main.anchor,head:saved.selection.main.head,resources:record.state.facet(markdownResources),typography:this.markdownTypography,
           publish:(expected,patch,update,isolated)=>{
@@ -437,7 +439,7 @@ export class DocumentManager {
           history:forward=>{this.focusPane(resolved,false);this.historyCommand(forward)},focus:()=>this.focusPane(resolved,false),
           openRelative:href=>window.dispatchEvent(new CustomEvent('markdown-open-relative',{detail:{id:record.meta.id,href}})),
           readOnly:()=>record.state.readOnly,
-        })
+        },sibling instanceof MarkdownEditorController?sibling.bridge:undefined)
         this.liveViews.set(resolved,{id:record.meta.id,editor})
         this.liveLoads.delete(resolved)
         const root=parent.querySelector('.markdown-live');if(root){root.scrollTop=saved.top;root.scrollLeft=saved.left}
@@ -702,7 +704,7 @@ export class DocumentManager {
   ): number {
     const record = this.records.get(id)
     if (!record || !searchText || this.isComposing || record.state.readOnly) return 0
-    const query = new SearchQuery({ search: searchText, replace: replaceText, literal: true, regexp: options.regex, caseSensitive: options.caseSensitive, wholeWord: options.wholeWord })
+    const query = createSearchQuery({ search: searchText, replace: replaceText, regexp: !!options.regex, caseSensitive: !!options.caseSensitive, wholeWord: !!options.wholeWord })
     if (!query.valid) return 0
     const cursor = query.getCursor(record.state)
     const changes: { from: number; to: number; insert: string }[] = []
@@ -710,16 +712,7 @@ export class DocumentManager {
       const value = item.value
       let insert = replaceText
       if (options.regex && 'match' in value && Array.isArray(value.match)) {
-        const match: (string | undefined)[] = value.match
-        insert = replaceText.replace(/\$([$&]|\d+)/g, (raw, key: string) => {
-          if (key === '$') return '$'
-          if (key === '&') return match[0] || ''
-          for (let length = key.length; length > 0; length--) {
-            const group = Number(key.slice(0,length))
-            if (group > 0 && group < match.length) return (match[group] || '') + key.slice(length)
-          }
-          return raw
-        })
+        insert = expandReplacement(value.match as RegExpExecArray, replaceText)
       }
       changes.push({ from: value.from, to: value.to, insert })
     }

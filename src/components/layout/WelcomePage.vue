@@ -17,7 +17,7 @@ defineEmits<{(e:'new-doc'):void;(e:'open-file'):void;(e:'open-workspace'):void}>
 </script>
 <style scoped>
 .welcome { flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;color:var(--muted) }
-h1 { font-size:22px;font-weight:600;color:var(--bright) }
+h1 { font-size: calc(var(--ui-font-size) + 8px);font-weight:600;color:var(--bright) }
 .welcome-actions { display:flex;gap:10px;flex-wrap:wrap;justify-content:center }
 button { padding:8px 14px;background:var(--soft);border:1px solid var(--line);border-radius:6px;color:var(--bright) }
 button:hover { background:var(--hover) }

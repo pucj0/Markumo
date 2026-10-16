@@ -1,4 +1,4 @@
-import { EditorState, Plugin, TextSelection, Selection, NodeSelection, type Transaction, type Command } from 'prosemirror-state'
+import { EditorState, Plugin, TextSelection, Selection, NodeSelection, AllSelection, type Transaction, type Command } from 'prosemirror-state'
 import { EditorView, type NodeView } from 'prosemirror-view'
 import type { Node } from 'prosemirror-model'
 import { baseKeymap, chainCommands, exitCode, liftEmptyBlock, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands'
@@ -8,11 +8,14 @@ import { wrapInList, splitListItem, sinkListItem, liftListItem } from 'prosemirr
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, goToNextCell, tableEditing, isInTable, selectedRect } from 'prosemirror-tables'
 import { gapCursor } from 'prosemirror-gapcursor'
 import { markdownSchema as s } from './MarkdownSchema'
-import { MarkdownSourceBridge } from './MarkdownSourceBridge'
+import { MarkdownSourceBridge, textPatch, type SourcePatch } from './MarkdownSourceBridge'
+import { InlineSourceView, inlineSourceRange } from './InlineSourceView'
+import { Decoration, DecorationSet } from 'prosemirror-view'
 import { CodeBlockView } from './CodeBlockView'
 import { LiveImageView } from './LiveImageView'
 import { createLiveSearchPlugin } from './plugins/LiveSearch'
 import { LiveSearchController } from './LiveSearchController'
+import { createNodeTargetPlugin, nodeTargetKey, type NodeTarget } from './plugins/NodeTarget'
 import { safeMarkdownURL, openMarkdownLink } from '../links'
 import { textClipboard } from '../../../features/shell/clipboard'
 import type { MarkdownFormat } from '../formatCommands'
@@ -47,6 +50,9 @@ export class MarkdownEditorController implements LiveEditor {
   private pendingSource: string | null = null
   private wasReadOnly = false
   private currentAnchorEl: HTMLElement | null = null
+  private propertyTargetToken: object | null = null
+  private inlineSource: InlineSourceView | null = null
+  private dismissedInline: { from:number; to:number } | null = null
 
   private onCompositionEnd = () => {
     this.compositionActive = false
@@ -59,9 +65,14 @@ export class MarkdownEditorController implements LiveEditor {
     }, 0)
   }
 
-  constructor(parent: HTMLElement, private options: LiveOptions) {
+  constructor(parent: HTMLElement, private options: LiveOptions, sharedBridge?: MarkdownSourceBridge) {
     this.settings = options.typography
-    this.bridge = new MarkdownSourceBridge(options.source)
+    // Panes must start from the same immutable PM document and source IDs.
+    // Independent parses look equal on screen but force full-document syncs,
+    // which destroy mapped property targets and selection/search continuity.
+    this.bridge = sharedBridge?.source === options.source
+      ? Object.assign(new MarkdownSourceBridge(''), sharedBridge)
+      : new MarkdownSourceBridge(options.source)
     this.wasReadOnly = options.readOnly?.() ?? false
 
     this.dom.className = 'markdown-live'
@@ -158,6 +169,16 @@ export class MarkdownEditorController implements LiveEditor {
           }),
           rules,
           createLiveSearchPlugin(),
+          createNodeTargetPlugin(),
+          new Plugin({ props: { decorations: state => {
+            const decorations = this.inlineSource?.decorations(state.doc).find() || []
+            const { $from } = state.selection
+            if ($from.parent.type === s.nodes.heading) {
+              const pos = $from.before()
+              decorations.push(Decoration.node(pos, pos + $from.parent.nodeSize, { class: 'md-heading-focused', 'data-heading-level': `h${$from.parent.attrs.level}` }))
+            }
+            return DecorationSet.create(state.doc, decorations)
+          } } }),
           keymap({
             'Mod-z': () => { options.history(false); return true },
             'Mod-y': () => { options.history(true); return true },
@@ -209,6 +230,18 @@ export class MarkdownEditorController implements LiveEditor {
                   return false
                 },
                 contextmenu: (view, event) => {
+                  const image = (event.target as Element).closest('.md-live-image')
+                  const link = (event.target as Element).closest('a')
+                  if (image) {
+                    const pos = view.posAtDOM(image, 0)
+                    const node = view.state.doc.nodeAt(pos)
+                    if (node?.type === s.nodes.image) {
+                      event.preventDefault(); this.closeInline(); this.imageProperties(image as HTMLElement, node, pos); return true
+                    }
+                  }
+                  if (link) {
+                    event.preventDefault(); this.closeInline(); this.linkProperties(link as HTMLElement, link.getAttribute('data-href') || ''); return true
+                  }
                   if (!(event.target as Element).closest('td,th')) return false
                   const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })
                   if (pos) view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(pos.pos))))
@@ -225,18 +258,12 @@ export class MarkdownEditorController implements LiveEditor {
                   if (!this.properties.hidden && !(event.target as Element).closest('.md-properties')) {
                     this.properties.hidden = true
                   }
-                  return false
+                  return this.activateMark(view,event)
                 }
-                event.preventDefault()
-                if (event.ctrlKey || event.metaKey) {
-                  this.openLink(a.getAttribute('data-href') || '')
-                } else {
-                  const at = view.posAtDOM(a, 0)
-                  view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, at)))
-                  this.linkProperties(a, a.getAttribute('data-href') || '')
-                }
-                return true
+                return this.activateLink(view,event)
               },
+              handleDoubleClick: (view,_pos,event) => this.activateLink(view,event) || this.activateMark(view,event),
+              handleTripleClick: (view,_pos,event) => this.activateLink(view,event) || this.activateMark(view,event),
               transformPastedHTML: html => {
                 const doc = new DOMParser().parseFromString(html, 'text/html')
                 doc.querySelectorAll('script,style,iframe,object,embed,svg,math').forEach(el => el.remove())
@@ -266,7 +293,8 @@ export class MarkdownEditorController implements LiveEditor {
             getPos,
             this.settings,
             options.history,
-            replace => this.find(replace)
+            replace => this.find(replace),
+            forward => forward ? this.findNext() : this.findPrevious()
           )
           this.codeViews.add(code)
           const destroy = code.destroy.bind(code)
@@ -276,14 +304,16 @@ export class MarkdownEditorController implements LiveEditor {
           }
           return code
         },
-        protected_source: (node, view, getPos) => this.protectedView(node, view, getPos),
+        protected_source: (node, view, getPos) => /^\$\$[\s\S]*\$\$$/.test(String(node.attrs.source).trim())
+          ? this.mathView(node, view, getPos, true) : this.protectedView(node, view, getPos),
         image: (node, view, getPos) => {
           const imgView = new LiveImageView(
             node,
             view,
             getPos,
             this.options.resources,
-            (imgEl, n, pos) => this.imageProperties(imgEl, n, pos)
+            (_imgEl, _n, pos) => { this.properties.hidden = true; this.openInlineAt(pos, 'image') },
+            (imgEl, node, pos) => { this.closeInline(); this.imageProperties(imgEl, node, pos) }
           )
           this.liveImages.add(imgView)
           const destroy = imgView.destroy.bind(imgView)
@@ -350,7 +380,7 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   get composing() {
-    return this.compositionActive || this.view.composing || [...this.codeViews].some(code => code.cm.compositionStarted)
+    return this.compositionActive || this.view.composing || !!this.inlineSource?.composing || !!this.inlineSource?.pending || [...this.codeViews].some(code => code.cm.compositionStarted)
   }
 
   get selection() {
@@ -363,16 +393,17 @@ export class MarkdownEditorController implements LiveEditor {
     try {
       const applied = this.view.state.applyTransaction(tr)
       const before = this.bridge.source
-      if (applied.state.doc.eq(this.view.state.doc)) {
+      if (applied.state.doc.eq(this.view.state.doc) && !tr.getMeta('inlineSourcePatch')) {
         this.view.updateState(applied.state)
         this.updateTools()
         this.updateSelectionBubble()
         const sel = this.selection
         this.options.selected(sel.anchor, sel.head)
+        this.scheduleInlineEntry()
         return
       }
-      const prepared = this.bridge.prepare(applied.state.doc)
-      const previous = { source: this.bridge.source, doc: this.bridge.doc, blocks: this.bridge.blocks }
+      const prepared = this.bridge.prepare(applied.state.doc, tr.getMeta('inlineSourcePatch') as SourcePatch | undefined)
+      const previous = { source: this.bridge.source, doc: this.bridge.doc, blocks: this.bridge.blocks, environment:this.bridge.environment }
       prepared.commit()
       const update: LiveUpdate = { bridge: this.bridge, transactions: applied.transactions }
       if (prepared.patch && !this.options.publish(before, prepared.patch, update, !!tr.getMeta('isolated'))) {
@@ -381,6 +412,8 @@ export class MarkdownEditorController implements LiveEditor {
         notice('文档版本已变化或为只读；已拒绝 Markdown 修改。')
         return
       }
+      for (const transaction of applied.transactions) this.inlineSource?.map(transaction)
+      this.inlineSource?.mapSource(prepared.patch, tr.getMeta('inlineSourceEditor') === this.inlineSource)
       this.view.updateState(applied.state)
       this.updateTools()
       this.updateSelectionBubble()
@@ -398,15 +431,17 @@ export class MarkdownEditorController implements LiveEditor {
       return
     }
     const remote = update as LiveUpdate | undefined
+    this.inlineSource?.mapSource(textPatch(this.bridge.source, source))
     if (remote && remote.transactions[0]?.before.eq(this.view.state.doc)) {
       let state = this.view.state
       for (const transaction of remote.transactions) {
         const tr = state.tr
         for (const step of transaction.steps) tr.step(step)
+        this.inlineSource?.map(tr)
         state = state.apply(tr)
       }
       this.bridge = new MarkdownSourceBridge('')
-      Object.assign(this.bridge, { source, doc: remote.bridge.doc, blocks: remote.bridge.blocks, tail: remote.bridge.tail })
+      Object.assign(this.bridge, { source, doc: remote.bridge.doc, blocks: remote.bridge.blocks, tail: remote.bridge.tail, environment:remote.bridge.environment })
       this.view.updateState(state)
     } else {
       const sel = this.selection
@@ -423,6 +458,7 @@ export class MarkdownEditorController implements LiveEditor {
       if (!tr.doc.eq(bridge.doc)) tr = state.tr.replaceWith(0, state.doc.content.size, bridge.doc.content)
       const head = Math.min(tr.doc.content.size, bridge.documentPosition(sel.head))
       tr.setSelection(Selection.near(tr.doc.resolve(head)))
+      this.inlineSource?.map(tr)
       this.view.updateState(state.apply(tr))
     }
     this.updateTools()
@@ -603,12 +639,141 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   private updateTools() {
+    for(const image of this.liveImages)image.refreshLayout()
+    if (this.propertyTargetToken && nodeTargetKey.getState(this.view.state)?.token !== this.propertyTargetToken) {
+      this.properties.hidden = true
+      this.propertyTargetToken = null
+    }
+    if (this.propertyTargetToken && !this.properties.hidden && this.currentAnchorEl?.isConnected) {
+      this.positionAnchoredElement(this.properties, this.currentAnchorEl)
+    }
+    this.searchController?.updateCount()
     const inTable = isInTable(this.view.state)
     this.tableTools.hidden = !inTable
     if (inTable) {
       setTimeout(() => this.positionTableTools(), 10)
     }
     for (const refresh of this.extensionViews) refresh()
+  }
+
+  private closeInline(focus = false, position?: number) {
+    const editor = this.inlineSource
+    if (!editor) return
+    this.dismissedInline = { from: editor.from, to: editor.to }
+    this.inlineSource = null
+    // Let the current input handler finish before removing its editing DOM.
+    queueMicrotask(() => {
+      if(this.inlineSource && this.inlineSource!==editor){editor.destroy();return}
+      // A blur may run before PM receives the browser's selectionchange. Keep
+      // the new DOM caret instead of restoring the old image/link selection.
+      let nextSelection: Selection | undefined
+      const native = document.getSelection()
+      if (!focus && native?.anchorNode && native.focusNode && this.view.dom.contains(native.anchorNode) && this.view.dom.contains(native.focusNode) && !editor.dom.contains(native.anchorNode)) {
+        try {
+          nextSelection=TextSelection.create(this.view.state.doc,this.view.posAtDOM(native.anchorNode,native.anchorOffset),this.view.posAtDOM(native.focusNode,native.focusOffset))
+        } catch { /* Detached DOM selection: keep PM's current selection. */ }
+      }
+      editor.destroy()
+      if (!this.disposed) {
+        if (this.pendingSource !== null) { const source=this.pendingSource; this.pendingSource=null; this.sync(source) }
+        if (focus) nextSelection=Selection.near(this.view.state.doc.resolve(Math.min(position ?? editor.to,this.view.state.doc.content.size)))
+        if(nextSelection && nextSelection.$from.doc===this.view.state.doc)this.view.dispatch(this.view.state.tr.setSelection(nextSelection))
+        else this.view.updateState(this.view.state)
+        if (focus) this.view.focus()
+      }
+    })
+  }
+
+  private activateLink(view:EditorView,event:MouseEvent) {
+    const a=(event.target as Element).closest('a')
+    if(!a)return false
+    event.preventDefault()
+    if(event.ctrlKey||event.metaKey)this.openLink(a.getAttribute('data-href')||'')
+    else{
+      const start=view.posAtDOM(a,0)
+      const at=view.posAtCoords({left:event.clientX,top:event.clientY})?.pos ?? start
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc,at)))
+      this.properties.hidden = true
+      this.openInlineAt(at,'link')
+    }
+    return true
+  }
+
+  private activateMark(view:EditorView,event:MouseEvent) {
+    const el=(event.target as Element).closest('strong,em,s,code')
+    const kind=el && ({STRONG:'strong',EM:'em',S:'strike',CODE:'code'} as Record<string,string>)[el.tagName]
+    const pos=kind ? view.posAtCoords({left:event.clientX,top:event.clientY})?.pos : undefined
+    if (!kind || pos === undefined || this.options.readOnly?.()) return false
+    event.preventDefault(); view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc,pos)))
+    this.openInlineAt(pos,kind); return true
+  }
+
+  private scheduleInlineEntry() {
+    queueMicrotask(() => {
+      if (this.disposed || this.inlineSource || this.composing || !this.view.hasFocus() || !this.view.state.selection.empty) return
+      const pos = this.view.state.selection.from
+      if (this.dismissedInline && pos >= this.dismissedInline.from && pos <= this.dismissedInline.to) return
+      this.dismissedInline = null
+      const marks = this.view.state.storedMarks ?? this.view.state.selection.$from.marks()
+      const kind = ['link','code','strong','em','strike'].find(kind => marks.some(mark => mark.type.name === kind))
+      if (kind) this.openInlineAt(pos, kind)
+    })
+  }
+
+  private openInlineAt(pos: number, kind: string) {
+    if (this.options.readOnly?.() || this.composing) return
+    if (this.inlineSource) { if (this.inlineSource.pending) return; this.closeInline() }
+    const doc = this.view.state.doc, $pos = doc.resolve(pos)
+    let from = pos, to = pos + 1
+    if (kind !== 'image') {
+      const mark = $pos.nodeAfter?.marks.find(mark => mark.type.name === kind) || $pos.marks().find(mark => mark.type.name === kind)
+      if (!mark) return
+      const start = $pos.start()
+      const runs: {from:number;to:number}[] = []
+      $pos.parent.forEach((node, offset) => { if (mark.isInSet(node.marks)) runs.push({ from:start+offset, to:start+offset+node.nodeSize }) })
+      const at = runs.findIndex(run => pos >= run.from && pos <= run.to)
+      if (at < 0) return
+      from = runs[at].from; to = runs[at].to
+      for (let i=at-1;i>=0 && runs[i].to===from;i--) from=runs[i].from
+      for (let i=at+1;i<runs.length && runs[i].from===to;i++) to=runs[i].to
+    }
+    const range = inlineSourceRange(this.bridge, doc, from, to, kind)
+    if (!range) return
+    const editor = new InlineSourceView(from,to,range.sourceFrom,range.sourceTo,kind,range.raw,range.inherited,doc.slice(from,to).content,()=>this.bridge.environment,range.blockId,
+      (editor, raw, content) => {
+        if (this.disposed || this.inlineSource !== editor || this.options.readOnly?.()) return false
+        const patch: SourcePatch = { from:editor.sourceFrom, to:editor.sourceTo, insert:raw,blockId:editor.blockId }
+        this.properties.hidden = true
+        const tr = this.view.state.tr.replaceWith(editor.from,editor.to,content)
+          .setMeta('inlineSourcePatch',patch).setMeta('inlineSourceEditor',editor)
+        const oldTo=editor.to,oldSourceTo=editor.sourceTo
+        editor.acceptRange(editor.from+content.size,editor.sourceFrom+raw.length)
+        this.view.dispatch(tr)
+        const accepted=this.bridge.source.slice(patch.from,patch.from+raw.length)===raw
+        if(!accepted)editor.acceptRange(oldTo,oldSourceTo)
+        return accepted
+      }, (focus, position) => { if (this.inlineSource === editor) this.closeInline(focus, position) }, forward => this.options.history(forward), (command, selection) => {
+        if (this.disposed) return
+        if (command === 'select-all') { this.view.dispatch(this.view.state.tr.setSelection(new AllSelection(this.view.state.doc))); this.view.focus() }
+        else if (command === 'find' || command === 'replace') this.find(command === 'replace')
+        else {
+          const nearest = (offset: number) => {
+            let result=editor.from, distance=Infinity
+            for(let pos=editor.from;pos<=editor.to;pos++) {
+              const delta=Math.abs(this.bridge.sourcePosition(pos)-editor.sourceFrom-offset)
+              if(delta<distance){distance=delta;result=pos}
+            }
+            return Math.min(result,this.view.state.doc.content.size)
+          }
+          if(selection)this.view.dispatch(this.view.state.tr.setSelection(TextSelection.create(this.view.state.doc,nearest(selection.anchor),nearest(selection.head))))
+          if(command === 'enter') this.run(chainCommands(splitListItem(s.nodes.list_item,{checked:null}),liftEmptyBlock,baseKeymap.Enter),true)
+          else if(command === 'hard-break') { this.view.dispatch(this.view.state.tr.replaceSelectionWith(s.nodes.hard_break.create()).setMeta('isolated',true));this.view.focus() }
+          else this.format(command)
+        }
+      })
+    this.inlineSource = editor; this.dismissedInline = null
+    this.view.updateState(this.view.state)
+    editor.focus(Math.max(0, Math.min(range.raw.length, this.bridge.sourcePosition(pos) - range.sourceFrom)))
   }
 
   private buildSelectionBubble() {
@@ -669,6 +834,7 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   private linkProperties(anchorEl: HTMLElement, href: string) {
+    this.propertyTargetToken = null
     this.properties.replaceChildren()
     this.properties.hidden = false
     this.currentAnchorEl = anchorEl
@@ -732,6 +898,7 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   private imageProperties(anchorEl: HTMLElement, node: Node, pos: number) {
+    const token = this.trackPropertyNode(node, pos)
     this.properties.replaceChildren()
     this.properties.hidden = false
     this.currentAnchorEl = anchorEl
@@ -740,12 +907,12 @@ export class MarkdownEditorController implements LiveEditor {
     const srcInput = this.field('图片路径', node.attrs.src)
 
     this.propertyButton('应用图片', () => {
-      const at = pos
-      if (at !== undefined && at < this.view.state.doc.content.size) {
+      const target = this.currentPropertyNode(token)
+      if (target) {
         this.view.dispatch(
           this.view.state.tr
-            .setNodeMarkup(at, undefined, {
-              ...node.attrs,
+            .setNodeMarkup(target.pos, undefined, {
+              ...target.node.attrs,
               src: srcInput.value,
               alt: altInput.value,
             })
@@ -756,9 +923,9 @@ export class MarkdownEditorController implements LiveEditor {
     })
 
     this.propertyButton('删除图片', () => {
-      const at = pos
-      if (at !== undefined && at < this.view.state.doc.content.size) {
-        this.view.dispatch(this.view.state.tr.delete(at, at + node.nodeSize).setMeta('isolated', true))
+      const target = this.currentPropertyNode(token)
+      if (target) {
+        this.view.dispatch(this.view.state.tr.delete(target.pos, target.pos + target.node.nodeSize).setMeta('isolated', true))
       }
       this.properties.hidden = true
     })
@@ -769,6 +936,22 @@ export class MarkdownEditorController implements LiveEditor {
 
     this.positionAnchoredElement(this.properties, anchorEl)
     altInput.focus()
+  }
+
+  private trackPropertyNode(node: Node, pos: number) {
+    const token = {}
+    this.view.dispatch(this.view.state.tr.setMeta(nodeTargetKey, { target: { token, pos, node } }))
+    this.propertyTargetToken = token
+    return token
+  }
+
+  private currentPropertyNode(token: object): NodeTarget | null {
+    const target = nodeTargetKey.getState(this.view.state)
+    if (this.disposed || this.properties.hidden || this.propertyTargetToken !== token || target?.token !== token || this.view.state.doc.nodeAt(target.pos) !== target.node) {
+      notice('目标内容已变化，请重新选择。')
+      return null
+    }
+    return target
   }
 
   private openLink(href: string) {
@@ -820,6 +1003,15 @@ export class MarkdownEditorController implements LiveEditor {
     dom.append(preview, details)
 
     let previous = ''
+    let knownPreview = false
+    const finishSource = () => {
+      if (!knownPreview) return
+      details.hidden = true; details.open = false; preview.hidden = false
+    }
+    const editSource = () => {
+      if (!knownPreview || this.options.readOnly?.()) return
+      details.hidden = false; details.open = true; preview.hidden = true; input.focus()
+    }
     const refresh = () => {
       const source = String(node.attrs.source)
       const toc = /^\[toc\]$/i.test(source.trim())
@@ -827,6 +1019,9 @@ export class MarkdownEditorController implements LiveEditor {
       if (key === previous) return
       previous = key
       preview.replaceChildren()
+      knownPreview = toc || /^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(source) || /^\s*\[\^/.test(source) || /^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)/.test(source)
+      if (!details.open) details.hidden = knownPreview
+      dom.classList.toggle('md-extension-preview',knownPreview)
 
       if (toc) {
         summary.textContent = '目录源码'
@@ -836,31 +1031,14 @@ export class MarkdownEditorController implements LiveEditor {
           const button = document.createElement('button')
           button.type = 'button'
           button.textContent = heading.textContent
-          button.style.paddingLeft = `${(heading.attrs.level - 1) * 14 + 8}px`
+          button.style.paddingLeft = `${(heading.attrs.level - 1) * 28}px`
+          if (heading.attrs.level === 1) button.style.fontWeight = '700'
           button.onclick = () => {
             view.dispatch(this.view.state.tr.setSelection(TextSelection.create(view.state.doc, pos + 1)).scrollIntoView())
             view.focus()
           }
           preview.append(button)
         })
-      } else if (/^\$\$[\s\S]*\$\$$/.test(source.trim())) {
-        summary.textContent = '数学公式源码'
-        const button = document.createElement('button')
-        button.type = 'button'
-        button.textContent = '渲染公式'
-        const output = document.createElement('div')
-        output.className = 'md-math-output'
-        button.onclick = async () => {
-          button.disabled = true
-          try {
-            await (await import('./renderers')).renderMath(output, source.trim().slice(2, -2).trim(), true)
-          } catch (error) {
-            output.textContent = String(error)
-          } finally {
-            button.disabled = false
-          }
-        }
-        preview.append(button, output)
       } else if (/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(source)) {
         summary.textContent = 'Callout 源码'
         preview.className = 'md-callout'
@@ -877,10 +1055,10 @@ export class MarkdownEditorController implements LiveEditor {
         summary.textContent = '脚注定义源码'
         preview.className = 'md-footnote-definition'
         preview.textContent = source
-      } else if (/^---\n[\s\S]*?\n(?:---|\.\.\.)/.test(source)) {
+      } else if (/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)/.test(source)) {
         summary.textContent = '元数据 (YAML Front Matter)'
         preview.className = 'md-yaml-preview'
-        preview.textContent = source.replace(/^---\n?|\n?---$/g, '').trim()
+        preview.textContent = source.replace(/^---\r?\n?|\r?\n?(?:---|\.\.\.)\s*$/g, '').trim()
       }
     }
 
@@ -889,9 +1067,17 @@ export class MarkdownEditorController implements LiveEditor {
 
     input.oninput = () => {
       const pos = getPos()
-      if (pos !== undefined) {
+      if (pos !== undefined && !this.options.readOnly?.() && view.state.doc.nodeAt(pos) === node) {
         view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, source: input.value }))
       }
+    }
+    preview.onclick = event => { if (!(event.target as Element).closest('button')) editSource() }
+    preview.oncontextmenu = event => { if (knownPreview) { event.preventDefault(); editSource() } }
+    input.onblur = finishSource
+    input.onkeydown = event => {
+      if (event.isComposing) return
+      if ((event.ctrlKey || event.metaKey) && ['z','y'].includes(event.key.toLowerCase())) { event.preventDefault(); this.options.history(event.key.toLowerCase() === 'y' || event.shiftKey) }
+      else if(event.key === 'Escape') { event.preventDefault(); finishSource(); view.focus() }
     }
 
     return {
@@ -900,6 +1086,7 @@ export class MarkdownEditorController implements LiveEditor {
       ignoreMutation: () => true,
       update: next => {
         if (next.type !== node.type) return false
+        if (/^\$\$[\s\S]*\$\$$/.test(String(next.attrs.source).trim())) return false
         node = next
         if (input.value !== next.attrs.source) input.value = next.attrs.source
         refresh()
@@ -912,33 +1099,56 @@ export class MarkdownEditorController implements LiveEditor {
     }
   }
 
-  private mathView(node: Node, view: EditorView, getPos: () => number | undefined): NodeView {
-    const dom = document.createElement('span')
-    dom.className = 'md-inline-math'
+  private mathView(node: Node, view: EditorView, getPos: () => number | undefined, display = false): NodeView {
+    const dom = document.createElement(display ? 'div' : 'span')
+    dom.className = display ? 'md-math-output' : 'md-inline-math'
     dom.contentEditable = 'false'
-    dom.textContent = node.attrs.latex
-    dom.title = '点击编辑或渲染公式'
-
-    dom.onclick = () => {
+    dom.title = '点击编辑公式'
+    const preview = document.createElement(display ? 'div' : 'span')
+    const input = document.createElement('textarea')
+    input.className = 'md-math-source'
+    input.setAttribute('aria-label', '公式源码')
+    input.spellcheck = false
+    input.rows = display ? 3 : 1
+    input.hidden = true
+    dom.append(input, preview)
+    let generation = 0
+    let dead = false
+    const latex = () => display ? String(node.attrs.source).trim().slice(2, -2).trim() : node.attrs.latex
+    const render = () => {
+      const request = ++generation
+      void import('./renderers').then(renderer => renderer.renderMath(preview, latex(), display, () => !dead && request === generation))
+        .catch(error => { if (!dead && request === generation) preview.textContent = `公式无法渲染：${String(error)}` })
+    }
+    render()
+    const finish = () => { input.hidden = true; dom.classList.remove('md-math-editing') }
+    input.oninput = () => {
       const pos = getPos()
-      if (pos === undefined) return
-      this.properties.replaceChildren()
-      this.properties.hidden = false
-      this.currentAnchorEl = dom
-
-      const input = this.field('公式源码', node.attrs.latex)
-      this.propertyButton('应用公式', () => {
-        const at = getPos()
-        if (at !== undefined) {
-          view.dispatch(view.state.tr.setNodeMarkup(at, undefined, { latex: input.value }).setMeta('isolated', true))
-        }
-        this.properties.hidden = true
-      })
-      this.propertyButton('渲染公式', () => {
-        void import('./renderers').then(renderer => renderer.renderMath(dom, node.attrs.latex)).catch(notice)
-      })
-
-      this.positionAnchoredElement(this.properties, dom)
+      if (dead || input.hidden || this.options.readOnly?.() || pos === undefined || view.state.doc.nodeAt(pos) !== node || this.compositionActive) return
+      const attrs = display ? { ...node.attrs, source: `$$\n${input.value}\n$$` } : { ...node.attrs, latex: input.value }
+      view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, attrs))
+    }
+    input.addEventListener('compositionend', () => { queueMicrotask(() => { if (!dead) input.oninput?.(new Event('input')) }) })
+    input.onkeydown = event => {
+      if (event.isComposing) return
+      if ((event.ctrlKey || event.metaKey) && ['f','r'].includes(event.key.toLowerCase())) {
+        event.preventDefault(); finish(); this.find(event.key.toLowerCase() === 'r'); return
+      }
+      if ((event.ctrlKey || event.metaKey) && ['z','y'].includes(event.key.toLowerCase())) {
+        event.preventDefault(); this.options.history(event.key.toLowerCase() === 'y' || event.shiftKey); return
+      }
+      if (event.key === 'Escape' || (event.key === 'Enter' && (!display || event.ctrlKey || event.metaKey))) {
+        event.preventDefault(); finish()
+        const pos = getPos()
+        if (pos !== undefined) { view.dispatch(view.state.tr.setSelection(Selection.near(view.state.doc.resolve(pos + node.nodeSize)))); view.focus() }
+      }
+    }
+    input.onblur = () => { if (!this.compositionActive) finish() }
+    preview.onclick = () => {
+      const pos = getPos()
+      if (dead || this.options.readOnly?.() || pos === undefined || view.state.doc.nodeAt(pos) !== node) return
+      this.closeInline(); this.properties.hidden = true
+      input.value = latex(); input.hidden = false; dom.classList.add('md-math-editing'); input.focus()
     }
 
     return {
@@ -947,12 +1157,14 @@ export class MarkdownEditorController implements LiveEditor {
       ignoreMutation: () => true,
       update: next => {
         if (next.type !== node.type) return false
-        if (next.attrs.latex !== node.attrs.latex) {
-          dom.textContent = next.attrs.latex
-        }
+        if (display && !/^\$\$[\s\S]*\$\$$/.test(String(next.attrs.source).trim())) return false
+        const previous = latex()
         node = next
+        if (input.value !== latex() && !input.hidden) { input.value = latex(); finish() }
+        if (latex() !== previous) render()
         return true
       },
+      destroy: () => { dead = true; generation++; preview.onclick = null },
     }
   }
 
@@ -1024,6 +1236,8 @@ export class MarkdownEditorController implements LiveEditor {
 
   destroy() {
     this.disposed = true
+    this.inlineSource?.destroy()
+    this.inlineSource = null
     this.dom.removeEventListener('compositionend', this.onCompositionEnd)
     this.dom.removeEventListener('compositionstart', this.onCompositionStart, true)
     this.searchController.destroy()

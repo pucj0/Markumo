@@ -6,7 +6,7 @@ import { json } from '@codemirror/lang-json'
 import { javascript } from '@codemirror/lang-javascript'
 import { DocumentManager } from '../src/editor/core/DocumentManager'
 import { TabGroup } from '../src/features/tabs/TabGroup'
-import { detectLanguage, languageNames, loadLanguage } from '../src/editor/languages'
+import { detectLanguage, languageNames, loadLanguage, resolveLanguage } from '../src/editor/languages'
 
 const samples = [
   { id: 'a', name: 'one.txt', path: 'one.txt', text: 'first\nsecond\nthird' },
@@ -23,7 +23,7 @@ describe('语言识别和官方按需模块', () => {
     const names = ['a.txt', 'a.md', 'a.markdown', 'a.bat', 'a.cmd', 'a.json', 'a.jsonc', 'a.yml', 'a.yaml', 'a.toml', 'a.js', 'a.ts', 'a.jsx', 'a.tsx', 'a.vue', 'a.html', 'a.css', 'a.py', 'a.go', 'a.rs', 'a.sql', 'a.xml', 'a.ini', 'a.csv', 'a.log']
     expect(names.map(detectLanguage)).toEqual(['Plain Text', 'Markdown', 'Markdown', 'Batch', 'Batch', 'JSON', 'JSONC', 'YAML', 'YAML', 'TOML', 'JavaScript', 'TypeScript', 'JSX', 'TSX', 'Vue', 'HTML', 'CSS', 'Python', 'Go', 'Rust', 'SQL', 'XML', 'INI', 'CSV', 'Log'])
     expect(detectLanguage('C:\\notes\\README.MARKDOWN')).toBe('Markdown')
-    expect(detectLanguage('Dockerfile')).toBe('Plain Text')
+    expect(detectLanguage('Dockerfile')).toBe('Dockerfile')
     expect(detectLanguage('.env')).toBe('Plain Text')
     expect(detectLanguage('unknown.bin')).toBe('Plain Text')
   })
@@ -31,7 +31,7 @@ describe('语言识别和官方按需模块', () => {
     const extension = await loadLanguage(name)
     const state = EditorState.create({ doc: '中文\nsource', extensions: [extension] })
     expect(state.doc.toString()).toBe('中文\nsource')
-    if (!['Plain Text', 'CSV', 'Log'].includes(name)) expect(state.facet(languageFacet)).not.toBeNull()
+    if (resolveLanguage(name)?.highlights) expect(state.facet(languageFacet)).not.toBeNull()
     expect(await loadLanguage(name)).toBe(extension)
   })
 })

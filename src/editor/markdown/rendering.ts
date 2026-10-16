@@ -1,7 +1,7 @@
 import MarkdownIt from 'markdown-it'
 import { classHighlighter, highlightTree } from '@lezer/highlight'
 import { LanguageSupport } from '@codemirror/language'
-import { detectLanguage, languageNames, loadLanguage, type LanguageName } from '../languages'
+import { fenceLanguage, loadLanguage, type LanguageName } from '../languages'
 import { parser } from '@lezer/markdown'
 import { imageDestination } from './images'
 import { markdownSemantics, markdownSyntaxExtensions } from './semantics'
@@ -10,10 +10,7 @@ const imageParser=parser.configure(markdownSyntaxExtensions)
 // Shared semantics: GFM tables/tasks, literal punctuation, visible soft line breaks,
 // no raw HTML and no renderer-created network/file resource URLs.
 export { markdownSemantics } from './semantics'
-export function fenceLanguage(info: string): LanguageName {
-  const label = info.trim().split(/\s+/)[0]
-  return languageNames.find(name => name.toLowerCase() === label.toLowerCase()) || detectLanguage(`code.${label}`)
-}
+export { fenceLanguage } from '../languages'
 export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
   const md = new MarkdownIt(markdownSemantics)
   const languages = new Map<LanguageName, LanguageSupport | null>()
@@ -23,7 +20,7 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
     if (code.length > 64 * 1024 || ['Markdown','Plain Text','CSV','Log'].includes(language)) return ''
     if (!languages.has(language) && !pending.has(language)) {
       pending.add(language)
-      void loadLanguage(language).then(support => { languages.set(language,support instanceof LanguageSupport ? support : null) },()=>languages.set(language,null)).finally(()=>{pending.delete(language);onLanguageReady()})
+      void loadLanguage(language,'fence').then(support => { languages.set(language,support instanceof LanguageSupport ? support : null) },()=>languages.set(language,null)).finally(()=>{pending.delete(language);onLanguageReady()})
     }
     const support = languages.get(language)
     if (!support) return ''

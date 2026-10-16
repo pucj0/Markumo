@@ -170,7 +170,7 @@ function openMenu(event: MouseEvent | KeyboardEvent) {
 }
 
 .treenode {
-  height: 26px;
+  height: var(--ui-tree-row-height);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -178,7 +178,7 @@ function openMenu(event: MouseEvent | KeyboardEvent) {
   color: var(--ink);
   transition: background 0.1s;
   position: relative;
-  font-size: 12px;
+  font-size: var(--ui-font-size);
 }
 
 .treenode:hover {
@@ -196,7 +196,7 @@ function openMenu(event: MouseEvent | KeyboardEvent) {
   width: 12px;
   text-align: center;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--ui-small-font-size);
 }
 
 .label {
@@ -208,7 +208,7 @@ function openMenu(event: MouseEvent | KeyboardEvent) {
 }
 
 .dirty-dot {
-  font-size: 8px;
+  font-size: var(--ui-small-font-size);
   color: var(--yellow);
   margin-right: 4px;
 }
@@ -225,13 +225,13 @@ function openMenu(event: MouseEvent | KeyboardEvent) {
 }
 
 .ib-tiny {
-  width: 18px;
-  height: 18px;
+  width: var(--ui-row-height);
+  height: var(--ui-row-height);
   border-radius: 3px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: var(--ui-small-font-size);
   color: var(--muted);
 }
 

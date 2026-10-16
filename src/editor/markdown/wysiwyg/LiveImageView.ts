@@ -18,7 +18,8 @@ export class LiveImageView implements NodeView {
     private view: EditorView,
     readonly getPos: () => number | undefined,
     private resources: MarkdownResources,
-    private onEditRequest: (imgEl: HTMLElement, node: PMNode, pos: number) => void
+    private onEditRequest: (imgEl: HTMLElement, node: PMNode, pos: number) => void,
+    private onPropertiesRequest?: (imgEl: HTMLElement, node: PMNode, pos: number) => void
   ) {
     this.resourceIdentity = resources.identity()
     this.dom = document.createElement('span')
@@ -29,19 +30,37 @@ export class LiveImageView implements NodeView {
     this.placeholder.className = 'md-image-placeholder'
     this.dom.append(this.placeholder)
 
+    // Do not blur/collapse the source on pointer-down: that moves the image
+    // before the browser delivers click/contextmenu at the original point.
+    this.dom.onmousedown = event => event.preventDefault()
+
     this.dom.onclick = event => {
       event.preventDefault()
       event.stopPropagation()
       const pos = this.getPos()
-      if (pos === undefined) return
+      if (this.disposed || pos === undefined || this.view.state.doc.nodeAt(pos) !== this.node) return
       this.view.dispatch(
         this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos))
       )
       this.dom.classList.add('md-image-selected')
-      this.onEditRequest(this.img || this.dom, this.node, pos)
+      this.onEditRequest(this.dom, this.node, pos)
+    }
+    this.dom.oncontextmenu = event => {
+      const pos = this.getPos()
+      if (this.disposed || pos === undefined || this.view.state.doc.nodeAt(pos) !== this.node || !this.onPropertiesRequest) return
+      event.preventDefault(); event.stopPropagation()
+      this.onPropertiesRequest(this.dom, this.node, pos)
     }
 
     void this.loadImage()
+    queueMicrotask(() => { if (!this.disposed) this.refreshLayout() })
+  }
+
+  refreshLayout() {
+    const pos=this.getPos()
+    if(this.disposed||pos===undefined)return
+    const parent=this.view.state.doc.resolve(pos).parent
+    this.dom.classList.toggle('md-image-standalone',parent.type.name==='paragraph'&&parent.childCount===1&&parent.firstChild?.type.name==='image')
   }
 
   async loadImage() {
@@ -174,7 +193,7 @@ export class LiveImageView implements NodeView {
 
   update(node: PMNode): boolean {
     if (node.type !== this.node.type) return false
-    const changed = node.attrs.src !== this.node.attrs.src || node.attrs.alt !== this.node.attrs.alt
+    const changed = node.attrs.src !== this.node.attrs.src
     this.node = node
     if (this.img) {
       this.img.alt = node.attrs.alt || ''

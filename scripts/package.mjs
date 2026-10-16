@@ -22,7 +22,7 @@ export function packageOptions(args, host = process.platform) {
     } else throw Error(`Unknown argument: ${args[i]}. Use --help.`)
   }
   if (!platforms[platform]) throw Error(`Unsupported host platform: ${platform}`)
-  if (!help && platform !== host) throw Error(`Build ${platforms[platform].name} packages on ${platforms[platform].name}. This script does not cross-compile. See docs/PACKAGING.md.`)
+  if (!help && platform !== host) throw Error(`Build ${platforms[platform].name} packages on ${platforms[platform].name}. This script does not cross-compile. See docs/本地打包说明.md.`)
   return { platform, check, skipInstall, help, ...platforms[platform] }
 }
 
@@ -81,7 +81,7 @@ No installation, Git operations, signing-key generation or publishing is perform
   if (options.platform === 'linux') run('pkg-config', ['--exists', 'webkit2gtk-4.1'])
   if (options.check) {
     console.log('[OK] Node, pnpm, Rust/Cargo and basic platform checks passed. No package was built.')
-    console.log('The linker/SDK and installer tooling are verified by the actual build. See docs/PACKAGING.md.')
+    console.log('The linker/SDK and installer tooling are verified by the actual build. See docs/本地打包说明.md.')
     return
   }
   if (!options.skipInstall) pnpm('install --frozen-lockfile')
@@ -109,5 +109,5 @@ No installation, Git operations, signing-key generation or publishing is perform
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  try { main() } catch (error) { console.error(`\n[ERROR] ${error.message}\nSee docs/PACKAGING.md for prerequisites and troubleshooting.`); process.exitCode = 1 }
+  try { main() } catch (error) { console.error(`\n[ERROR] ${error.message}\nSee docs/本地打包说明.md for prerequisites and troubleshooting.`); process.exitCode = 1 }
 }

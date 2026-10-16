@@ -1,12 +1,14 @@
 .markdown-live {
+  --text: var(--ink);
+  --side: var(--sidebar);
   --md-content-width: 860px;
   --md-font-size: 16px;
-  --md-line-height: 1.7;
+  --md-line-height: 1.6;
   --md-heading-color: var(--bright);
   --md-link-color: var(--accent);
-  --md-code-bg: var(--side);
+  --md-code-bg: var(--sidebar);
   --md-table-border: var(--line);
-  --md-paragraph-spacing: 1.1em;
+  --md-paragraph-spacing: .8em;
   flex: 1;
   min-width: 0;
   height: 100%;
@@ -16,12 +18,16 @@
   position: relative;
   scrollbar-gutter: stable;
 }
+.markdown-live::-webkit-scrollbar { width: 14px; }
+body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line: #dfe2e5; --md-heading-color: #333; --md-link-color: #4183c4; --md-code-bg: #f8f8f8; --md-table-border: #dfe2e5; --side: #f8f8f8; }
+.markdown-live .md-extension-preview.ProseMirror-selectednode { outline: none; }
+.markdown-live .md-extension-preview .md-protected summary { display: none; }
 
 /* Document layout - Typora centered reading canvas */
 .markdown-live .md-document {
-  max-width: calc(var(--md-content-width) + 96px);
+  max-width: var(--md-content-width);
   margin: 0 auto;
-  padding: 48px 48px 160px;
+  padding: 30px 30px 100px;
   font: var(--md-font-size)/var(--md-line-height) var(--md-font-family);
 }
 
@@ -33,7 +39,7 @@
 }
 
 .markdown-live .md-prose p {
-  margin: 0 0 var(--md-paragraph-spacing);
+  margin: var(--md-paragraph-spacing) 0;
   line-height: var(--md-line-height);
 }
 
@@ -45,33 +51,53 @@
 .markdown-live .md-prose h5,
 .markdown-live .md-prose h6 {
   color: var(--md-heading-color);
-  line-height: 1.32;
-  margin: 1.4em 0 0.65em;
-  font-weight: 650;
+  line-height: 1.4;
+  margin: 1rem 0;
+  font-weight: 700;
 }
 
+.markdown-live .md-heading-focused { position: relative; }
+.markdown-live .md-heading-focused::before {
+  content: attr(data-heading-level); position: absolute; left: -34px; top: 0.25em;
+  font: 11px/1.4 var(--font-mono); color: var(--muted); user-select: none;
+}
+.markdown-live .md-prose:not(.ProseMirror-focused) .md-heading-focused::before { display: none; }
+.markdown-live .md-local-source { display: inline; white-space: pre-wrap; overflow-wrap: anywhere; }
+.markdown-live .md-local-source-covered { display: none; }
+.markdown-live .md-inline-source-input { outline: none; cursor: text; user-select: text; }
+.markdown-live .md-raw-strong { font-weight: 700; }
+.markdown-live .md-raw-em { font-style: italic; }
+.markdown-live .md-raw-strike { text-decoration: line-through; }
+.markdown-live .md-raw-code { font-family: var(--font-mono); background: var(--md-code-bg); }
+.markdown-live .md-raw-link { color: var(--md-link-color); text-decoration: underline; }
+.markdown-live .md-raw-delimiter, .markdown-live .md-raw-destination { color: var(--muted); opacity: .65; font-weight: normal; font-style: normal; text-decoration: none; }
+.markdown-live .md-source-image { display: block; font: .9em/1.65 var(--font-mono); margin-bottom: .5em; }
+.markdown-live .md-local-source-invalid { outline: 1px solid var(--pink); }
+.markdown-live .md-inline-source-warning { display: block; font: var(--ui-small-font-size)/1.5 var(--font-sans); color: var(--pink); padding: 3px 5px; }
+
 .markdown-live .md-prose h1 {
-  font-size: 2.15em;
-  padding-bottom: 0.2em;
-  margin-top: 0.8em;
+  font-size: 2.25em;
+  line-height: 1.2;
+  border-bottom: 1px solid var(--line);
 }
 
 .markdown-live .md-prose h2 {
-  font-size: 1.65em;
+  font-size: 1.75em;
+  line-height: 1.225;
   border-bottom: 1px solid var(--line);
-  padding-bottom: 0.35em;
 }
 
 .markdown-live .md-prose h3 {
-  font-size: 1.35em;
+  font-size: 1.5em;
+  line-height: 1.43;
 }
 
 .markdown-live .md-prose h4 {
-  font-size: 1.15em;
+  font-size: 1.25em;
 }
 
 .markdown-live .md-prose h5 {
-  font-size: 1.05em;
+  font-size: 1em;
 }
 
 .markdown-live .md-prose h6 {
@@ -117,13 +143,16 @@
 /* Lists */
 .markdown-live .md-prose ul,
 .markdown-live .md-prose ol {
-  padding-left: 1.75em;
-  margin: 0.5em 0 1.1em;
+  padding-left: 30px;
+  margin: .8em 0;
 }
 
 .markdown-live .md-prose ul {
   list-style: disc;
 }
+.markdown-live .md-prose ul ul { list-style: circle; }
+.markdown-live .md-prose ul ul ul { list-style: square; }
+.markdown-live .md-prose li ul, .markdown-live .md-prose li ol { margin: 0; }
 
 .markdown-live .md-prose ol {
   list-style: decimal;
@@ -148,18 +177,16 @@
 
 /* Blockquote & Horizontal Rule */
 .markdown-live .md-prose blockquote {
-  border-left: 4px solid var(--accent);
-  padding: 0.3em 1.25em;
-  margin: 1.1em 0;
+  border-left: 4px solid var(--line);
+  padding: 0 15px;
+  margin: .8em 0;
   color: var(--muted);
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
-  border-radius: 0 4px 4px 0;
 }
 
 .markdown-live .md-prose hr {
   border: 0;
   border-top: 1px solid var(--line);
-  margin: 2em 0;
+  margin: 16px 0;
 }
 
 /* Table */
@@ -167,24 +194,25 @@
   border-collapse: collapse;
   table-layout: auto;
   width: 100%;
-  margin: 1.2em 0;
+  margin: .8em 0;
   border: 1px solid var(--md-table-border);
 }
 
 .markdown-live .md-prose td,
 .markdown-live .md-prose th {
   border: 1px solid var(--md-table-border);
-  padding: 0.55em 0.85em;
+  padding: 6px 13px;
   min-width: 60px;
   vertical-align: top;
   position: relative;
 }
 
 .markdown-live .md-prose th {
-  background: var(--side);
-  font-weight: 600;
+  background: var(--md-code-bg);
+  font-weight: 700;
   color: var(--bright);
 }
+.markdown-live .md-prose tr:nth-child(even) { background: var(--md-code-bg); }
 
 .markdown-live .md-prose td p,
 .markdown-live .md-prose th p {
@@ -207,16 +235,17 @@
   display: flex;
   gap: 3px;
   flex-wrap: wrap;
-  font: 12px/1.5 system-ui;
+  font: var(--ui-font-size)/var(--ui-line-height) var(--font-sans);
 }
 
 .markdown-live .md-table-floating-bar button {
+  min-height: var(--ui-control-height);
   border: 0;
   border-radius: 4px;
   padding: 3px 8px;
   background: var(--soft);
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   cursor: pointer;
 }
 
@@ -227,8 +256,8 @@
 
 /* Code Block - Clean Typora Container with Internal Line Numbers */
 .markdown-live .md-code-block {
-  margin: 1.4em 0;
-  border-radius: 6px;
+  margin: 1em 0;
+  border-radius: 3px;
   background: var(--md-code-bg);
   overflow: hidden;
   white-space: normal;
@@ -247,8 +276,9 @@
   background: var(--bar);
   border: 1px solid var(--line);
   color: var(--muted);
-  font-size: 11px;
-  padding: 3px 8px;
+  width: var(--ui-control-height);
+  height: var(--ui-control-height);
+  padding: 5px;
   border-radius: 4px;
   cursor: pointer;
 }
@@ -266,23 +296,33 @@
 }
 
 .markdown-live .md-code-block .md-code-lang {
-  position: absolute;
-  bottom: 4px;
-  right: 8px;
-  z-index: 6;
+  max-width: 100%;
+  width: max-content;
+  margin-left: auto;
 }
+
+.markdown-live .md-code-footer { padding: 2px 10px 6px; min-height: 30px; white-space: normal; opacity: 0; }
+.markdown-live .md-code-block:hover .md-code-footer, .markdown-live .md-code-block:focus-within .md-code-footer { opacity: 1; }
+.markdown-live .md-code-footer .md-code-lang > button { font: var(--ui-font-size)/var(--ui-line-height) var(--font-sans); min-height: var(--ui-control-height); color: var(--muted); background: transparent; padding: 0 5px; }
+.markdown-live .md-code-language-status { font: var(--ui-small-font-size)/1.4 var(--font-sans); color: var(--muted); }
+.markdown-live .md-code-copy svg { display: block; width: 16px; height: 16px; }
+.markdown-live .md-language-menu { position: fixed; z-index: 40; width: 260px; max-width: calc(100vw - 16px); overflow: auto; border: 1px solid var(--line); padding: 6px; background: var(--paper); border-radius: 4px; box-shadow: 0 3px 12px #0002; }
+.markdown-live .md-language-menu [role="listbox"] { max-height: 180px; overflow: auto; margin-top: 4px; }
+.markdown-live .md-language-menu [role="option"] { display: block; width: 100%; text-align: left; font: var(--ui-font-size)/1.6 var(--font-sans); min-height: var(--ui-control-height); }
+.markdown-live .md-language-menu [aria-selected="true"] { background: var(--hover); color: var(--bright); }
 
 .markdown-live .md-code-block .md-code-lang-input {
   background: transparent;
   border: 1px solid transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   font-family: var(--font-mono);
-  text-align: right;
+  text-align: left;
   outline: none;
   padding: 2px 6px;
   border-radius: 4px;
-  width: 90px;
+  width: 100%;
+  height: var(--ui-control-height);
   transition: background 0.15s, border-color 0.15s;
 }
 
@@ -315,7 +355,7 @@
 }
 
 .markdown-live .md-code-block .cm-content {
-  padding: 10px 0 18px;
+  padding: 10px 30px 6px 0;
 }
 
 .markdown-live .md-code-block .cm-line {
@@ -342,7 +382,7 @@
   padding: 2px 8px;
   background: var(--hover);
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   cursor: pointer;
 }
 
@@ -365,6 +405,10 @@
   height: auto;
 }
 
+.markdown-live .md-math-source { display: block; width: 100%; box-sizing: border-box; resize: vertical; padding: 8px; border: 0; border-bottom: 1px solid var(--line); outline: none; background: var(--md-code-bg); color: var(--text); font: 13px/1.6 var(--font-mono); }
+.markdown-live .md-inline-math .md-math-source { display: inline-block; width: 18em; max-width: 100%; height: 2em; resize: none; vertical-align: middle; padding: 2px 4px; }
+.markdown-live .md-math-editing { outline: 1px solid var(--line); }
+
 /* Anchored Popovers (for Link, Image, Inline Math) */
 .markdown-live .md-anchored-popover {
   position: absolute;
@@ -378,7 +422,7 @@
   gap: 6px;
   align-items: center;
   flex-wrap: wrap;
-  font: 12px/1.5 system-ui;
+  font: var(--ui-font-size)/var(--ui-line-height) var(--font-sans);
   max-width: calc(100% - 32px);
 }
 
@@ -386,7 +430,7 @@
   display: flex;
   gap: 5px;
   align-items: center;
-  font-size: 11px;
+  font-size: var(--ui-small-font-size);
   color: var(--muted);
 }
 
@@ -396,7 +440,7 @@
   background: var(--editor);
   color: var(--text);
   padding: 3px 7px;
-  font-size: 12px;
+  font-size: var(--ui-font-size);
   outline: none;
 }
 
@@ -405,17 +449,17 @@
   box-shadow: 0 0 0 1px var(--accent);
 }
 
-.markdown-live button {
+.markdown-live :where(.md-table-floating-bar, .md-code-block, .md-diagram-toolbar, .md-anchored-popover, .md-selection-bubble) button {
   cursor: pointer;
   border: 0;
   border-radius: 4px;
   padding: 3px 8px;
   background: var(--soft);
   color: var(--text);
-  font: 12px/1.5 system-ui;
+  font: var(--ui-font-size)/var(--ui-line-height) var(--font-sans);
 }
 
-.markdown-live button:hover {
+.markdown-live :where(.md-table-floating-bar, .md-code-block, .md-diagram-toolbar, .md-anchored-popover, .md-selection-bubble) button:hover {
   background: var(--hover);
   color: var(--bright);
 }
@@ -438,12 +482,14 @@
 }
 
 .markdown-live .md-selection-bubble button {
+  min-width: var(--ui-control-height);
+  min-height: var(--ui-control-height);
   background: transparent;
   border: 0;
   border-radius: 4px;
   padding: 3px 7px;
   color: var(--sub);
-  font-size: 12px;
+  font-size: var(--ui-font-size);
   font-weight: 600;
   cursor: pointer;
 }
@@ -463,7 +509,7 @@
   max-width: 100%;
   vertical-align: middle;
   position: relative;
-  margin: 10px 0;
+  margin: 0;
   white-space: normal;
 }
 
@@ -476,6 +522,8 @@
   cursor: pointer;
   transition: outline 0.15s ease;
 }
+
+.markdown-live .md-image-preview.md-image-standalone { display: block; }
 
 .markdown-live .md-image-preview.md-image-selected img {
   outline: 2px solid var(--accent);
@@ -490,7 +538,7 @@
   border-radius: 6px;
   background: var(--side);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--ui-font-size);
   border: 1px dashed var(--line);
   cursor: pointer;
 }
@@ -498,118 +546,6 @@
 .markdown-live .md-image-placeholder:hover {
   color: var(--bright);
   border-color: var(--accent);
-}
-
-/* Live Search Bar */
-.markdown-live .md-live-search.fleet-search {
-  position: absolute;
-  top: 12px;
-  right: 20px;
-  z-index: 30;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.28);
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: var(--bar);
-  padding: 8px 12px;
-  width: 480px;
-  max-width: calc(100% - 40px);
-}
-
-.markdown-live .md-live-search .search-row {
-  display: flex !important;
-  align-items: center !important;
-  gap: 5px !important;
-  min-width: 0;
-}
-
-.markdown-live .md-live-search .search-row + .search-row {
-  margin-top: 5px;
-  padding-left: 27px;
-}
-
-.markdown-live .md-live-search .search-field {
-  flex: 1;
-  min-width: 80px;
-  position: relative;
-}
-
-.markdown-live .md-live-search .search-input {
-  height: 28px;
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 3px 9px;
-  background: var(--editor);
-  color: var(--text);
-  outline: none;
-  font: inherit;
-  font-size: 12px;
-}
-
-.markdown-live .md-live-search .search-field .search-input {
-  padding-right: 74px;
-}
-
-.markdown-live .md-live-search .search-count {
-  position: absolute;
-  right: 8px;
-  top: 6px;
-  color: var(--muted);
-  font-size: 11px;
-  pointer-events: none;
-}
-
-.markdown-live .md-live-search button {
-  flex: none;
-  min-width: 22px;
-  height: 26px;
-  padding: 0 7px;
-  border-radius: 5px;
-  font-size: 11px;
-  color: var(--sub);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-}
-
-.markdown-live .md-live-search button:hover {
-  color: var(--bright);
-  background: var(--hover);
-}
-
-.markdown-live .md-live-search .search-option {
-  position: relative;
-  width: 26px;
-  height: 26px;
-  flex: none;
-  cursor: pointer;
-  margin: 0;
-}
-
-.markdown-live .md-live-search .search-option input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.markdown-live .md-live-search .search-option span {
-  display: grid;
-  place-items: center;
-  height: 100%;
-  border-radius: 5px;
-  font-size: 12px;
-  pointer-events: none;
-  color: var(--sub);
-}
-
-.markdown-live .md-live-search .search-option input:checked + span {
-  color: var(--accent);
-  background: var(--accentbg);
 }
 
 .markdown-live .md-search-match {
@@ -663,18 +599,17 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  border-left: 2px solid var(--line);
-  margin: 1.2em 0;
-  padding-left: 6px;
+  margin: .8em 0;
 }
 
 .markdown-live .md-toc button {
   text-align: left;
   background: none;
   border: 0;
-  padding: 4px 8px;
+  padding: 0;
   border-radius: 4px;
-  color: var(--text);
+  color: var(--md-link-color);
+  font: .9em/1.6 var(--md-font-family);
 }
 
 .markdown-live .md-toc button:hover {
@@ -683,9 +618,18 @@
 }
 
 .markdown-live .md-inline-math {
+  display: inline-block;
+  white-space: normal;
   cursor: pointer;
   font-family: Georgia, serif;
   padding: 0 0.2em;
+}
+
+.markdown-live .md-math-output {
+  cursor: pointer;
+  overflow-x: auto;
+  margin: 1.1em 0;
+  white-space: normal;
 }
 
 .markdown-live .md-callout {
@@ -711,9 +655,9 @@
 
 .markdown-live .md-yaml-preview {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
-  padding: 8px 12px;
+  padding: 15px;
   background: var(--side);
   border-radius: 4px;
   margin: 8px 0;

@@ -1,11 +1,13 @@
 import { TextSelection } from 'prosemirror-state'
 import type { EditorView } from 'prosemirror-view'
 import {
-  liveSearchPluginKey,
+  liveSearchPluginKey, replacementText, replaceMatch,
   type LiveSearchOptions,
   type LiveSearchState,
 } from './plugins/LiveSearch'
 import type { CodeBlockView } from './CodeBlockView'
+import { createSearchBar } from '../../core/SearchBar'
+import { regexError } from '../../core/searchQuery'
 
 export class LiveSearchController {
   readonly dom: HTMLElement
@@ -15,8 +17,8 @@ export class LiveSearchController {
   private caseCheckbox: HTMLInputElement
   private wordCheckbox: HTMLInputElement
   private regexCheckbox: HTMLInputElement
-  private secondRow: HTMLElement
-  private toggleButton: HTMLButtonElement
+  private bar: ReturnType<typeof createSearchBar>
+  private composing = false
   private syncTimer: ReturnType<typeof setTimeout> | undefined
   private codeViewsGetter: () => Set<CodeBlockView>
 
@@ -27,117 +29,35 @@ export class LiveSearchController {
   ) {
     this.codeViewsGetter = codeViewsGetter
 
-    this.dom = document.createElement('div')
-    this.dom.className = 'md-live-search fleet-search'
-    this.dom.setAttribute('role', 'search')
-    this.dom.setAttribute('aria-label', 'Markdown 实时查找和替换')
+    this.bar = createSearchBar({ change: () => this.handleInput(), toggle: () => {
+      if (!this.bar.second.hidden) this.replaceInput.focus()
+      else this.searchInput.focus()
+    }, run: action => {
+      if (action === 'previous') this.findPrevious()
+      else if (action === 'next') this.findNext()
+      else if (action === 'close') this.close()
+      else if (action === 'replace') this.replaceCurrent()
+      else if (action === 'replaceAll') this.replaceAll()
+    } })
+    this.dom = this.bar.dom
+    this.dom.classList.add('md-live-search')
     this.dom.hidden = true
-
-    const row = () => {
-      const el = document.createElement('div')
-      el.className = 'search-row'
-      return el
-    }
-    const firstRow = row()
-    this.secondRow = row()
-
-    const createInput = (name: string, placeholder: string) => {
-      const el = document.createElement('input')
-      el.name = name
-      el.placeholder = placeholder
-      el.setAttribute('aria-label', placeholder)
-      el.className = 'search-input'
-      el.oninput = () => this.handleInput()
-      return el
-    }
-
-    this.searchInput = createInput('search', '查找')
-    this.searchInput.setAttribute('main-field', 'true')
-    this.replaceInput = createInput('replace', '替换')
-
-    this.countLabel = document.createElement('span')
-    this.countLabel.className = 'search-count'
-    this.countLabel.setAttribute('aria-live', 'polite')
-
-    const field = document.createElement('div')
-    field.className = 'search-field'
-    field.append(this.searchInput, this.countLabel)
-
-    const createButton = (name: string, label: string, text: string, action: () => void) => {
-      const el = document.createElement('button')
-      el.type = 'button'
-      el.name = name
-      el.title = label
-      el.setAttribute('aria-label', label)
-      el.textContent = text
-      el.onclick = action
-      return el
-    }
-
-    const createOption = (name: string, label: string, text: string) => {
-      const wrapper = document.createElement('label')
-      wrapper.className = 'search-option'
-      wrapper.title = label
-      const el = document.createElement('input')
-      el.type = 'checkbox'
-      el.name = name
-      el.setAttribute('aria-label', label)
-      el.onchange = () => this.handleInput()
-      const caption = document.createElement('span')
-      caption.textContent = text
-      wrapper.append(el, caption)
-      firstRow.append(wrapper)
-      return el
-    }
-
-    firstRow.append(field)
-    this.caseCheckbox = createOption('case', '区分大小写', 'Aa')
-    this.wordCheckbox = createOption('word', '全词匹配', 'ab')
-    this.regexCheckbox = createOption('re', '正则表达式', '.*')
-
-    firstRow.append(
-      createButton('prev', '上一个匹配 (Shift+Enter)', '↑', () => this.findPrevious()),
-      createButton('next', '下一个匹配 (Enter)', '↓', () => this.findNext()),
-      createButton('close', '关闭查找 (Esc)', '×', () => this.close())
-    )
-
-    this.secondRow.append(
-      this.replaceInput,
-      createButton('replace', '替换当前匹配', '替换', () => this.replaceCurrent()),
-      createButton('replaceAll', '全部替换', '全部替换', () => this.replaceAll())
-    )
-
-    this.toggleButton = createButton('toggleReplace', '展开/收起替换', '›', () => {
-      const willShow = this.secondRow.hidden
-      this.setReplaceVisible(willShow)
-      if (willShow) {
-        this.replaceInput.focus()
-        this.replaceInput.select()
-      } else {
-        this.searchInput.focus()
-      }
-    })
-    this.secondRow.hidden = true
-    this.toggleButton.setAttribute('aria-expanded', 'false')
-    firstRow.prepend(this.toggleButton)
-
-    this.dom.append(firstRow, this.secondRow)
+    this.searchInput = this.bar.search; this.replaceInput = this.bar.replace
+    this.countLabel = this.bar.count; this.caseCheckbox = this.bar.caseSensitive
+    this.wordCheckbox = this.bar.wholeWord; this.regexCheckbox = this.bar.regexp
+    this.dom.addEventListener('compositionstart', () => { this.composing = true })
+    this.dom.addEventListener('compositionend', () => { this.composing = false; this.handleInput() })
     parent.append(this.dom)
 
     this.dom.onkeydown = event => {
-      if (event.isComposing) return
+      if (event.isComposing || this.composing || event.keyCode === 229) return
       if (event.key === 'Escape') {
         event.preventDefault()
         event.stopPropagation()
         this.close()
-      } else if (event.key === 'Enter') {
-        event.preventDefault()
-        event.stopPropagation()
-        if (event.target === this.replaceInput && !event.shiftKey) {
-          this.replaceCurrent()
-        } else {
-          event.shiftKey ? this.findPrevious() : this.findNext()
-        }
+      } else if (event.key === 'F3' || (event.key === 'Enter' && event.target instanceof HTMLInputElement && event.target.type !== 'checkbox')) {
+        event.preventDefault(); event.stopPropagation()
+        event.shiftKey ? this.findPrevious() : this.findNext()
       } else if (event.key === 'f' && (event.ctrlKey || event.metaKey)) {
         event.preventDefault()
         event.stopPropagation()
@@ -159,9 +79,7 @@ export class LiveSearchController {
   }
 
   setReplaceVisible(visible: boolean) {
-    this.secondRow.hidden = !visible
-    this.toggleButton.textContent = visible ? '⌄' : '›'
-    this.toggleButton.setAttribute('aria-expanded', String(visible))
+    this.bar.setReplaceVisible(visible)
   }
 
   open(replace = false) {
@@ -169,7 +87,7 @@ export class LiveSearchController {
     this.setReplaceVisible(replace)
 
     const sel = this.view.state.selection
-    if (!sel.empty) {
+    if (!sel.empty && !this.searchInput.value) {
       const selectedText = this.view.state.doc.textBetween(sel.from, sel.to)
       if (selectedText && selectedText.length <= 100 && !selectedText.includes('\n')) {
         this.searchInput.value = selectedText
@@ -182,7 +100,7 @@ export class LiveSearchController {
     })
     this.view.dispatch(tr)
 
-    this.syncQueryToCodeBlocks()
+    this.handleInput()
 
     if (replace) {
       this.replaceInput.focus()
@@ -205,6 +123,7 @@ export class LiveSearchController {
   }
 
   private handleInput() {
+    if (this.composing) return
     const options: Partial<LiveSearchOptions> = {
       search: this.searchInput.value,
       replace: this.replaceInput.value,
@@ -230,41 +149,41 @@ export class LiveSearchController {
   }
 
   private syncQueryToCodeBlocks() {
-    const query = this.isOpen ? this.searchInput.value : ''
-    const caseSensitive = this.caseCheckbox.checked
-    const wholeWord = this.wordCheckbox.checked
-    const regexp = this.regexCheckbox.checked
-
+    const state = this.pluginState
     for (const codeView of this.codeViewsGetter()) {
-      codeView.setSearchHighlight?.(query, caseSensitive, wholeWord, regexp)
+      const pos = codeView.getPos()
+      const ranges = !this.isOpen || !state?.valid || pos === undefined ? [] : state.matches.flatMap((match, index) =>
+        match.codeBlockPos === pos ? [{ from: match.from - pos - 1, to: match.to - pos - 1, current: index === state.currentIndex }] : [])
+      codeView.setSearchHighlights(ranges)
     }
   }
 
   updateCount() {
+    this.syncQueryToCodeBlocks()
     const state = this.pluginState
     if (!state || !state.active || !this.searchInput.value) {
-      this.countLabel.textContent = ''
-      this.searchInput.removeAttribute('aria-invalid')
+      this.bar.setStatus('', '', false, !this.view.editable)
       return
     }
 
     if (!state.valid) {
-      this.countLabel.textContent = '无效正则'
-      this.searchInput.setAttribute('aria-invalid', 'true')
+      this.bar.setStatus('无效正则', regexError(state.options), false, !this.view.editable)
       return
     }
 
-    this.searchInput.removeAttribute('aria-invalid')
+    this.searchInput.setAttribute('aria-invalid', 'false')
     const total = state.matches.length
     if (total === 0) {
-      this.countLabel.textContent = '0 处'
+      this.countLabel.textContent = '0 / 0'
     } else {
       const current = state.currentIndex >= 0 ? state.currentIndex + 1 : 1
       this.countLabel.textContent = total >= 1500 ? '1500+ 处' : `${current} / ${total}`
     }
+    this.bar.setStatus(this.countLabel.textContent || '', '', total > 0, !this.view.editable)
   }
 
   findNext() {
+    if (!this.isOpen) { this.open(false); return }
     const state = this.pluginState
     if (!state || !state.matches.length) return
     const nextIndex = (state.currentIndex + 1) % state.matches.length
@@ -272,6 +191,7 @@ export class LiveSearchController {
   }
 
   findPrevious() {
+    if (!this.isOpen) { this.open(false); return }
     const state = this.pluginState
     if (!state || !state.matches.length) return
     const prevIndex = (state.currentIndex - 1 + state.matches.length) % state.matches.length
@@ -300,7 +220,7 @@ export class LiveSearchController {
         if (pos === match.codeBlockPos) {
           const from = match.from - pos - 1
           const to = match.to - pos - 1
-          codeView.setSelection(from, to)
+          if (this.view.hasFocus()) codeView.setSelection(from, to)
           codeView.dom.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
           return
         }
@@ -317,74 +237,41 @@ export class LiveSearchController {
 
   replaceCurrent() {
     const state = this.pluginState
-    if (!state || !state.valid || state.currentIndex < 0 || state.currentIndex >= state.matches.length) return
+    if (!this.view.editable || this.view.composing || !state || !state.valid || state.currentIndex < 0 || state.currentIndex >= state.matches.length) return
     const match = state.matches[state.currentIndex]
 
-    let insert = this.replaceInput.value
-    if (state.options.regexp) {
-      try {
-        const regex = new RegExp(
-          state.options.search,
-          state.options.caseSensitive ? 'u' : 'iu'
-        )
-        insert = match.text.replace(regex, insert)
-      } catch {
-        // Fallback to literal insert
-      }
-    }
-
-    const tr = this.view.state.tr
-    if (insert.length) {
-      tr.insertText(insert, match.from, match.to)
-    } else {
-      tr.delete(match.from, match.to)
-    }
+    const tr = replaceMatch(this.view.state.tr, match, replacementText(match, this.replaceInput.value, state.options.regexp))
     tr.setMeta('isolated', true)
     this.view.dispatch(tr)
 
     // After replace, plugin apply recomputes matches
-    setTimeout(() => {
+    if (this.syncTimer) clearTimeout(this.syncTimer)
+    this.syncTimer = setTimeout(() => {
       this.updateCount()
+      this.syncQueryToCodeBlocks()
       this.revealCurrentMatch()
     }, 20)
   }
 
   replaceAll() {
     const state = this.pluginState
-    if (!state || !state.valid || !state.matches.length) return
+    if (!this.view.editable || this.view.composing || !state || !state.valid || !state.matches.length) return
 
-    const replacePattern = this.replaceInput.value
-    const isRegex = state.options.regexp
-    const caseSensitive = state.options.caseSensitive
-
-    let regex: RegExp | null = null
-    if (isRegex) {
-      try {
-        regex = new RegExp(state.options.search, caseSensitive ? 'u' : 'iu')
-      } catch {
-        regex = null
-      }
+    // The UI deliberately caps highlights; never silently call a partial batch "all".
+    if (state.matches.length >= 1500) {
+      window.dispatchEvent(new CustomEvent('editor-notice', { detail: '匹配达到 1500 处显示上限，请缩小查找范围后全部替换。' }))
+      return
     }
-
     const tr = this.view.state.tr
-    // Replace backwards to keep earlier match positions intact
-    for (let i = state.matches.length - 1; i >= 0; i--) {
-      const m = state.matches[i]
-      let insert = replacePattern
-      if (regex) {
-        insert = m.text.replace(regex, replacePattern)
-      }
-      if (insert.length) {
-        tr.insertText(insert, m.from, m.to)
-      } else {
-        tr.delete(m.from, m.to)
-      }
+    for (const match of [...state.matches].reverse()) {
+      replaceMatch(tr, match, replacementText(match, this.replaceInput.value, state.options.regexp))
     }
 
     tr.setMeta('isolated', true)
     this.view.dispatch(tr)
 
-    setTimeout(() => {
+    if (this.syncTimer) clearTimeout(this.syncTimer)
+    this.syncTimer = setTimeout(() => {
       this.updateCount()
       this.syncQueryToCodeBlocks()
     }, 20)

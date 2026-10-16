@@ -94,7 +94,7 @@ const emit = defineEmits<{
 
 <style scoped>
 .topbar {
-  height: 48px;
+  height: calc(var(--ui-font-size) + 34px);
   flex: none;
   display: grid;
   grid-template-columns: auto minmax(110px, 1fr) auto;
@@ -122,7 +122,7 @@ const emit = defineEmits<{
 .app-brand { display:flex;align-items:center;gap:9px;flex:none }
 
 .brand {
-  font-size: 13px;
+  font-size: var(--ui-font-size);
   font-weight: 700;
   color: var(--bright);
   letter-spacing: -0.3px;
@@ -134,7 +134,7 @@ const emit = defineEmits<{
   max-width: 390px;
   justify-self: center;
   min-width: 0;
-  height: 31px;
+  height: var(--ui-control-height);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--editor);
@@ -144,7 +144,7 @@ const emit = defineEmits<{
   align-items: center;
   text-align: left;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--ui-font-size);
   transition: background 0.15s, border-color 0.15s;
 }
 
@@ -178,7 +178,7 @@ const emit = defineEmits<{
   justify-content: flex-end;
 }
 .window-controls { display:flex;align-self:stretch;margin-right:-8px;margin-left:4px }
-.window-controls button { width:36px;height:47px;border-radius:0;font-size:16px;color:var(--sub) }
+.window-controls button { width:36px;height:calc(var(--ui-font-size) + 33px);border-radius:0;font-size: calc(var(--ui-font-size) + 2px);color:var(--sub) }
 .window-controls button:hover { background:var(--hover);color:var(--bright) }
 .window-controls .window-close:hover { background:#c94048;color:#fff }
 
