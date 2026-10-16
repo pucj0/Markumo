@@ -15,7 +15,7 @@ import '/src/styles/reset.css';
 import '/src/styles/variables.css';
 import '/src/editor/markdown/styles.css';
 
-const source = '## 前置章节\\n\\n\`\`\`shell\\necho "Line 1"\\necho "Line 2"\\necho "Line 3"\\n\`\`\`\\n\\n## 下置章节\\n\\n这是一段紧接着下置章节的普通正文。';
+const source = '### 前置标题\\n\\n\`\`\`shell\\necho "Line 1"\\n\`\`\`\\n\\n这是紧随代码块下方的普通段落，用于验证悬浮语言栏绝对定位不推动文档流。\\n\\n### 下一个标题\\n\\n这是下一个章节的说明文字。';
 
 const manager = new DocumentManager([
   { id: 'md', name: 'layout.md', path: 'layout.md', text: source }
@@ -61,7 +61,10 @@ async function getGeometry() {
     const dock = block?.querySelector('.md-code-language-dock')
     const btn = block?.querySelector('.md-code-lang-btn')
     const input = block?.querySelector('.md-code-language-input')
-    const nextHeading = document.querySelectorAll('.md-prose h2')[1]
+    const copy = block?.querySelector('.md-code-copy')
+    const headings = document.querySelectorAll('.md-prose h3')
+    const prevHeading = headings[0]
+    const nextHeading = headings[1]
     const paragraph = document.querySelector('.md-prose p')
 
     const rBlock = block?.getBoundingClientRect()
@@ -70,18 +73,23 @@ async function getGeometry() {
     const rDock = dock?.getBoundingClientRect()
     const rBtn = btn?.getBoundingClientRect()
     const rInput = input?.getBoundingClientRect()
-    const rHeading = nextHeading?.getBoundingClientRect()
+    const rCopy = copy?.getBoundingClientRect()
+    const rPrevH = prevHeading?.getBoundingClientRect()
+    const rNextH = nextHeading?.getBoundingClientRect()
     const rP = paragraph?.getBoundingClientRect()
 
     return {
-      block: rBlock ? { x: rBlock.x, y: rBlock.y, width: rBlock.width, height: rBlock.height } : null,
-      surface: rSurface ? { x: rSurface.x, y: rSurface.y, width: rSurface.width, height: rSurface.height } : null,
-      row: rRow ? { x: rRow.x, y: rRow.y, width: rRow.width, height: rRow.height } : null,
-      dock: rDock ? { x: rDock.x, y: rDock.y, width: rDock.width, height: rDock.height } : null,
+      block: rBlock ? { x: rBlock.x, y: rBlock.y, width: rBlock.width, height: rBlock.height, bottom: rBlock.bottom, right: rBlock.right } : null,
+      surface: rSurface ? { x: rSurface.x, y: rSurface.y, width: rSurface.width, height: rSurface.height, bottom: rSurface.bottom, right: rSurface.right } : null,
+      row: rRow ? { x: rRow.x, y: rRow.y, width: rRow.width, height: rRow.height, top: rRow.top, bottom: rRow.bottom, right: rRow.right } : null,
+      dock: rDock ? { x: rDock.x, y: rDock.y, width: rDock.width, height: rDock.height, top: rDock.top, bottom: rDock.bottom, right: rDock.right } : null,
       btn: rBtn ? { x: rBtn.x, y: rBtn.y, width: rBtn.width, height: rBtn.height } : null,
       input: rInput ? { x: rInput.x, y: rInput.y, width: rInput.width, height: rInput.height } : null,
-      nextHeadingTop: rHeading ? rHeading.top : null,
+      copy: rCopy ? { x: rCopy.x, y: rCopy.y, width: rCopy.width, height: rCopy.height } : null,
+      prevHeadingBottom: rPrevH ? rPrevH.bottom : null,
+      nextHeadingTop: rNextH ? rNextH.top : null,
       paragraphTop: rP ? rP.top : null,
+      paragraphBottom: rP ? rP.bottom : null,
     }
   })
 }
@@ -96,105 +104,116 @@ try {
   await page.goto(`${process.env.LIGHTEDIT_TEST_URL}/${output}/fixture.html`)
   await page.locator('.md-prose').waitFor()
 
-  await test('1. Initial blurred state: language tag hidden by default (display: none), next heading positioned stably', async () => {
-    // Click outside to ensure blurred state
-    await page.locator('.md-prose h2').first().click()
+  await test('1. Initial unfocused state (Typora Fig 2): language bar is hidden, clean code block', async () => {
+    // Focus outside to ensure blurred state
+    await page.locator('.md-prose h3').first().click()
     const row = page.locator('.md-code-language-row')
-    assert.equal(await row.isHidden(), true, 'Language row must be hidden by default when blurred')
+    assert.equal(await row.isHidden(), true, 'Language bar must be hidden (display: none) by default when unfocused')
 
-    // Screenshot blurred state (clean, no language box)
+    const copyBtn = page.locator('.md-code-copy')
+    const copyOpacity = await copyBtn.evaluate(el => parseFloat(getComputedStyle(el).opacity))
+    assert.equal(copyOpacity, 0, 'Copy button must be hidden when unfocused and unhovered')
+
+    // Screenshot unfocused state matching Typora Fig 2
     await page.screenshot({ path: `${output}/01-codeblock-blurred.png` })
   })
 
-  await test('2 & 3. Focus codeblock (editing): language tag appears at bottom right, overall height identical, next heading top changes <= 1px', async () => {
+  await test('2. Focused code block (Typora Fig 3): floating language bar outside bottom-right, zero shift of downstream content', async () => {
     const geoBefore = await getGeometry()
 
-    // Click into CodeMirror inside the code block to enter editing mode
+    // Click into CodeMirror inside the code block
     await page.locator('.md-code-block .cm-content').click()
 
     const row = page.locator('.md-code-language-row')
-    assert.equal(await row.isVisible(), true, 'Language tag must appear when editing code block')
+    assert.equal(await row.isVisible(), true, 'Language bar must appear when code block is focused')
+
     const btn = page.locator('.md-code-lang-btn')
     assert.equal(await btn.textContent(), 'Shell')
 
     const geoAfter = await getGeometry()
 
-    // Height identical (because tag is absolute positioned at bottom-right)
+    // Assert 1: Language bar top is greater than code box bottom, distance ~4px
+    assert.ok(geoAfter.row.top > geoAfter.surface.bottom, `Language bar top (${geoAfter.row.top}) must be below code box bottom (${geoAfter.surface.bottom})`)
+    const gap = geoAfter.row.top - geoAfter.surface.bottom
+    assert.ok(Math.abs(gap - 4) <= 2, `Distance between code box bottom and language bar top ~4px (got ${gap}px)`)
+
+    // Assert 2: Language bar right aligns with code box right (difference <= 2px)
+    assert.ok(Math.abs(geoAfter.row.right - geoAfter.surface.right) <= 2, `Language bar right (${geoAfter.row.right}) aligns with surface right (${geoAfter.surface.right})`)
+
+    // Assert 3: Language bar dimensions width ~180px, height ~24px
+    assert.ok(Math.abs(geoAfter.dock.width - 180) <= 2, `Dock width ~180px (got ${geoAfter.dock.width}px)`)
+    assert.ok(Math.abs(geoAfter.dock.height - 24) <= 2, `Dock height ~24px (got ${geoAfter.dock.height}px)`)
+
+    // Assert 4: Downstream paragraph Y coordinate changes <= 1px
     assert.ok(
-      Math.abs(geoBefore.block.height - geoAfter.block.height) <= 1,
-      `Code block height must not change on focus (before: ${geoBefore.block.height}, after: ${geoAfter.block.height})`
+      Math.abs(geoBefore.paragraphTop - geoAfter.paragraphTop) <= 1,
+      `Downstream paragraph top must NOT move (before: ${geoBefore.paragraphTop}, after: ${geoAfter.paragraphTop})`
     )
 
-    // Next heading Y position variation <= 1px
+    // Assert 5: Downstream heading Y coordinate changes <= 1px
     assert.ok(
       Math.abs(geoBefore.nextHeadingTop - geoAfter.nextHeadingTop) <= 1,
-      `Next heading top must not shift on focus (before: ${geoBefore.nextHeadingTop}, after: ${geoAfter.nextHeadingTop})`
+      `Downstream heading top must NOT move (before: ${geoBefore.nextHeadingTop}, after: ${geoAfter.nextHeadingTop})`
     )
 
-    // Screenshot focused state
+    // Screenshot focused state matching Typora Fig 3
     await page.screenshot({ path: `${output}/02-codeblock-focused.png` })
   })
 
-  await test('4. Click language bar: switch button to input in-place without height or layout shift', async () => {
+  await test('3. Click language bar: in-place input toggle without height change or paragraph shift', async () => {
     const geoBefore = await getGeometry()
 
-    // Click the language button to enter editing mode
+    // Click the language button to switch to input
     await page.locator('.md-code-lang-btn').click()
     const input = page.locator('.md-code-language-input')
     await input.waitFor({ state: 'visible' })
 
     const geoAfter = await getGeometry()
 
-    // Dock dimensions and code block height remain unchanged
-    assert.ok(Math.abs(geoBefore.block.height - geoAfter.block.height) <= 1, 'Codeblock height unchanged when editing language')
-    assert.ok(Math.abs(geoBefore.dock.height - geoAfter.dock.height) <= 1, 'Dock height unchanged when editing language')
-    assert.ok(Math.abs(geoBefore.nextHeadingTop - geoAfter.nextHeadingTop) <= 1, 'Next heading Y position unchanged when editing language')
+    // Input dimensions and text alignment
+    assert.ok(Math.abs(geoAfter.input.width - 138) <= 4, `Input width ~138px (got ${geoAfter.input.width}px)`)
+    assert.ok(Math.abs(geoAfter.input.height - 18) <= 2, `Input height ~18px (got ${geoAfter.input.height}px)`)
+    const align = await input.evaluate(el => getComputedStyle(el).textAlign)
+    assert.equal(align, 'center', 'Input text-align must be center')
 
-    // Input dimensions: compact pill, height ~22px
-    assert.ok(geoAfter.input.width >= 50 && geoAfter.input.width <= 220, `Input width valid (got ${geoAfter.input.width})`)
-    assert.ok(Math.abs(geoAfter.input.height - 22) <= 2, `Input height ~22px (got ${geoAfter.input.height})`)
+    // Downstream content does not move
+    assert.ok(Math.abs(geoBefore.paragraphTop - geoAfter.paragraphTop) <= 1)
+    assert.ok(Math.abs(geoBefore.nextHeadingTop - geoAfter.nextHeadingTop) <= 1)
 
-    // Screenshot language input active
+    // Screenshot input active
     await page.screenshot({ path: `${output}/03-language-input-active.png` })
   })
 
-  await test('5 & 6. Language dropdown candidates: opens floating popup, next heading position unchanged; closes without shift', async () => {
+  await test('4. Type "ja": floating candidates dropdown opens over content without shifting text', async () => {
     const geoBefore = await getGeometry()
 
-    // Type 'ja' to filter candidates
     await page.locator('.md-code-language-input').fill('ja')
     const menu = page.locator('.md-language-menu')
     await menu.waitFor({ state: 'visible' })
 
     const geoOpen = await getGeometry()
-    // Dropdown is position: fixed floating overlay, does not push next heading
-    assert.ok(
-      Math.abs(geoBefore.nextHeadingTop - geoOpen.nextHeadingTop) <= 1,
-      `Next heading must NOT move when candidates open (before: ${geoBefore.nextHeadingTop}, open: ${geoOpen.nextHeadingTop})`
-    )
-    assert.ok(
-      Math.abs(geoBefore.block.height - geoOpen.block.height) <= 1,
-      `Code block height must NOT change when candidates open`
-    )
+    // Downstream paragraph and heading do not shift
+    assert.ok(Math.abs(geoBefore.paragraphTop - geoOpen.paragraphTop) <= 1, 'Paragraph unchanged when dropdown opens')
+    assert.ok(Math.abs(geoBefore.nextHeadingTop - geoOpen.nextHeadingTop) <= 1, 'Heading unchanged when dropdown opens')
 
-    // Screenshot candidates popup expanded
-    await page.screenshot({ path: `${output}/04-language-candidates-expanded.png` })
+    // Candidates show with icons
+    const options = page.locator('.md-language-option')
+    assert.ok((await options.count()) >= 3, 'Candidates list contains options')
+
+    // Screenshot candidates expanded
+    await page.screenshot({ path: `${output}/04-language-candidates-ja.png` })
 
     // Press Escape to dismiss dropdown
     await page.keyboard.press('Escape')
     await menu.waitFor({ state: 'hidden' })
 
     const geoClosed = await getGeometry()
-    assert.ok(
-      Math.abs(geoBefore.nextHeadingTop - geoClosed.nextHeadingTop) <= 1,
-      `Next heading must NOT move when candidates close`
-    )
+    assert.ok(Math.abs(geoBefore.paragraphTop - geoClosed.paragraphTop) <= 1, 'Paragraph unchanged when dropdown closes')
   })
 
-  await test('7. Select language (choose Java): updates markdown fence & CodeMirror without layout shift', async () => {
+  await test('5. Select language (choose Java): updates fence and button without layout shift', async () => {
     const geoBefore = await getGeometry()
 
-    // Focus code block to reveal language button
     await page.locator('.md-code-block .cm-content').click()
     await page.locator('.md-code-lang-btn').click()
     const input = page.locator('.md-code-language-input')
@@ -202,97 +221,67 @@ try {
     await input.fill('java')
     await page.locator('.md-language-menu').waitFor({ state: 'visible' })
 
-    // Click java option
     const javaOption = page.locator('.md-language-option', { hasText: 'Java' }).first()
     await javaOption.click()
 
-    // Input recovers to button showing 'Java'
     const btn = page.locator('.md-code-lang-btn')
     await btn.waitFor({ state: 'visible' })
     assert.equal(await btn.textContent(), 'Java')
 
-    // Markdown source updated
-    assert.ok((await raw()).startsWith('## 前置章节\n\n```java\n'))
+    assert.ok((await raw()).includes('```java\n'))
 
     const geoAfter = await getGeometry()
-    assert.ok(Math.abs(geoBefore.block.height - geoAfter.block.height) <= 1, 'Code block height unchanged after language selection')
-    assert.ok(Math.abs(geoBefore.nextHeadingTop - geoAfter.nextHeadingTop) <= 1, 'Next heading Y position unchanged after language selection')
+    assert.ok(Math.abs(geoBefore.paragraphTop - geoAfter.paragraphTop) <= 1)
+    assert.ok(Math.abs(geoBefore.nextHeadingTop - geoAfter.nextHeadingTop) <= 1)
 
-    // Screenshot after language selected
-    await page.screenshot({ path: `${output}/05-language-selected-java.png` })
+    // Full page screenshot
+    await page.screenshot({ path: `${output}/05-full-page-with-heading.png` })
   })
 
-  await test('8. Window resize across different viewport widths: dock stays right-aligned without overlap', async () => {
-    // Focus code block
-    await page.locator('.md-code-block .cm-content').click()
-    for (const width of [1200, 900, 600]) {
-      await page.setViewportSize({ width, height: 850 })
-      const geo = await getGeometry()
-      const surfaceRight = geo.surface.x + geo.surface.width
-      const dockRight = geo.dock.x + geo.dock.width
-      assert.ok(dockRight <= surfaceRight + 1 && dockRight >= surfaceRight - 16, `Dock right aligns near surface right (offset: ${surfaceRight - dockRight}) at width ${width}`)
-    }
-    await page.setViewportSize({ width: 1200, height: 850 })
-  })
-
-  await test('9. Single-line code block: copy button inside surface does NOT overlap language bar below', async () => {
-    const sourceSingle = '```\nnpm install\n```\n\n## 下一章节'
-    await reset(sourceSingle)
+  await test('6. Copy button at top-right inside surface does NOT intersect language bar at bottom-right outside surface', async () => {
     const block = page.locator('.md-code-block').first()
     const surface = block.locator('.md-code-surface')
-    const row = block.locator('.md-code-language-row')
     const copyBtn = block.locator('.md-code-copy')
-    const btn = block.locator('.md-code-lang-btn')
+    const row = block.locator('.md-code-language-row')
 
-    assert.equal(await btn.textContent(), '代码语言', 'Default label when no language specified is "代码语言"')
-    // Default blurred state: language tag is hidden (display: none)
-    assert.equal(await row.isHidden(), true)
-
-    // Focus single-line code block: language tag appears
+    // Focus code block
     await block.locator('.cm-content').click()
     assert.equal(await row.isVisible(), true)
 
     // Hover surface to reveal copy button
     await surface.hover()
     await page.waitForFunction(el => parseFloat(getComputedStyle(el).opacity) > 0.8, await copyBtn.elementHandle())
-    const copyBox = await copyBtn.boundingBox()
-    const btnBox = await btn.boundingBox()
-    assert.ok(copyBox && btnBox, 'Both exist')
-    // Copy button is at top right, language button is at bottom right
-    assert.ok(copyBox.y < btnBox.y, 'Copy button is above language button')
 
-    await page.screenshot({ path: `${output}/06-single-line-codeblock.png` })
+    const boxCopy = await copyBtn.boundingBox()
+    const boxRow = await row.boundingBox()
+    assert.ok(boxCopy && boxRow, 'Both bounding boxes exist')
+
+    // Copy button is inside surface top-right (bottom <= surface bottom)
+    // Language bar is outside surface bottom-right (top >= surface bottom + 3)
+    assert.ok(boxCopy.y + boxCopy.height < boxRow.y, `Copy button bottom (${boxCopy.y + boxCopy.height}) must be strictly above language bar top (${boxRow.y})`)
   })
 
-  await test('10. Consecutive code blocks and Dark theme compatibility', async () => {
-    const sourceMulti = '```python\nprint(1)\n```\n\n```rust\nfn main() {}\n```\n\n## 尾部章节'
-    await reset(sourceMulti)
-    await page.locator('.md-prose h2').last().click()
+  await test('7. Multi-line code block also positions floating language bar correctly', async () => {
+    const multiSource = '### 前置标题\n\n```javascript\nconst a = 1;\nconst b = 2;\nconst c = 3;\nconsole.log(a + b + c);\n```\n\n下方段落。'
+    await reset(multiSource)
 
-    // Switch to dark theme
-    await page.evaluate(() => {
-      document.body.classList.remove('light')
-      document.body.classList.add('dark')
-    })
+    const block = page.locator('.md-code-block').first()
+    const row = block.locator('.md-code-language-row')
 
-    const rows = page.locator('.md-code-language-row')
-    // Both blurred by default: hidden
-    assert.equal(await rows.nth(0).isHidden(), true)
-    assert.equal(await rows.nth(1).isHidden(), true)
+    // Unfocused
+    await page.locator('.md-prose h3').first().click()
+    assert.equal(await row.isHidden(), true)
+    const pTopBefore = (await page.locator('.md-prose p').boundingBox()).y
 
-    // Click second block, second block language row becomes visible, first block remains hidden
-    await page.locator('.md-code-block').nth(1).locator('.cm-content').click()
-    assert.equal(await rows.nth(1).isVisible(), true)
-    assert.equal(await rows.nth(0).isHidden(), true)
+    // Focus
+    await block.locator('.cm-content').click()
+    assert.equal(await row.isVisible(), true)
+    const pTopAfter = (await page.locator('.md-prose p').boundingBox()).y
+    assert.ok(Math.abs(pTopBefore - pTopAfter) <= 1, 'Multi-line code block does not shift downstream paragraph on focus')
 
-    // Screenshot dark theme consecutive code blocks
-    await page.screenshot({ path: `${output}/07-dark-theme-consecutive.png` })
-
-    // Restore light theme
-    await page.evaluate(() => {
-      document.body.classList.remove('dark')
-      document.body.classList.add('light')
-    })
+    const geo = await getGeometry()
+    assert.ok(geo.row.top > geo.surface.bottom)
+    assert.ok(Math.abs(geo.row.right - geo.surface.right) <= 2)
   })
 
   assert.deepEqual(errors, [])

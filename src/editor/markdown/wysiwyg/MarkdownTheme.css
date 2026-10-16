@@ -272,6 +272,8 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
   white-space: normal;
   display: flex;
   flex-direction: column;
+  position: relative;
+  overflow: visible;
 }
 
 .markdown-live .md-code-surface {
@@ -322,50 +324,60 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
   height: 14px;
 }
 
+/* 语言栏悬浮定位在代码框外部下方右侧，绝对定位脱离文档流，不引起正文位移 */
 .markdown-live .md-code-language-row {
   display: none;
   position: absolute;
-  right: 8px;
-  bottom: 4px;
+  top: calc(100% + 4px);
+  right: 0;
+  bottom: auto;
   align-items: center;
-  z-index: 10;
+  justify-content: flex-end;
+  z-index: 30;
   white-space: nowrap;
   margin: 0;
 }
 
-/* 默认不显示，只有在编辑（聚焦）该代码块时才显示出来 */
-.markdown-live .md-code-block:focus-within .md-code-language-row,
-.markdown-live .md-code-block.is-focused .md-code-language-row {
+/* 默认失焦不显示，仅在代码块获得焦点/编辑时显示 */
+.markdown-live .md-code-block.is-focused .md-code-language-row,
+.markdown-live .md-code-block:focus-within .md-code-language-row {
   display: flex;
 }
 
 .markdown-live .md-code-language-dock {
-  background: transparent;
-  border: 0;
-  box-shadow: none;
+  width: 180px;
+  height: 24px;
+  box-sizing: border-box;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 3px;
   display: flex;
   align-items: center;
+  justify-content: center;
   position: relative;
-  width: auto;
-  height: auto;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
 .markdown-live .md-code-lang-btn {
-  font: 12px/1.4 var(--font-sans);
-  color: var(--muted);
+  width: 138px;
+  height: 18px;
+  box-sizing: border-box;
   background: var(--bar);
   border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 1px 8px;
+  border-radius: 2px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+  padding: 0 4px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  width: auto;
-  min-width: 48px;
-  height: 22px;
-  box-sizing: border-box;
+  justify-content: center;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
@@ -376,20 +388,26 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
 }
 
 .markdown-live .md-code-language-input {
-  font: 12px/1.4 var(--font-mono);
-  color: var(--bright);
-  background: var(--paper);
-  border: 1px solid var(--accent);
-  border-radius: 3px;
-  padding: 1px 8px;
-  height: 22px;
-  width: auto;
-  min-width: 80px;
-  max-width: 180px;
+  width: 138px;
+  height: 18px;
   box-sizing: border-box;
+  background: var(--editor);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 18px;
   text-align: center;
   outline: none;
+  padding: 0 4px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.markdown-live .md-code-language-input:focus {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 1px #4a90e2;
+  background: var(--paper);
 }
 
 .markdown-live .md-code-language-status {

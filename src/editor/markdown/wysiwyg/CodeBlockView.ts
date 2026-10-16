@@ -133,8 +133,8 @@ export class CodeBlockView implements NodeView {
     // CodeMirror Container
     this.cmContainer.className = 'md-code-editor-wrap'
 
-    this.surface.append(this.diagramToolbar, this.cmContainer, this.diagram, this.copyButton, this.selector.row)
-    this.dom.append(this.surface)
+    this.surface.append(this.diagramToolbar, this.cmContainer, this.diagram, this.copyButton)
+    this.dom.append(this.surface, this.selector.row)
 
     this.dom.addEventListener('focusin', () => this.updateFocusState())
     this.dom.addEventListener('focusout', () => queueMicrotask(() => {

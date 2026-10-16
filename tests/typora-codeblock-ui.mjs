@@ -215,8 +215,8 @@ try {
     const dockRight = dockBox.x + dockBox.width
     assert.ok(dockRight <= surfaceRight + 1 && dockRight >= surfaceRight - 16, `Dock right edge (${dockRight}) aligns near surface right (${surfaceRight})`)
 
-    // 几何约束 2：语言栏位于代码区底部右侧内部，不增加外部文档流高度
-    assert.ok(dockBox.y + dockBox.height <= surfaceBoxFocused.y + surfaceBoxFocused.height + 2, `Dock bottom (${dockBox.y + dockBox.height}) is within surface bottom (${surfaceBoxFocused.y + surfaceBoxFocused.height})`)
+    // 几何约束 2：语言栏悬浮在代码区外部下方，top 大于 surface bottom 约 4px
+    assert.ok(dockBox.y >= surfaceBoxFocused.y + surfaceBoxFocused.height + 2, `Dock top (${dockBox.y}) must be below surface bottom (${surfaceBoxFocused.y + surfaceBoxFocused.height})`)
 
     // 几何约束 3：语言栏位于代码区右侧区域，而非居中
     assert.ok(dockBox.x > surfaceBoxFocused.x + surfaceBoxFocused.width / 2, 'Dock must be on the right side of the code block')
