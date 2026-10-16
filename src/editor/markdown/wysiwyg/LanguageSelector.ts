@@ -159,8 +159,9 @@ export class LanguageSelector {
 
   update(info: string) {
     this.info = info
-    const { label, language } = parseFenceInfo(info)
-    const displayName = language?.name || label || ''
+    const { label, language, parameters } = parseFenceInfo(info)
+    const baseName = language?.name || label || ''
+    const displayName = baseName ? (parameters ? `${baseName} ${parameters.trim()}` : baseName) : ''
     this.originalLabel = displayName
     this.button.textContent = displayName || '代码语言'
     this.input.value = displayName
@@ -275,6 +276,7 @@ export class LanguageSelector {
     this.stopEditing()
     const suffix = parseFenceInfo(this.info).parameters
     this.change(label + suffix)
+    this.button.focus()
   }
 
   destroy() {

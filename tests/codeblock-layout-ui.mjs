@@ -96,38 +96,30 @@ try {
   await page.goto(`${process.env.LIGHTEDIT_TEST_URL}/${output}/fixture.html`)
   await page.locator('.md-prose').waitFor()
 
-  await test('1. Initial blurred state: language row visible, displays "Shell", next heading positioned stably', async () => {
+  await test('1. Initial blurred state: language tag hidden by default (display: none), next heading positioned stably', async () => {
     // Click outside to ensure blurred state
     await page.locator('.md-prose h2').first().click()
     const row = page.locator('.md-code-language-row')
-    assert.equal(await row.isVisible(), true, 'Language row must be visible initially when blurred')
+    assert.equal(await row.isHidden(), true, 'Language row must be hidden by default when blurred')
 
-    const btn = page.locator('.md-code-lang-btn')
-    assert.equal(await btn.textContent(), 'Shell')
-
-    const geoBlurred = await getGeometry()
-    assert.ok(geoBlurred.block && geoBlurred.surface && geoBlurred.row && geoBlurred.dock, 'All elements exist')
-    assert.ok(Math.abs(geoBlurred.row.height - 24) <= 1, `Row height ~24px (got ${geoBlurred.row.height})`)
-    assert.ok(Math.abs(geoBlurred.dock.height - 24) <= 1, `Dock height ~24px (got ${geoBlurred.dock.height})`)
-    assert.ok(Math.abs(geoBlurred.dock.width - 180) <= 2, `Dock width ~180px (got ${geoBlurred.dock.width})`)
-
-    // Dock right edge aligns with surface right edge within 2px
-    const surfaceRight = geoBlurred.surface.x + geoBlurred.surface.width
-    const dockRight = geoBlurred.dock.x + geoBlurred.dock.width
-    assert.ok(Math.abs(surfaceRight - dockRight) <= 2, `Dock right (${dockRight}) aligns with surface right (${surfaceRight})`)
-
-    // Screenshot blurred state
+    // Screenshot blurred state (clean, no language box)
     await page.screenshot({ path: `${output}/01-codeblock-blurred.png` })
   })
 
-  await test('2 & 3. Focus codeblock: overall height identical, next heading top changes <= 1px', async () => {
+  await test('2 & 3. Focus codeblock (editing): language tag appears at bottom right, overall height identical, next heading top changes <= 1px', async () => {
     const geoBefore = await getGeometry()
 
-    // Click into CodeMirror inside the code block
+    // Click into CodeMirror inside the code block to enter editing mode
     await page.locator('.md-code-block .cm-content').click()
+
+    const row = page.locator('.md-code-language-row')
+    assert.equal(await row.isVisible(), true, 'Language tag must appear when editing code block')
+    const btn = page.locator('.md-code-lang-btn')
+    assert.equal(await btn.textContent(), 'Shell')
+
     const geoAfter = await getGeometry()
 
-    // Height identical
+    // Height identical (because tag is absolute positioned at bottom-right)
     assert.ok(
       Math.abs(geoBefore.block.height - geoAfter.block.height) <= 1,
       `Code block height must not change on focus (before: ${geoBefore.block.height}, after: ${geoAfter.block.height})`
@@ -158,9 +150,9 @@ try {
     assert.ok(Math.abs(geoBefore.dock.height - geoAfter.dock.height) <= 1, 'Dock height unchanged when editing language')
     assert.ok(Math.abs(geoBefore.nextHeadingTop - geoAfter.nextHeadingTop) <= 1, 'Next heading Y position unchanged when editing language')
 
-    // Input dimensions: width ~138px, height ~18px
-    assert.ok(Math.abs(geoAfter.input.width - 138) <= 2, `Input width ~138px (got ${geoAfter.input.width})`)
-    assert.ok(Math.abs(geoAfter.input.height - 18) <= 2, `Input height ~18px (got ${geoAfter.input.height})`)
+    // Input dimensions: compact pill, height ~22px
+    assert.ok(geoAfter.input.width >= 50 && geoAfter.input.width <= 220, `Input width valid (got ${geoAfter.input.width})`)
+    assert.ok(Math.abs(geoAfter.input.height - 22) <= 2, `Input height ~22px (got ${geoAfter.input.height})`)
 
     // Screenshot language input active
     await page.screenshot({ path: `${output}/03-language-input-active.png` })
@@ -202,6 +194,8 @@ try {
   await test('7. Select language (choose Java): updates markdown fence & CodeMirror without layout shift', async () => {
     const geoBefore = await getGeometry()
 
+    // Focus code block to reveal language button
+    await page.locator('.md-code-block .cm-content').click()
     await page.locator('.md-code-lang-btn').click()
     const input = page.locator('.md-code-language-input')
     await input.waitFor({ state: 'visible' })
@@ -229,12 +223,14 @@ try {
   })
 
   await test('8. Window resize across different viewport widths: dock stays right-aligned without overlap', async () => {
+    // Focus code block
+    await page.locator('.md-code-block .cm-content').click()
     for (const width of [1200, 900, 600]) {
       await page.setViewportSize({ width, height: 850 })
       const geo = await getGeometry()
       const surfaceRight = geo.surface.x + geo.surface.width
       const dockRight = geo.dock.x + geo.dock.width
-      assert.ok(Math.abs(surfaceRight - dockRight) <= 2, `Dock right aligns with surface right at width ${width}`)
+      assert.ok(dockRight <= surfaceRight + 1 && dockRight >= surfaceRight - 16, `Dock right aligns near surface right (offset: ${surfaceRight - dockRight}) at width ${width}`)
     }
     await page.setViewportSize({ width: 1200, height: 850 })
   })
@@ -249,23 +245,21 @@ try {
     const btn = block.locator('.md-code-lang-btn')
 
     assert.equal(await btn.textContent(), '代码语言', 'Default label when no language specified is "代码语言"')
-    assert.equal(await row.isVisible(), true, 'Language row is visible for single-line code block')
+    // Default blurred state: language tag is hidden (display: none)
+    assert.equal(await row.isHidden(), true)
+
+    // Focus single-line code block: language tag appears
+    await block.locator('.cm-content').click()
+    assert.equal(await row.isVisible(), true)
 
     // Hover surface to reveal copy button
     await surface.hover()
     await page.waitForFunction(el => parseFloat(getComputedStyle(el).opacity) > 0.8, await copyBtn.elementHandle())
-
-    const boxSurface = await surface.boundingBox()
-    const boxCopy = await copyBtn.boundingBox()
-    const boxRow = await row.boundingBox()
-
-    assert.ok(boxSurface && boxCopy && boxRow, 'All bounding boxes exist')
-    // Copy button is inside surface
-    assert.ok(boxCopy.y + boxCopy.height <= boxSurface.y + boxSurface.height, 'Copy button is within surface vertically')
-    // Language row is strictly below surface
-    assert.ok(boxRow.y >= boxSurface.y + boxSurface.height - 1, 'Language row is below surface')
-    // Therefore copy button and language row do NOT overlap
-    assert.ok(boxCopy.y + boxCopy.height <= boxRow.y, 'Copy button and language row do not overlap')
+    const copyBox = await copyBtn.boundingBox()
+    const btnBox = await btn.boundingBox()
+    assert.ok(copyBox && btnBox, 'Both exist')
+    // Copy button is at top right, language button is at bottom right
+    assert.ok(copyBox.y < btnBox.y, 'Copy button is above language button')
 
     await page.screenshot({ path: `${output}/06-single-line-codeblock.png` })
   })
@@ -273,6 +267,7 @@ try {
   await test('10. Consecutive code blocks and Dark theme compatibility', async () => {
     const sourceMulti = '```python\nprint(1)\n```\n\n```rust\nfn main() {}\n```\n\n## 尾部章节'
     await reset(sourceMulti)
+    await page.locator('.md-prose h2').last().click()
 
     // Switch to dark theme
     await page.evaluate(() => {
@@ -281,19 +276,14 @@ try {
     })
 
     const rows = page.locator('.md-code-language-row')
-    assert.equal(await rows.count(), 2, 'Two language rows exist')
-    assert.equal(await rows.nth(0).isVisible(), true, 'First block language row visible')
-    assert.equal(await rows.nth(1).isVisible(), true, 'Second block language row visible')
+    // Both blurred by default: hidden
+    assert.equal(await rows.nth(0).isHidden(), true)
+    assert.equal(await rows.nth(1).isHidden(), true)
 
-    const btn1 = rows.nth(0).locator('.md-code-lang-btn')
-    const btn2 = rows.nth(1).locator('.md-code-lang-btn')
-    assert.equal(await btn1.textContent(), 'Python')
-    assert.equal(await btn2.textContent(), 'Rust')
-
-    // Click second block, verify first block language row stays visible
+    // Click second block, second block language row becomes visible, first block remains hidden
     await page.locator('.md-code-block').nth(1).locator('.cm-content').click()
-    assert.equal(await rows.nth(0).isVisible(), true, 'First block language row stays visible when second block focused')
-    assert.equal(await rows.nth(1).isVisible(), true, 'Second block language row stays visible when second block focused')
+    assert.equal(await rows.nth(1).isVisible(), true)
+    assert.equal(await rows.nth(0).isHidden(), true)
 
     // Screenshot dark theme consecutive code blocks
     await page.screenshot({ path: `${output}/07-dark-theme-consecutive.png` })

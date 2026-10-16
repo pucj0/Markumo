@@ -32,6 +32,7 @@ import { WindowCloseGuard, type CloseSource } from '../features/shell/WindowClos
 import { initializeLaunch, sessionInput, SessionWriter } from '../features/shell/launchSession'
 import { invoke } from '@tauri-apps/api/core'
 import { defaultImageRules, imageRuleKey, ImageImporter, imageGateway, clipboardImages, isImageFile, type ImageRules, type ImageSource, type NativeImageInput } from '../editor/markdown/imageImport'
+import { ExportController, ImportController } from '../features/document-conversion'
 
 export function useAppShell() {
   const desktop = isTauri()
@@ -62,6 +63,8 @@ export function useAppShell() {
   const gotoLineRef = ref<{ open: () => void; close: () => void; visible: boolean } | null>(null)
   const manager = markRaw(new DocumentManager(demo ? sampleDocuments : []))
   const files = markRaw(new FileController(manager, tauriFiles, toast))
+  const exportController = new ExportController(manager, msg => toast(msg))
+  const importController = new ImportController(manager, msg => toast(msg))
   const workspace = reactive(new WorkspaceController(tauriWorkspace, manager, files, toast, false)) as WorkspaceController
   workspace.connect()
   const recentFiles = ref<Preferences['recent']>([])
@@ -311,7 +314,15 @@ export function useAppShell() {
   }
   function toggleTheme() { theme.value = theme.value === 'dark' ? 'light' : theme.value === 'light' ? 'system' : 'dark' }
   function toggleFocus() { focusMode.value = !focusMode.value; toast(focusMode.value ? '专注模式 · Esc 退出' : '已退出专注模式') }
-  function openSettings() { if (discardRef.value?.visible) return; paletteRef.value?.close(); settingsRef.value?.open() }
+  function openSettings(section?: string) {
+    if (discardRef.value?.visible) return
+    paletteRef.value?.close()
+    if (section && settingsRef.value?.openSection) {
+      void settingsRef.value.openSection(section)
+    } else {
+      settingsRef.value?.open()
+    }
+  }
   function openPalette(category: 'action' | 'file' | 'all' = 'all') { if (discardRef.value?.visible) return; settingsRef.value?.close(); paletteRef.value?.open(category) }
   function composingHint() { toast('请先完成当前输入法输入，再切换或关闭文档。') }
   function selectDocById(id: string) { if (!manager.select(id, 'main') && manager.isComposing) composingHint() }
@@ -496,6 +507,15 @@ export function useAppShell() {
       { id: 'save', title: '保存文件', detail: 'Ctrl+S', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass', action: () => void saveActive() },
       { id: 'save-as', title: '另存为', detail: 'Ctrl+Shift+S', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass', action: () => void saveActive(true) },
       { id: 'save-utf8', title: '另存为 UTF-8', detail: '转换编码，无 BOM', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass' || activeDoc.value?.encoding === 'Hex', action: () => void saveActive(true, 'UTF-8') },
+      { id: 'import-html', title: '导入 HTML…', detail: 'HTML 转 Markdown', category: 'action', action: () => void importController.importDocument('html') },
+      { id: 'import-docx', title: '导入 Word (.docx)…', detail: 'Word 转 Markdown (Pandoc)', category: 'action', action: () => void importController.importDocument('docx') },
+      { id: 'export-pdf', title: '导出 PDF…', detail: '导出为 PDF 文档', category: 'action', disabled: !exportController.canExportActive(), action: () => void exportController.exportDocument('pdf') },
+      { id: 'export-html', title: '导出 HTML…', detail: '包含排版样式', category: 'action', disabled: !exportController.canExportActive(), action: () => void exportController.exportDocument('html') },
+      { id: 'export-html-plain', title: '导出 HTML（无主题样式）…', detail: '语义化纯 HTML', category: 'action', disabled: !exportController.canExportActive(), action: () => void exportController.exportDocument('html-plain') },
+      { id: 'export-docx', title: '导出 Word (.docx)…', detail: 'Markdown 转 Word (Pandoc)', category: 'action', disabled: !exportController.canExportActive(), action: () => void exportController.exportDocument('docx') },
+      { id: 'export-png', title: '导出 PNG 长图…', detail: '整页高清长图', category: 'action', disabled: !exportController.canExportActive(), action: () => void exportController.exportDocument('png') },
+      { id: 'export-repeat', title: '使用上一次设置导出', detail: '', category: 'action', disabled: !exportController.canExportActive(), action: () => void exportController.exportRepeat() },
+      { id: 'export-settings', title: '导出设置…', detail: '首选项', category: 'action', action: () => openSettings('conversion') },
       { id: 'find', title: '查找当前文档', detail: 'Ctrl+F', category: 'action', action: () => manager.command('find') },
       { id: 'replace', title: '替换当前文档', detail: 'Ctrl+R', category: 'action', disabled: activeDoc.value?.kind === 'javaClass', action: () => manager.command('replace') },
       { id: 'find-next', title: '查找下一个', detail: 'F3', category: 'action', action: () => manager.command('find-next') },
@@ -617,7 +637,8 @@ export function useAppShell() {
     shortcut:action.id in shortcuts.value ? shortcuts.value[action.id as ShortcutAction] : ({cut:'Mod+X',copy:'Mod+C',paste:'Mod+V','select-all':'Mod+A'} as Record<string,string>)[action.id],run:action.action,
   }))))
   const menuGroups = computed(() => {revision.value;return mainMenu({sidebar:sidebarVisible.value,outline:showOutline.value,wrap:wordWrap.value,split:manager.isSplit,focus:focusMode.value,
-    markdown:!!activeDoc.value?.mode,markdownMode:activeDoc.value?.mode,composing:manager.isComposing,recentFiles:recentFiles.value,recentWorkspaces:workspace.recentWorkspaces})})
+    markdown:!!activeDoc.value?.mode,markdownMode:activeDoc.value?.mode,composing:manager.isComposing,recentFiles:recentFiles.value,recentWorkspaces:workspace.recentWorkspaces,
+    canExport: exportController.canExportActive()})})
   function executeCommand(id:string) {
     if(startupLoading.value)return
     try {const result=commandRegistry.value.execute(id);if(result instanceof Promise)void result.catch(error=>toast(fileError(error)))}catch(error){toast(fileError(error))}

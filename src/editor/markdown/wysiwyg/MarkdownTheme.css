@@ -288,7 +288,7 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
   position: absolute;
   top: 6px;
   right: 8px;
-  z-index: 10;
+  z-index: 20;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
@@ -323,75 +323,73 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
 }
 
 .markdown-live .md-code-language-row {
+  display: none;
+  position: absolute;
+  right: 8px;
+  bottom: 4px;
+  align-items: center;
+  z-index: 10;
+  white-space: nowrap;
+  margin: 0;
+}
+
+/* 默认不显示，只有在编辑（聚焦）该代码块时才显示出来 */
+.markdown-live .md-code-block:focus-within .md-code-language-row,
+.markdown-live .md-code-block.is-focused .md-code-language-row {
   display: flex;
-  width: 100%;
-  box-sizing: border-box;
-  justify-content: flex-end;
-  margin-top: 4px;
-  height: 24px;
 }
 
 .markdown-live .md-code-language-dock {
-  width: 180px;
-  height: 24px;
-  box-sizing: border-box;
-  background: var(--md-code-bg);
-  border: 1px solid var(--line);
-  border-radius: 3px;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
   display: flex;
   align-items: center;
-  justify-content: center;
   position: relative;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-}
-
-.markdown-live .md-code-language-input {
-  width: 138px;
-  height: 18px;
-  box-sizing: border-box;
-  background: var(--editor);
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 18px;
-  text-align: center;
-  outline: none;
-  padding: 0 4px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.markdown-live .md-code-language-input:focus {
-  border-color: #4a90e2;
-  box-shadow: 0 0 0 1px #4a90e2;
-  background: var(--paper);
+  width: auto;
+  height: auto;
 }
 
 .markdown-live .md-code-lang-btn {
-  width: 138px;
-  height: 18px;
-  box-sizing: border-box;
-  background: var(--editor);
+  font: 12px/1.4 var(--font-sans);
+  color: var(--muted);
+  background: var(--bar);
   border: 1px solid var(--line);
-  border-radius: 2px;
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 16px;
-  text-align: center;
-  padding: 0 4px;
+  border-radius: 3px;
+  padding: 1px 8px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  min-width: 48px;
+  height: 22px;
+  box-sizing: border-box;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
 .markdown-live .md-code-lang-btn:hover {
-  border-color: var(--accent);
-  background: var(--hover);
   color: var(--bright);
+  background: var(--hover);
+  border-color: var(--accent);
+}
+
+.markdown-live .md-code-language-input {
+  font: 12px/1.4 var(--font-mono);
+  color: var(--bright);
+  background: var(--paper);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 1px 8px;
+  height: 22px;
+  width: auto;
+  min-width: 80px;
+  max-width: 180px;
+  box-sizing: border-box;
+  text-align: center;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .markdown-live .md-code-language-status {

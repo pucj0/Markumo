@@ -180,6 +180,13 @@ pub fn run() {
             commands::workspace::find_workspace_files,
             commands::workspace::set_workspace_ignored,
             commands::workspace::reveal_in_explorer,
+            commands::conversion::detect_pandoc,
+            commands::conversion::export_save_dialog,
+            commands::conversion::import_open_dialog,
+            commands::conversion::save_binary_file,
+            commands::conversion::pandoc_export_docx,
+            commands::conversion::pandoc_import_docx,
+            commands::conversion::print_to_pdf,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Markumo");

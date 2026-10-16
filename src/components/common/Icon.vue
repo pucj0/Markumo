@@ -86,6 +86,9 @@
     <template v-else-if="name === 'close'">
       <path d="M18 6 6 18M6 6l12 12" />
     </template>
+    <template v-else-if="name === 'export'">
+      <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5-5 5 5M12 6v12" />
+    </template>
     <template v-else-if="name === 'chevron-right'">
       <path d="m9 18 6-6-6-6" />
     </template>

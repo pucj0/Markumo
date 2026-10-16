@@ -57,7 +57,66 @@
               <ImageSettings :global-rules="imageRules" :document-rules="documentImageRules" :document-path="markdownPath" :document-name="markdownName" @global="emit('update:imageRules', $event)" @document="emit('update:documentImageRules', $event)" />
             </section>
 
-            <!-- 5. 快捷键（全新独立完整配置体系） -->
+            <!-- 5. 导入与导出 -->
+            <section id="settings-conversion" class="settings-section">
+              <h3>导入与导出</h3>
+              <div class="settingrow">
+                <label for="settings-ask-location">导出时询问保存位置</label>
+                <input id="settings-ask-location" class="setting-switch" type="checkbox" :checked="conversionSettings.askSaveLocation" @change="updateConversion('askSaveLocation', ($event.target as HTMLInputElement).checked)" />
+              </div>
+              <div class="settingrow">
+                <label for="settings-embed-images">离线图片内嵌为 Data URI</label>
+                <input id="settings-embed-images" class="setting-switch" type="checkbox" :checked="conversionSettings.embedImagesAsDataUri" @change="updateConversion('embedImagesAsDataUri', ($event.target as HTMLInputElement).checked)" />
+              </div>
+
+              <h4 class="subhead">PDF 导出</h4>
+              <div class="settingrow">
+                <label for="settings-pdf-paper">默认纸张大小</label>
+                <select id="settings-pdf-paper" :value="conversionSettings.pdf.paperSize" @change="updatePdf('paperSize', ($event.target as HTMLSelectElement).value as 'A4' | 'Letter')">
+                  <option value="A4">A4 纸张</option>
+                  <option value="Letter">US Letter</option>
+                </select>
+              </div>
+              <div class="settingrow">
+                <label for="settings-pdf-orientation">页面方向</label>
+                <select id="settings-pdf-orientation" :value="conversionSettings.pdf.orientation" @change="updatePdf('orientation', ($event.target as HTMLSelectElement).value as 'portrait' | 'landscape')">
+                  <option value="portrait">纵向</option>
+                  <option value="landscape">横向</option>
+                </select>
+              </div>
+              <div class="settingrow">
+                <label for="settings-pdf-margins">页边距</label>
+                <select id="settings-pdf-margins" :value="conversionSettings.pdf.margins" @change="updatePdf('margins', ($event.target as HTMLSelectElement).value as 'default' | 'compact' | 'loose')">
+                  <option value="default">默认 (18mm)</option>
+                  <option value="compact">紧凑 (12mm)</option>
+                  <option value="loose">宽松 (25mm)</option>
+                </select>
+              </div>
+              <div class="settingrow">
+                <label for="settings-pdf-bg">包含背景色与代码块底色</label>
+                <input id="settings-pdf-bg" class="setting-switch" type="checkbox" :checked="conversionSettings.pdf.printBackground" @change="updatePdf('printBackground', ($event.target as HTMLInputElement).checked)" />
+              </div>
+              <div class="settingrow">
+                <label for="settings-pdf-codewrap">代码块长行自动换行</label>
+                <input id="settings-pdf-codewrap" class="setting-switch" type="checkbox" :checked="conversionSettings.pdf.codeWrap" @change="updatePdf('codeWrap', ($event.target as HTMLInputElement).checked)" />
+              </div>
+
+              <h4 class="subhead">Word (Pandoc) 状态</h4>
+              <div class="settingrow pandoc-row">
+                <div class="pandoc-info">
+                  <span class="pandoc-indicator" :class="{ ok: pandocStatus.available }"></span>
+                  <span v-if="pandocStatus.available">已检测到 Pandoc：{{ pandocStatus.version }}</span>
+                  <span v-else>未检测到 Pandoc（Word 导入导出需要 Pandoc）</span>
+                </div>
+                <div class="pandoc-actions">
+                  <button type="button" class="small-btn" @click="checkPandoc">重新检测</button>
+                  <button v-if="!pandocStatus.available" type="button" class="small-btn" @click="openPandocSite">官网下载</button>
+                </div>
+              </div>
+              <p v-if="pandocStatus.path" class="setting-hint">路径：{{ pandocStatus.path }}</p>
+            </section>
+
+            <!-- 6. 快捷键（全新独立完整配置体系） -->
             <section id="settings-shortcuts" class="settings-section shortcuts-management-section">
               <header class="shortcuts-toolbar">
                 <div class="toolbar-field">
@@ -148,6 +207,13 @@ import type { EditorSettings } from '../../features/shell/editorSettings'
 import type { ThemePreference, MarkdownMode } from '../../types'
 import { defaultMarkdownTypography, type MarkdownTypography } from '../../editor/markdown/wysiwyg/contracts'
 import {
+  loadConversionSettings,
+  saveConversionSettings,
+  type ConversionSettings,
+  getPandocStatus,
+  type PandocStatus,
+} from '../../features/document-conversion'
+import {
   type KeymapPresetId,
   type CommandCategory,
   categoryLabels,
@@ -232,11 +298,33 @@ const activeSection = ref('appearance')
 const fontDraft = ref(String(props.fontSize)), fontError = ref('')
 const delays = [500, 1500, 3000, 5000]
 
+const conversionSettings = ref<ConversionSettings>(loadConversionSettings())
+const pandocStatus = ref<PandocStatus>({ available: false })
+
+async function checkPandoc() {
+  pandocStatus.value = await getPandocStatus(true)
+}
+
+function openPandocSite() {
+  window.open('https://pandoc.org/installing.html', '_blank')
+}
+
+function updateConversion<K extends keyof ConversionSettings>(key: K, val: ConversionSettings[K]) {
+  conversionSettings.value[key] = val
+  saveConversionSettings(conversionSettings.value)
+}
+
+function updatePdf<K extends keyof ConversionSettings['pdf']>(key: K, val: ConversionSettings['pdf'][K]) {
+  conversionSettings.value.pdf[key] = val
+  saveConversionSettings(conversionSettings.value)
+}
+
 const sections = [
   { id: 'appearance', title: '外观', icon: 'sun' },
   { id: 'editor', title: '编辑', icon: 'font' },
   { id: 'save', title: '保存', icon: 'save' },
   { id: 'markdown', title: 'Markdown', icon: 'files' },
+  { id: 'conversion', title: '导入与导出', icon: 'export' },
   { id: 'shortcuts', title: '快捷键', icon: 'keyboard' },
 ]
 
@@ -248,6 +336,8 @@ watch(visible, value => {
     fontDraft.value = String(props.fontSize)
     fontError.value = ''
     activeSection.value = 'appearance'
+    conversionSettings.value = loadConversionSettings()
+    void checkPandoc()
   }
 })
 
@@ -508,6 +598,52 @@ select:disabled { opacity:.45 }
   text-align: center;
   color: var(--muted);
   font-size: 13px;
+}
+
+.subhead {
+  margin: 16px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  padding-bottom: 4px;
+  border-bottom: 1px dashed var(--line);
+}
+.pandoc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.pandoc-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.pandoc-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.pandoc-indicator.ok {
+  background: #2ea44f;
+}
+.pandoc-actions {
+  display: flex;
+  gap: 6px;
+}
+.small-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--text);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.small-btn:hover {
+  background: var(--hover);
+  color: var(--bright);
 }
 
 @media(max-width:560px) {

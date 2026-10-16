@@ -157,22 +157,23 @@ try {
     assert.ok(text.includes('```customlang'), 'Should create code_block with customlang params')
   })
 
-  await test('6. Code block focus states & language dock visibility (always visible, zero layout shift)', async () => {
+  await test('6. Code block focus states & language dock visibility (hidden by default, only visible when editing)', async () => {
     const codeBlock = page.locator('.md-code-block').first()
     const languageRow = codeBlock.locator('.md-code-language-row')
 
-    // 1. 点击正文，代码块失焦状态：语言栏始终直接显示
+    // 1. 点击正文，代码块失焦状态：默认不显示
     await page.locator('.md-prose h1').first().click()
-    assert.equal(await languageRow.isVisible(), true, 'Language row must be visible even when code block is blurred')
+    assert.equal(await languageRow.isHidden(), true, 'Language row must be hidden (display: none) by default when blurred')
     const boxBlurred = await codeBlock.boundingBox()
 
-    // 2. 鼠标悬停（hover）代码块，语言栏保持显示
+    // 2. 鼠标仅悬停（hover）代码块，不聚焦：语言栏不显示
     await codeBlock.locator('.md-code-surface').hover()
-    assert.equal(await languageRow.isVisible(), true, 'Language row must remain visible on hover')
+    assert.equal(await languageRow.isHidden(), true, 'Language row must not show on hover without focus')
 
-    // 3. 点击代码内容获焦：语言栏依然可见，整体高度保持一致无跳动
+    // 3. 点击代码内容获焦（进入编辑状态）：语言栏显示出来，整体高度保持一致无跳动
     await codeBlock.locator('.cm-content').click()
-    assert.equal(await languageRow.isVisible(), true, 'Language row must be visible when code block is focused')
+    assert.equal(await languageRow.isVisible(), true, 'Language row must show when editing code block')
+
     const boxFocused = await codeBlock.boundingBox()
     assert.ok(boxBlurred && boxFocused, 'Both bounding boxes exist')
     assert.ok(Math.abs(boxBlurred.height - boxFocused.height) <= 1, `Code block height must not jump on focus (blurred: ${boxBlurred.height}, focused: ${boxFocused.height})`)
@@ -209,13 +210,13 @@ try {
     const btnBox = await targetBlock.locator('.md-code-lang-btn').boundingBox()
     assert.ok(dockBox && btnBox && surfaceBoxFocused, 'All boxes exist')
 
-    // 几何约束 1：代码区右边缘与语言栏右边缘基本相同（渲染误差 <= 2px）
+    // 几何约束 1：代码区右边缘与语言栏右边缘在右侧对齐（偏置约 8px）
     const surfaceRight = surfaceBoxFocused.x + surfaceBoxFocused.width
     const dockRight = dockBox.x + dockBox.width
-    assert.ok(Math.abs(surfaceRight - dockRight) <= 2, `Dock right edge (${dockRight}) must align with surface right edge (${surfaceRight})`)
+    assert.ok(dockRight <= surfaceRight + 1 && dockRight >= surfaceRight - 16, `Dock right edge (${dockRight}) aligns near surface right (${surfaceRight})`)
 
-    // 几何约束 2：语言栏顶部位于代码区底部之下，无重叠
-    assert.ok(dockBox.y >= surfaceBoxFocused.y + surfaceBoxFocused.height, `Dock top (${dockBox.y}) must be below surface bottom (${surfaceBoxFocused.y + surfaceBoxFocused.height})`)
+    // 几何约束 2：语言栏位于代码区底部右侧内部，不增加外部文档流高度
+    assert.ok(dockBox.y + dockBox.height <= surfaceBoxFocused.y + surfaceBoxFocused.height + 2, `Dock bottom (${dockBox.y + dockBox.height}) is within surface bottom (${surfaceBoxFocused.y + surfaceBoxFocused.height})`)
 
     // 几何约束 3：语言栏位于代码区右侧区域，而非居中
     assert.ok(dockBox.x > surfaceBoxFocused.x + surfaceBoxFocused.width / 2, 'Dock must be on the right side of the code block')
@@ -250,6 +251,10 @@ try {
 
     // 截图带候选列表
     await page.screenshot({ path: `${output}/language-candidates-with-icons.png` })
+
+    // 关闭候选菜单并失焦
+    await page.keyboard.press('Escape')
+    await page.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur() })
   })
 
   await test('8. Copy button: appears on hover at top-right of surface, copies only code text', async () => {
@@ -275,6 +280,7 @@ try {
 
     // 点击复制
     await copyBtn.click()
+    await page.waitForFunction(() => window.fixture.copied === 'npm install')
     const copied = await page.evaluate(() => window.fixture.copied)
     assert.equal(copied, 'npm install', 'Copied text should be strictly pure code')
   })

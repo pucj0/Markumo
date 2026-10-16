@@ -5,6 +5,7 @@ export interface MainMenuState {
   sidebar: boolean; outline: boolean; wrap: boolean; split: boolean; focus: boolean
   markdown: boolean; markdownMode?: MarkdownMode; composing: boolean
   recentFiles: { path:string; name:string }[]; recentWorkspaces: string[]
+  canExport?: boolean
 }
 export function mainMenu(state: MainMenuState): MenuGroup[] {
   const submenu = (id: string, label: string, children: MenuNode[], enabled = true): MenuNode => ({type:'submenu',id,label,children,enabled})
@@ -16,7 +17,24 @@ export function mainMenu(state: MainMenuState): MenuGroup[] {
       submenu('workspace-menu','工作区',[cmd('open-workspace','打开文件夹…'),cmd('add-workspace','添加文件夹…'),
         submenu('recent-workspaces','最近工作区',state.recentWorkspaces.map(path => cmd(recentWorkspaceCommand(path),readablePath(path).split(/[\\/]/).pop()))),
         sep('workspace-search-section'),cmd('workspace-search'),cmd('refresh-workspace')]),
-      sep('save-section'),cmd('save','保存'),cmd('save-as','另存为…'),sep('close-section'),cmd('close-current','关闭文件'),cmd('quit','退出')]},
+      sep('import-section'),
+      submenu('import-menu', '导入', [
+        cmd('import-html', 'HTML…'),
+        cmd('import-docx', 'Word (.docx)…'),
+      ]),
+      sep('save-section'),cmd('save','保存'),cmd('save-as','另存为…'),
+      sep('export-section'),
+      submenu('export-menu', '导出', [
+        cmd('export-pdf', 'PDF…'),
+        cmd('export-html', 'HTML…'),
+        cmd('export-html-plain', 'HTML（无主题样式）…'),
+        cmd('export-docx', 'Word (.docx)…'),
+        cmd('export-png', 'PNG 长图…'),
+        sep('export-repeat-section'),
+        cmd('export-repeat', '使用上一次设置导出'),
+        cmd('export-settings', '导出设置…'),
+      ], state.canExport ?? state.markdown),
+      sep('close-section'),cmd('close-current','关闭文件'),cmd('quit','退出')]},
     {id:'edit',title:'编辑',items:[cmd('undo'),cmd('redo'),sep('clipboard-section'),cmd('cut'),cmd('copy'),cmd('paste'),cmd('select-all'),
       sep('search-section'),cmd('find','查找'),cmd('replace','替换'),cmd('goto-line','跳转行…')]},
     {id:'format',title:'格式',items:[format('bold'),format('italic'),format('strike'),format('inline-code'),sep('structure-section'),
