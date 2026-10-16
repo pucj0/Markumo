@@ -263,20 +263,29 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
 
 /* Code Block - Clean Typora Container with Internal Line Numbers */
 .markdown-live .md-code-block {
-  margin: 1em 0;
-  border-radius: 3px;
-  background: var(--md-code-bg);
-  overflow: hidden;
+  margin: 1.2em 0;
+  width: 100%;
+  box-sizing: border-box;
   white-space: normal;
-  border: 1px solid var(--line);
-  position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
-.markdown-live .md-code-block .md-code-copy {
+.markdown-live .md-code-surface {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--md-code-bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.markdown-live .md-code-surface .md-code-copy {
   position: absolute;
   top: 6px;
   right: 8px;
-  z-index: 6;
+  z-index: 10;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
@@ -293,77 +302,112 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
   cursor: pointer;
 }
 
-.markdown-live .md-code-block:hover .md-code-copy,
+.markdown-live .md-code-surface:hover .md-code-copy,
+.markdown-live .md-code-block.is-focused .md-code-copy,
 .markdown-live .md-code-block:focus-within .md-code-copy {
   opacity: 0.95;
   pointer-events: auto;
 }
 
-.markdown-live .md-code-block .md-code-copy:hover {
+.markdown-live .md-code-surface .md-code-copy:hover {
   opacity: 1;
   color: var(--bright);
   background: var(--hover);
 }
 
-.markdown-live .md-code-block .md-code-lang {
-  max-width: 100%;
-  width: max-content;
+.markdown-live .md-code-copy svg {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 
-.markdown-live .md-code-footer {
-  position: absolute;
-  right: 8px;
-  bottom: 4px;
+.markdown-live .md-code-language-row {
+  display: none;
+  width: 100%;
+  box-sizing: border-box;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+/* 只有聚焦或处于编辑交互时才显示语言选择行 */
+.markdown-live .md-code-block.is-focused .md-code-language-row,
+.markdown-live .md-code-block:focus-within .md-code-language-row {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  z-index: 5;
-  pointer-events: none;
-  opacity: 0;
-  white-space: nowrap;
-  transition: opacity 0.15s ease;
 }
 
-/* 只有代码内容聚焦后才显示语言入口 */
-.markdown-live .md-code-block:focus-within .md-code-footer {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* 鼠标仅悬停代码块，不显示语言入口 */
-.markdown-live .md-code-block:hover:not(:focus-within) .md-code-footer {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.markdown-live .md-code-footer .md-code-lang-btn {
-  font: 12px/1.4 var(--font-sans);
-  color: var(--muted);
-  background: var(--bar);
+.markdown-live .md-code-language-dock {
+  width: 180px;
+  height: 24px;
+  box-sizing: border-box;
+  background: var(--md-code-bg);
   border: 1px solid var(--line);
   border-radius: 3px;
-  padding: 1px 6px;
-  cursor: pointer;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 4px;
-  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+  justify-content: center;
+  position: relative;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
-.markdown-live .md-code-footer .md-code-lang-btn:hover {
-  color: var(--bright);
-  background: var(--hover);
+.markdown-live .md-code-language-input {
+  width: 138px;
+  height: 18px;
+  box-sizing: border-box;
+  background: var(--editor);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  outline: none;
+  padding: 0 4px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.markdown-live .md-code-language-input:focus {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 1px #4a90e2;
+  background: var(--paper);
+}
+
+.markdown-live .md-code-lang-btn {
+  width: 138px;
+  height: 18px;
+  box-sizing: border-box;
+  background: var(--editor);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+  padding: 0 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.markdown-live .md-code-lang-btn:hover {
   border-color: var(--accent);
+  background: var(--hover);
+  color: var(--bright);
 }
 
-.markdown-live .md-code-language-status { font: var(--ui-small-font-size)/1.4 var(--font-sans); color: var(--muted); }
-.markdown-live .md-code-copy svg { display: block; width: 14px; height: 14px; }
+.markdown-live .md-code-language-status {
+  display: none;
+}
 
 .markdown-live .md-language-menu,
 .md-fence-autocomplete {
   position: fixed;
   z-index: 50;
-  width: 240px;
+  width: 180px;
+  box-sizing: border-box;
   max-width: calc(100vw - 16px);
   max-height: 260px;
   overflow: hidden;
@@ -372,14 +416,18 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
   border: 1px solid var(--line);
   padding: 4px;
   background: var(--paper);
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
   font-family: var(--font-sans);
+}
+
+.md-fence-autocomplete {
+  width: 220px;
 }
 
 .md-fence-autocomplete .md-language-list,
 .markdown-live .md-language-menu .md-language-list {
-  max-height: 220px;
+  max-height: 200px;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
@@ -818,6 +866,213 @@ body.light .file-icon-gray { color: #6c7c92; }
 .markdown-live.md-focus-mode .md-prose > *:not(.md-node-focused) {
   opacity: 0.28;
   transition: opacity 0.2s ease;
+}
+
+/* HTML Block 与 Inline 渲染支持 */
+.markdown-live .md-html-block-view {
+  position: relative;
+  margin: 1em 0;
+  white-space: normal;
+}
+
+.markdown-live .md-html-block-view:hover > .md-html-edit-trigger {
+  opacity: 1;
+}
+
+.markdown-live .md-html-edit-trigger {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 10;
+  opacity: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bar);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+  user-select: none;
+}
+
+.markdown-live .md-html-edit-trigger:hover {
+  background: var(--hover);
+  color: var(--bright);
+}
+
+.markdown-live .md-html-preview {
+  position: relative;
+}
+
+.markdown-live .md-html-source-editor {
+  background: var(--editor);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.markdown-live .md-html-editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.markdown-live .md-html-toolbar-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.markdown-live .md-html-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.markdown-live .md-html-done-btn,
+.markdown-live .md-html-cancel-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+}
+
+.markdown-live .md-html-done-btn {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.markdown-live .md-html-cancel-btn {
+  background: var(--bar);
+  color: var(--sub);
+}
+
+.markdown-live .md-html-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  outline: none;
+  resize: vertical;
+}
+
+/* HTML 行内节点样式 */
+.markdown-live .md-html-inline-view {
+  display: inline;
+  cursor: pointer;
+}
+
+.markdown-live .md-html-inline-content {
+  display: inline;
+}
+
+/* 键帽 <kbd> 样式 */
+kbd,
+.markdown-live kbd,
+.split-preview-content kbd {
+  display: inline-block;
+  padding: 2px 5px;
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  line-height: 1.2;
+  color: var(--ink);
+  background: var(--bar);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.15);
+  vertical-align: middle;
+}
+
+/* HTML 图片与错误占位 */
+.md-html-image-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: rgba(220, 53, 69, 0.08);
+  border: 1px dashed rgba(220, 53, 69, 0.35);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.md-image-error-icon {
+  font-size: 14px;
+}
+
+.md-image-error-path {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.md-image-error-tip {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.md-html-img-loading {
+  min-width: 32px;
+  min-height: 32px;
+  opacity: 0.4;
+  background: var(--soft);
+}
+
+/* HTML 块内的表格、详情、列表 */
+.markdown-live .md-html-preview table,
+.split-preview-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+  border: 1px solid var(--line);
+}
+
+.markdown-live .md-html-preview th,
+.markdown-live .md-html-preview td,
+.split-preview-content th,
+.split-preview-content td {
+  border: 1px solid var(--line);
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.markdown-live .md-html-preview th,
+.split-preview-content th {
+  background: var(--soft);
+  color: var(--bright);
+  font-weight: 600;
+}
+
+.markdown-live .md-html-preview details,
+.split-preview-content details {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin: 1em 0;
+  background: var(--soft);
+}
+
+.markdown-live .md-html-preview summary,
+.split-preview-content summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--bright);
 }
 
 @media (max-width: 700px) {

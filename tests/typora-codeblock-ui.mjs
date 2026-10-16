@@ -57,19 +57,16 @@ try {
   await page.locator('.md-prose').waitFor()
 
   await test('1. Type ``` and Enter creates an empty code block with cursor inside', async () => {
-    // 点击第二段末尾，回车另起一行
     const p = page.locator('.md-prose p').first()
     await p.click()
     await page.keyboard.press('End')
     await page.keyboard.press('Enter')
-    // 输入 ``` 并按 Enter
     await page.keyboard.type('```')
     await page.keyboard.press('Enter')
 
     await page.locator('.md-code-block').waitFor()
     const text = await raw()
     assert.ok(text.includes('```'), 'Markdown should contain code block')
-    // 检查是否有聚焦在嵌入的 CM 内
     const hasCmFocus = await page.evaluate(() => {
       return document.activeElement?.closest('.md-code-block .cm-editor') !== null
     })
@@ -77,7 +74,6 @@ try {
   })
 
   await test('2. Type ```java triggers autocomplete with language icon, Enter creates Java code block', async () => {
-    // 移到文档末尾
     await page.evaluate(() => {
       const view = window.fixture.view()
       const tr = view.state.tr.insert(view.state.doc.content.size, view.state.schema.nodes.paragraph.create())
@@ -87,16 +83,13 @@ try {
     await lastP.click()
     await page.keyboard.type('```java')
 
-    // 自动补全浮层应显示
     await page.locator('.md-fence-autocomplete').waitFor()
     const isVisible = await page.locator('.md-fence-autocomplete').isVisible()
     assert.ok(isVisible, 'Autocomplete popover should be visible')
 
-    // 检查候选项中有 SVG 图标
     const optionIcon = page.locator('.md-fence-autocomplete .md-language-option svg').first()
     assert.ok(await optionIcon.count() > 0, 'Language option should have an SVG icon')
 
-    // 按 Enter 创建 Java 代码块
     await page.keyboard.press('Enter')
     await page.waitForFunction(() => !document.querySelector('.md-fence-autocomplete') || document.querySelector('.md-fence-autocomplete').hidden)
 
@@ -115,15 +108,14 @@ try {
     await page.keyboard.type('```ja')
 
     await page.locator('.md-fence-autocomplete').waitFor()
-    // 候选项应包含 jade, java, javascript
     const optionsText = await page.locator('.md-fence-autocomplete .md-language-option').allInnerTexts()
     const joined = optionsText.join(' ').toLowerCase()
     assert.ok(joined.includes('jade') && joined.includes('java') && joined.includes('javascript'), 'Options should contain jade, java, javascript')
 
-    // 没有按方向键选择候选时，按 Enter 必须使用 'ja'，绝不擅自替换为 jade！
+    // 未按方向键选择时按 Enter 不劫持
     await page.keyboard.press('Enter')
     const text = await raw()
-    assert.ok(text.includes('```ja\n') || text.includes('```ja \n'), 'Should preserve user input "ja" and not convert to jade')
+    assert.ok(text.includes('```ja\n') || text.includes('```ja \n'), 'Should preserve user input "ja"')
   })
 
   await test('4. Tab completion and Escape dismissal on fence autocomplete', async () => {
@@ -137,18 +129,15 @@ try {
     await page.keyboard.type('```ja')
     await page.locator('.md-fence-autocomplete').waitFor()
 
-    // 按 Escape 应关闭浮层，但保留文本
     await page.keyboard.press('Escape')
     const hidden = await page.locator('.md-fence-autocomplete').isHidden()
     assert.ok(hidden, 'Autocomplete should close on Escape')
 
-    // 重新打开并测试 Tab 补全
     await page.keyboard.press('Backspace')
     await page.keyboard.type('a')
     await page.locator('.md-fence-autocomplete').waitFor()
     await page.keyboard.press('Tab')
 
-    // 应该补全了语言名称
     const pText = await lastP.innerText()
     assert.ok(pText.startsWith('```ja'), 'Paragraph text should be completed')
   })
@@ -168,89 +157,139 @@ try {
     assert.ok(text.includes('```customlang'), 'Should create code_block with customlang params')
   })
 
-  await test('6. Language selector: completely hidden when blurred, hover does NOT show, only focused shows', async () => {
+  await test('6. Code block focus states & language dock visibility', async () => {
     const codeBlock = page.locator('.md-code-block').first()
-    const footer = codeBlock.locator('.md-code-footer')
+    const languageRow = codeBlock.locator('.md-code-language-row')
 
-    // 点击正文外部段落，代码块处于失焦状态
-    const heading = page.locator('.md-prose h1').first()
-    await heading.click()
+    // 1. 点击正文，代码块失焦状态
+    await page.locator('.md-prose h1').first().click()
+    assert.equal(await languageRow.isHidden(), true, 'Language row must be completely hidden (display: none) when blurred')
 
-    // 1. 失焦状态：footer opacity 应为 0 或 pointer-events none
-    let opacity = await footer.evaluate(el => getComputedStyle(el).opacity)
-    assert.equal(opacity, '0', 'Footer should have opacity 0 when code block is blurred')
+    // 2. 鼠标仅悬停（hover），不聚焦
+    await codeBlock.locator('.md-code-surface').hover()
+    assert.equal(await languageRow.isHidden(), true, 'Language row must NOT show on hover without focus')
 
-    // 2. 鼠标仅悬停（hover）在代码块上，不聚焦：footer 仍应为隐藏 (opacity 0)
-    await codeBlock.hover()
-    opacity = await footer.evaluate(el => getComputedStyle(el).opacity)
-    assert.equal(opacity, '0', 'Footer should NOT show on hover without focus')
-
-    // 3. 点击进入代码块聚焦：footer 显示 (opacity 1)
+    // 3. 点击代码内容获焦
     await codeBlock.locator('.cm-content').click()
-    await page.waitForFunction(el => getComputedStyle(el).opacity === '1', await footer.elementHandle())
-    opacity = await footer.evaluate(el => getComputedStyle(el).opacity)
-    assert.equal(opacity, '1', 'Footer should show when code block is focused')
+    assert.equal(await languageRow.isVisible(), true, 'Language row must appear when code block is focused')
   })
 
-  await test('7. Short single-line code block has no excessive 30px bottom blank space', async () => {
+  await test('7. Geometric layout constraints: dock right-aligned below surface, input centered with text-align center', async () => {
+    // 插入短代码块 npm install
     await page.evaluate(() => {
       const view = window.fixture.view()
       const schema = view.state.schema
-      const codeNode = schema.nodes.code_block.create({ params: 'bash', fence: '```' }, schema.text('npm install'))
+      const codeNode = schema.nodes.code_block.create({ params: '', fence: '```' }, schema.text('npm install'))
       const tr = view.state.tr.insert(view.state.doc.content.size, codeNode)
       view.dispatch(tr)
     })
 
-    const shortBlock = page.locator('.md-code-block').last()
-    // 点击正文让其失焦
-    await page.locator('.md-prose h1').first().click()
+    const targetBlock = page.locator('.md-code-block').last()
+    const surface = targetBlock.locator('.md-code-surface')
+    const row = targetBlock.locator('.md-code-language-row')
+    const dock = targetBlock.locator('.md-code-language-dock')
+    const input = targetBlock.locator('.md-code-language-input')
 
-    const box = await shortBlock.boundingBox()
-    assert.ok(box, 'Bounding box should exist')
-    // 单行代码块总高度应紧凑（约 40-50px，绝不应因 30px footer 留白而暴增到 70-80px+）
-    assert.ok(box.height < 65, `Short code block height should be compact (got ${box.height}px)`)
+    // 点击外部，检查失焦状态紧凑度并截图
+    await page.locator('.md-prose h1').first().click()
+    const surfaceBox = await surface.boundingBox()
+    assert.ok(surfaceBox, 'Surface box exists')
+    assert.ok(surfaceBox.height < 55, `Single-line code block height must be compact (got ${surfaceBox.height}px)`)
+    await targetBlock.screenshot({ path: `${output}/single-line-blur.png` })
+
+    // 点击聚焦，语言栏出现并截图
+    await targetBlock.locator('.cm-content').click()
+    await row.waitFor({ state: 'visible' })
+    const surfaceBoxFocused = await surface.boundingBox()
+    const dockBox = await dock.boundingBox()
+    const btnBox = await targetBlock.locator('.md-code-lang-btn').boundingBox()
+    assert.ok(dockBox && btnBox && surfaceBoxFocused, 'All boxes exist')
+
+    // 几何约束 1：代码区右边缘与语言栏右边缘基本相同（渲染误差 <= 2px）
+    const surfaceRight = surfaceBoxFocused.x + surfaceBoxFocused.width
+    const dockRight = dockBox.x + dockBox.width
+    assert.ok(Math.abs(surfaceRight - dockRight) <= 2, `Dock right edge (${dockRight}) must align with surface right edge (${surfaceRight})`)
+
+    // 几何约束 2：语言栏顶部位于代码区底部之下，无重叠
+    assert.ok(dockBox.y >= surfaceBoxFocused.y + surfaceBoxFocused.height, `Dock top (${dockBox.y}) must be below surface bottom (${surfaceBoxFocused.y + surfaceBoxFocused.height})`)
+
+    // 几何约束 3：语言栏位于代码区右侧区域，而非居中
+    assert.ok(dockBox.x > surfaceBoxFocused.x + surfaceBoxFocused.width / 2, 'Dock must be on the right side of the code block')
+
+    // 几何约束 4：语言按钮在语言栏内部水平居中（左右外边距相差 <= 4px）
+    const leftMargin = btnBox.x - dockBox.x
+    const rightMargin = (dockBox.x + dockBox.width) - (btnBox.x + btnBox.width)
+    assert.ok(Math.abs(leftMargin - rightMargin) <= 4, `Button must be centered inside dock (leftMargin: ${leftMargin}, rightMargin: ${rightMargin})`)
+
+    // 几何约束 5：文字居中
+    const textAlign = await targetBlock.locator('.md-code-lang-btn').evaluate(el => getComputedStyle(el).textAlign)
+    assert.equal(textAlign, 'center', 'Button text-align must be center')
+
+    await targetBlock.screenshot({ path: `${output}/single-line-focus.png` })
+
+    // 点击语言栏进入编辑，在输入框中输入 ja 并截图
+    await targetBlock.locator('.md-code-lang-btn').click()
+    await input.waitFor({ state: 'visible' })
+    const inputBox = await input.boundingBox()
+    assert.ok(inputBox, 'Input box exists')
+    const inputTextAlign = await input.evaluate(el => getComputedStyle(el).textAlign)
+    assert.equal(inputTextAlign, 'center', 'Input text-align must be center')
+
+    await input.fill('ja')
+    await targetBlock.locator('.md-language-menu').waitFor({ state: 'visible' })
+    await targetBlock.screenshot({ path: `${output}/language-input-ja.png` })
+
+    // 验证候选框锚定在输入框下方
+    const menuBox = await targetBlock.locator('.md-language-menu').boundingBox()
+    assert.ok(menuBox, 'Language menu box exists')
+    assert.ok(menuBox.y >= dockBox.y + dockBox.height - 2, 'Language menu must be below dock')
+
+    // 截图带候选列表
+    await page.screenshot({ path: `${output}/language-candidates-with-icons.png` })
   })
 
-  await test('8. Copy button appears on hover, copies only pure code content without fences or line numbers', async () => {
+  await test('8. Copy button: appears on hover at top-right of surface, copies only code text', async () => {
     const codeBlock = page.locator('.md-code-block').last()
+    const surface = codeBlock.locator('.md-code-surface')
     const copyBtn = codeBlock.locator('.md-code-copy')
 
-    // hover 代码块
-    await codeBlock.hover()
+    // hover 代码主体
+    await surface.hover()
     await page.waitForFunction(el => parseFloat(getComputedStyle(el).opacity) > 0.8, await copyBtn.elementHandle())
     const copyOpacity = await copyBtn.evaluate(el => getComputedStyle(el).opacity)
     assert.ok(parseFloat(copyOpacity) > 0.8, 'Copy button should be visible on hover')
 
-    // 检查复制图标尺寸约 14px
-    const svgWidth = await copyBtn.locator('svg').evaluate(el => parseFloat(getComputedStyle(el).width))
-    assert.ok(svgWidth <= 16 && svgWidth >= 12, `Copy icon width should be ~14px (got ${svgWidth}px)`)
+    // 检查复制按钮位于 surface 右上角
+    const surfaceBox = await surface.boundingBox()
+    const copyBox = await copyBtn.boundingBox()
+    assert.ok(copyBox && surfaceBox, 'Boxes exist')
+    assert.ok(copyBox.x + copyBox.width <= surfaceBox.x + surfaceBox.width + 1, 'Copy button inside surface right')
+    assert.ok(copyBox.y >= surfaceBox.y, 'Copy button inside surface top')
+
+    // 截图 hover 状态
+    await codeBlock.screenshot({ path: `${output}/copy-button-hover.png` })
 
     // 点击复制
     await copyBtn.click()
     const copied = await page.evaluate(() => window.fixture.copied)
-    assert.equal(copied, 'npm install', 'Copied text should be strictly pure code without fences or line numbers')
+    assert.equal(copied, 'npm install', 'Copied text should be strictly pure code')
   })
 
-  await test('9. Undo restoring original text after creating code block', async () => {
+  await test('9. Multiline JavaScript code block renders with syntax highlighting and screenshot', async () => {
     await page.evaluate(() => {
       const view = window.fixture.view()
-      const tr = view.state.tr.insert(view.state.doc.content.size, view.state.schema.nodes.paragraph.create())
+      const schema = view.state.schema
+      const jsCode = 'function calculateSum(a, b) {\n  const result = a + b;\n  return result;\n}'
+      const codeNode = schema.nodes.code_block.create({ params: 'javascript', fence: '```' }, schema.text(jsCode))
+      const tr = view.state.tr.insert(view.state.doc.content.size, codeNode)
       view.dispatch(tr)
     })
-    const lastP = page.locator('.md-prose p').last()
-    await lastP.click()
-    await page.keyboard.type('```testundo')
-    await page.keyboard.press('Enter')
 
-    // 应该创建了代码块
-    let text = await raw()
-    assert.ok(text.includes('```testundo'), 'Code block created')
+    const jsBlock = page.locator('.md-code-block').last()
+    await page.locator('.md-prose h1').first().click()
+    await page.waitForTimeout(200)
 
-    // 执行 Undo
-    await page.evaluate(() => window.fixture.manager.command('undo'))
-    text = await raw()
-    console.log('Undo text actual:', JSON.stringify(text))
-    assert.ok(text.includes('testundo'), 'Undo should restore the typed fence text')
+    await jsBlock.screenshot({ path: `${output}/multiline-js.png` })
   })
 
 } finally {

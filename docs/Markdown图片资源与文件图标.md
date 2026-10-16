@@ -15,7 +15,7 @@
 
 参考：[Typora 官方图片设置](https://support.typora.io/Images/)。借鉴目录与路径选项，文档级设置采用应用侧存储。
 
-![image-1792114613166](./assets/image-1792114613166.png)
+
 
 
 ## 文件权限与取舍

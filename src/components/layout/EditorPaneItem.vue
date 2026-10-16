@@ -1,10 +1,9 @@
 <template>
   <div
     ref="paneContainer"
+    :data-pane-id="paneId"
     :class="[
       `pane pane-${paneId}`,
-      // The classic two-pane class names stay valid for the first and second pane
-      // so existing selectors, styles and user expectations keep working.
       paneId === 'main' ? 'main-pane' : 'secondary-pane',
       { active: isActivePane }
     ]"
@@ -59,7 +58,7 @@
       @quick-open="$emit('open-palette', 'file')"
     />
 
-    <DropZoneOverlay :active="isDraggingOver" :zone="dragZone" />
+    <DropZoneOverlay :active="isDropActive" :zone="currentDropZone" />
   </div>
 </template>
 
@@ -73,12 +72,11 @@ import DropZoneOverlay, { type DropZone } from './DropZoneOverlay.vue'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { FileController } from '../../features/files/FileController'
 import type { SplitDirection } from '../../editor/layout/types'
+import { tabDragService } from '../../editor/layout/TabDragService'
 
 const props = defineProps<{
   paneId: string
   manager: DocumentManager
-  /** The manager is deliberately not reactive: this counter invalidates every
-   * pane computed below, exactly like the container's own revision counter. */
   revision: number
   files?: FileController
   welcome?: boolean
@@ -101,8 +99,20 @@ const paneContainer = ref<HTMLElement | null>(null)
 const isDraggingOver = ref(false)
 const dragZone = ref<DropZone | null>(null)
 
-// Every pane view is derived from non-reactive manager state, so each computed
-// reads the revision counter to stay invalidated with the container.
+const isDropActive = computed(() => {
+  return (
+    isDraggingOver.value ||
+    (tabDragService.isDragging.value && tabDragService.activePaneDrop.value?.paneId === props.paneId)
+  )
+})
+
+const currentDropZone = computed<DropZone>(() => {
+  if (tabDragService.isDragging.value && tabDragService.activePaneDrop.value?.paneId === props.paneId) {
+    return tabDragService.activePaneDrop.value.zone
+  }
+  return dragZone.value || 'center'
+})
+
 const paneModel = computed(() => { props.revision; return props.manager.layout.getPane(props.paneId) })
 const paneActiveId = computed(() => { props.revision; return paneModel.value?.group.activeId || null })
 const paneDocs = computed(() => {
@@ -162,13 +172,9 @@ function handleMoveTab(payload: { id: string; from: string; targetIndex?: number
 }
 
 function handleSplitTab(payload: { id: string; direction: SplitDirection; duplicate?: boolean }) {
-  if (payload.duplicate) {
-    props.manager.splitPane(payload.direction, props.paneId, payload.id)
-  } else {
-    props.manager.splitPane(payload.direction, props.paneId, payload.id)
-    if (props.manager.layout.getPane(props.paneId)?.group.tabs.some(t => t.documentId === payload.id)) {
-      props.manager.close(payload.id, false, props.paneId)
-    }
+  props.manager.splitPane(payload.direction, props.paneId, payload.id)
+  if (!payload.duplicate) {
+    props.manager.close(payload.id, false, props.paneId)
   }
 }
 
@@ -190,8 +196,12 @@ function handleClosePane() {
   props.manager.closePane(props.paneId)
 }
 
-// Fleet-style 4-direction Drop Targets: left, right, top, bottom, center
+// 4-direction Drop Targets: left, right, top, bottom, center
 function handleDragOver(event: DragEvent) {
+  const types = event.dataTransfer?.types || []
+  if (!types.includes('application/x-lightedit-tab') && !types.includes('application/x-lightedit-file')) {
+    return
+  }
   event.preventDefault()
   if (!paneContainer.value) return
   const rect = paneContainer.value.getBoundingClientRect()
@@ -199,7 +209,7 @@ function handleDragOver(event: DragEvent) {
 
   const x = (event.clientX - rect.left) / rect.width
   const y = (event.clientY - rect.top) / rect.height
-  const margin = 0.25
+  const margin = 0.22
 
   let zone: DropZone = 'center'
   if (x < margin) zone = 'left'
@@ -210,7 +220,7 @@ function handleDragOver(event: DragEvent) {
 
   dragZone.value = zone
   isDraggingOver.value = true
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+  if (event.dataTransfer) event.dataTransfer.dropEffect = (event.ctrlKey || event.altKey) ? 'copy' : 'move'
 }
 
 function handleDragLeave(event: DragEvent) {
@@ -224,6 +234,7 @@ function handleDrop(event: DragEvent) {
   const zone = dragZone.value || 'center'
   isDraggingOver.value = false
   dragZone.value = null
+  const isCopy = event.ctrlKey || event.altKey
 
   // 1. Internal Tab Drag
   const rawTab = event.dataTransfer?.getData('application/x-lightedit-tab')
@@ -232,10 +243,16 @@ function handleDrop(event: DragEvent) {
       const tab = JSON.parse(rawTab)
       if (typeof tab.id === 'string' && typeof tab.from === 'string') {
         if (zone === 'center') {
-          props.manager.moveTab(tab.id, tab.from, props.paneId)
+          if (isCopy) {
+            props.manager.open(tab.id, false, props.paneId)
+          } else {
+            props.manager.moveTab(tab.id, tab.from, props.paneId)
+          }
         } else {
           props.manager.splitPane(zone as SplitDirection, props.paneId, tab.id)
-          props.manager.close(tab.id, false, tab.from)
+          if (!isCopy) {
+            props.manager.close(tab.id, false, tab.from)
+          }
         }
         return
       }
@@ -265,5 +282,4 @@ function handleDrop(event: DragEvent) {
   position: relative;
   flex-direction: column;
 }
-
 </style>

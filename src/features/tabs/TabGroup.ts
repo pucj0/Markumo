@@ -6,17 +6,21 @@ export class TabGroup {
   activeId: string | null = null
   constructor(readonly id = 'main') {}
 
-  open(documentId: string, preview = true): string | null {
+  open(documentId: string, preview = true, canReplace?: (docId: string) => boolean): string | null {
     const existing = this.tabs.find(tab => tab.documentId === documentId)
     let replaced: string | null = null
     if (existing) {
       if (!preview) existing.pinned = true
     } else {
-      const previewIndex = preview ? this.tabs.findIndex(tab => !tab.pinned) : -1
+      const previewIndex = preview
+        ? this.tabs.findIndex(tab => !tab.pinned && (!canReplace || canReplace(tab.documentId)))
+        : -1
       if (previewIndex >= 0) {
         replaced = this.tabs[previewIndex].documentId
         this.tabs.splice(previewIndex, 1, { documentId, pinned: false })
-      } else this.tabs.push({ documentId, pinned: !preview })
+      } else {
+        this.tabs.push({ documentId, pinned: !preview })
+      }
     }
     this.activeId = documentId
     return replaced

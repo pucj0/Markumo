@@ -15,6 +15,8 @@ import { CodeBlockView } from './CodeBlockView'
 import { LiveImageView } from './LiveImageView'
 import { ImagePreview } from './ImagePreview'
 import { FenceAutocomplete } from './FenceAutocomplete'
+import { HtmlBlockView } from './HtmlBlockView'
+import { HtmlInlineView } from './HtmlInlineView'
 import { createLiveSearchPlugin } from './plugins/LiveSearch'
 import { LiveSearchController } from './LiveSearchController'
 import { createNodeTargetPlugin, nodeTargetKey, type NodeTarget } from './plugins/NodeTarget'
@@ -359,8 +361,18 @@ export class MarkdownEditorController implements LiveEditor {
           }
           return code
         },
-        protected_source: (node, view, getPos) => /^\$\$[\s\S]*\$\$$/.test(String(node.attrs.source).trim())
-          ? this.mathView(node, view, getPos, true) : this.protectedView(node, view, getPos),
+        html_block: (node, view, getPos) => new HtmlBlockView(node, view, getPos, this.options.resources, this.options.history),
+        html_inline: (node, view, getPos) => new HtmlInlineView(node, view, getPos, this.options.resources),
+        protected_source: (node, view, getPos) => {
+          const source = String(node.attrs.source || '').trim()
+          if (/^\$\$[\s\S]*\$\$$/.test(source)) {
+            return this.mathView(node, view, getPos, true)
+          }
+          if (node.attrs.label === 'HTML（安全源码）' || /^\s*<[a-zA-Z][\s\S]*>/m.test(source)) {
+            return new HtmlBlockView(node, view, getPos, this.options.resources, this.options.history)
+          }
+          return this.protectedView(node, view, getPos)
+        },
         image: (node, view, getPos) => {
           const imgView = new LiveImageView(
             node,

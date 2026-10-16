@@ -7,6 +7,8 @@ export const markdownSerializer = new MarkdownSerializer({ ...defaultMarkdownSer
   soft_break(state){state.write('\n')},
   math_inline(state,node){state.write('$'+node.attrs.latex+'$')},
   footnote_reference(state,node){state.write('[^'+node.attrs.label+']')},
+  html_block(state,node){state.write(node.attrs.source);state.closeBlock(node)},
+  html_inline(state,node){state.write(node.attrs.source)},
   protected_source(state,node){state.write(node.attrs.source);state.closeBlock(node)},
   list_item(state,node){if(node.attrs.checked!==null)state.write(node.attrs.checked?'[x] ':'[ ] ');state.renderContent(node)},
   code_block(state,node){

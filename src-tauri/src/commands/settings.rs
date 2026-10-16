@@ -18,6 +18,8 @@ pub struct EditorSettings {
     markdown_typography: MarkdownTypography,
     auto_save: bool,
     auto_save_delay: u32,
+    tree_click_mode: String,
+    keymap_preset: String,
     image_rules: ImageRules,
     document_image_rules: BTreeMap<String, ImageRules>,
     #[serde(default = "legacy_settings_version")]
@@ -63,6 +65,8 @@ impl Default for EditorSettings {
             markdown_typography: MarkdownTypography::default(),
             auto_save: false,
             auto_save_delay: 1500,
+            tree_click_mode: "double".into(),
+            keymap_preset: "lightedit".into(),
             image_rules: ImageRules::default(),
             document_image_rules: BTreeMap::new(),
             settings_version: 5,
@@ -95,13 +99,15 @@ fn validate(settings: &EditorSettings) -> Result<(), String> {
         || !["system", "consolas", "cascadia"].contains(&settings.font_family.as_str())
         || !(1..=8).contains(&settings.indent_size)
         || !(500..=10000).contains(&settings.auto_save_delay)
+        || !["single", "double"].contains(&settings.tree_click_mode.as_str())
+        || !["lightedit", "fleet", "typora"].contains(&settings.keymap_preset.as_str())
         || !(1..=5).contains(&settings.settings_version)
         || !(1..=3).contains(&settings.shortcut_version)
-        || settings.custom_shortcuts.len() > 32
+        || settings.custom_shortcuts.len() > 128
         || settings.custom_shortcuts.iter().any(|id| id.len()>64)
         || !["live", "source", "split"].contains(&settings.default_md_mode.as_str())
         || settings.file_modes.len() > 100
-        || settings.shortcuts.len() > 32
+        || settings.shortcuts.len() > 128
         || !valid_image_rules(&settings.image_rules)
         || settings.document_image_rules.len()>100
         || settings.document_image_rules.iter().any(|(key,value)|key.len()>16384||!valid_image_rules(value))
@@ -313,5 +319,66 @@ mod tests {
         assert_eq!(super::load(&path).unwrap().font_size, 17);
         std::fs::write(&path, b"corrupt").unwrap();
         assert!(super::load(&path).is_err());
+    }
+
+    #[test]
+    fn tree_click_mode_defaults_persists_and_migrates_legacy_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+
+        // 1. 全新配置加载默认 double 与 lightedit
+        let fresh = super::load(&path).unwrap();
+        assert_eq!(fresh.tree_click_mode, "double");
+        assert_eq!(fresh.keymap_preset, "lightedit");
+
+        // 2. 旧配置缺少 treeClickMode 与 keymapPreset 时加载成功且为默认
+        std::fs::write(&path, br#"{"theme":"dark","fontSize":16}"#).unwrap();
+        let legacy = super::load(&path).unwrap();
+        assert_eq!(legacy.tree_click_mode, "double");
+        assert_eq!(legacy.keymap_preset, "lightedit");
+
+        // 3. 保存 single 模式与 fleet 预设成功，重新加载保持
+        let mut settings = legacy;
+        settings.tree_click_mode = "single".into();
+        settings.keymap_preset = "fleet".into();
+        super::save(&path, &settings).unwrap();
+        let reloaded = super::load(&path).unwrap();
+        assert_eq!(reloaded.tree_click_mode, "single");
+        assert_eq!(reloaded.keymap_preset, "fleet");
+
+        // 4. 保存 double 模式与 typora 预设成功，重新加载保持
+        settings.tree_click_mode = "double".into();
+        settings.keymap_preset = "typora".into();
+        super::save(&path, &settings).unwrap();
+        let reloaded2 = super::load(&path).unwrap();
+        assert_eq!(reloaded2.tree_click_mode, "double");
+        assert_eq!(reloaded2.keymap_preset, "typora");
+
+        // 5. 无效值被拒绝，且原有设置文件完好未被破坏
+        for invalid in ["triple", "none", "", "DOUBLE", "singleClick", "invalid"] {
+            settings.tree_click_mode = invalid.into();
+            assert!(super::save(&path, &settings).is_err(), "Should reject invalid tree_click_mode: {}", invalid);
+            assert_eq!(super::load(&path).unwrap().tree_click_mode, "double");
+        }
+        settings.tree_click_mode = "double".into();
+
+        for invalid in ["vscode", "vim", "emacs", "", "FLEET", "custom"] {
+            settings.keymap_preset = invalid.into();
+            assert!(super::save(&path, &settings).is_err(), "Should reject invalid keymap_preset: {}", invalid);
+            assert_eq!(super::load(&path).unwrap().keymap_preset, "typora");
+        }
+        settings.keymap_preset = "lightedit".into();
+
+        // 6. 验证包含全部前端字段的完整 JSON 可正确往返反序列化并遵守 deny_unknown_fields
+        let full_json = serde_json::to_string(&super::EditorSettings::default()).unwrap();
+        assert!(full_json.contains(r#""treeClickMode":"double""#));
+        assert!(full_json.contains(r#""keymapPreset":"lightedit""#));
+        let roundtrip: super::EditorSettings = serde_json::from_str(&full_json).unwrap();
+        assert_eq!(roundtrip.tree_click_mode, "double");
+        assert_eq!(roundtrip.keymap_preset, "lightedit");
+
+        // 7. 严格保留 deny_unknown_fields：未知字段必须报错拒绝
+        let unknown_json = r#"{"theme":"dark","unknownField":"test"}"#;
+        assert!(serde_json::from_str::<super::EditorSettings>(unknown_json).is_err());
     }
 }

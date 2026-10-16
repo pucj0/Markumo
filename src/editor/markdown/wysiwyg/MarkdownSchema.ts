@@ -12,6 +12,16 @@ nodes.list_item.attrs = { ...nodes.list_item.attrs, checked: { default: null } }
 nodes.soft_break = { inline: true, group: 'inline', selectable: false, toDOM: () => ['br', { 'data-soft': 'true' }], parseDOM: [{tag:'br[data-soft]'}] }
 nodes.math_inline={inline:true,group:'inline',atom:true,attrs:{latex:{default:''}},toDOM:node=>['span',{'data-math':'true'},node.attrs.latex]}
 nodes.footnote_reference={inline:true,group:'inline',atom:true,attrs:{label:{default:''}},toDOM:node=>['sup',{'data-footnote':'true'},node.attrs.label]}
+nodes.html_block = {
+  group: 'block', atom: true, selectable: true, isolating: true,
+  attrs: { sourceId: {default:null}, source: {default:''} },
+  toDOM: () => ['div', {'data-html-block':'true', class:'md-html-block-node'}],
+}
+nodes.html_inline = {
+  group: 'inline', inline: true, atom: true, selectable: true,
+  attrs: { source: {default:''} },
+  toDOM: node => ['span', {'data-html-inline':'true', class:'md-html-inline-node'}, node.attrs.source],
+}
 nodes.protected_source = {
   group: 'block', atom: true, selectable: true, isolating: true,
   attrs: { sourceId: {default:null}, source: {default:''}, label: {default:'受保护源码'} },

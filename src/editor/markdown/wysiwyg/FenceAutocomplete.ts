@@ -101,6 +101,7 @@ export class FenceAutocomplete {
       const item = document.createElement('div')
       item.className = 'md-language-option'
       item.setAttribute('role', 'option')
+      item.setAttribute('aria-label', opt.name)
       item.setAttribute('aria-selected', String(index === this.selectedIndex))
       if (index === this.selectedIndex) {
         item.classList.add('is-active')

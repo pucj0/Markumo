@@ -39,6 +39,7 @@ const codeSearchDecorations = StateField.define<DecorationSet>({
 
 export class CodeBlockView implements NodeView {
   readonly dom = document.createElement('div')
+  readonly surface = document.createElement('div')
   readonly cm: CMView
   private language = new Compartment()
   private numbers = new Compartment()
@@ -76,10 +77,11 @@ export class CodeBlockView implements NodeView {
     private onSearchNavigate?: (forward: boolean) => void
   ) {
     this.isMermaid = /^mermaid(?:\s|$)/i.test(node.attrs.params)
-    this.dom.className = 'md-code-block'
+    this.dom.className = 'md-code-block md-code-block-container'
     this.dom.contentEditable = 'false'
+    this.surface.className = 'md-code-surface'
 
-    // Copy button (top-right, hover/focus display)
+    // Copy button (top-right of surface, hover display)
     this.copyButton.type = 'button'
     this.copyButton.className = 'md-code-copy'
     this.copyButton.setAttribute('aria-label', '复制代码')
@@ -97,8 +99,6 @@ export class CodeBlockView implements NodeView {
       }).catch(error => window.dispatchEvent(new CustomEvent('editor-notice', { detail: String(error) })))
     }
 
-    const langWrapper = document.createElement('div')
-    langWrapper.className = 'md-code-footer'
     this.selector = new LanguageSelector(node.attrs.params, params => {
       const pos = this.getPos()
       if (this.dead || pos === undefined || this.outer.state.doc.nodeAt(pos) !== this.node || this.cm.compositionStarted) return
@@ -108,7 +108,7 @@ export class CodeBlockView implements NodeView {
     })
     this.languageStatus.className = 'md-code-language-status'
     this.languageStatus.setAttribute('role', 'status')
-    langWrapper.append(this.languageStatus, this.selector.dom)
+    this.selector.dock.prepend(this.languageStatus)
 
     // Mermaid specific controls
     this.diagram.className = 'md-diagram'
@@ -133,8 +133,12 @@ export class CodeBlockView implements NodeView {
     // CodeMirror Container
     this.cmContainer.className = 'md-code-editor-wrap'
 
-    this.dom.append(this.copyButton, this.diagramToolbar, this.cmContainer, langWrapper, this.diagram)
+    this.surface.append(this.diagramToolbar, this.cmContainer, this.diagram, this.copyButton)
+    this.dom.append(this.surface, this.selector.row)
+
+    this.dom.addEventListener('focusin', () => this.updateFocusState())
     this.dom.addEventListener('focusout', () => queueMicrotask(() => {
+      this.updateFocusState()
       if (!this.dead && this.isEditingMermaid && !this.cm.compositionStarted && !this.dom.contains(document.activeElement)) this.setMermaidEditing(false)
     }))
 
@@ -215,7 +219,7 @@ export class CodeBlockView implements NodeView {
               this.outer.dispatch(tr)
             } else if (update.selectionSet || (update.focusChanged && update.view.hasFocus)) {
               if (update.focusChanged) {
-                this.dom.classList.toggle('is-focused', update.view.hasFocus)
+                this.updateFocusState()
               }
               const sel = update.state.selection.main
               this.outer.dispatch(
@@ -224,7 +228,7 @@ export class CodeBlockView implements NodeView {
                 )
               )
             } else if (update.focusChanged) {
-              this.dom.classList.toggle('is-focused', update.view.hasFocus)
+              this.updateFocusState()
             }
           }),
         ],
@@ -236,6 +240,12 @@ export class CodeBlockView implements NodeView {
     if (this.isMermaid) {
       this.setMermaidEditing(false)
     }
+  }
+
+  private updateFocusState() {
+    if (this.dead) return
+    const isFocused = this.cm.hasFocus || this.selector.isInteracting || this.dom.contains(document.activeElement)
+    this.dom.classList.toggle('is-focused', isFocused)
   }
 
   private setMermaidEditing(editing: boolean) {

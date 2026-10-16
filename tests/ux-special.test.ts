@@ -67,7 +67,7 @@ describe('编辑体验专项：源码与 UI 展示的边界', () => {
   })
   it('快捷键迁移只改变可识别的旧默认，保存明确自定义', () => {
     const {bold,italic,explorer,'close-current':close,...oldKeys} = defaultSettings().shortcuts
-    const legacy = { shortcuts:{...oldKeys,sidebar:'Mod+B',replace:'Mod+H'},shortcutVersion:1 }
+    const legacy = { shortcuts:{...oldKeys,sidebar:'Mod+B',replace:'Mod+H'} as Record<string, string>,shortcutVersion:1 }
     expect(settingsFrom(legacy).shortcuts.replace).toBe('Mod+R')
     expect(settingsFrom({...legacy,shortcutVersion:3,customShortcuts:['replace','sidebar']}).shortcuts.replace).toBe('Mod+H')
     legacy.shortcuts.find = 'Mod+Alt+F'

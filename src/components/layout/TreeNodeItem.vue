@@ -120,29 +120,33 @@ function handleDragStart(event: DragEvent) {
   if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove'
 }
 
+let lastFolderClickTime = 0
+
 function handleClick() {
   emit('locate-node', props.node)
-  if (props.treeClickMode === 'single') {
-    if (props.node.isDirectory) {
-      emit('toggle-folder', props.node)
-    } else {
-      emit('select-file', props.node)
+  if (props.node.isDirectory) {
+    if (props.treeClickMode === 'single') {
+      const now = Date.now()
+      if (now - lastFolderClickTime > 250) {
+        lastFolderClickTime = now
+        emit('toggle-folder', props.node)
+      }
     }
+  } else {
+    // 文件无论何种模式，单击均打开临时预览 (Preview Tab)
+    emit('select-file', props.node)
   }
 }
 
 function handleDblClick() {
   emit('locate-node', props.node)
-  if (props.treeClickMode === 'single') {
-    if (!props.node.isDirectory) {
-      emit('pin-file', props.node)
+  if (props.node.isDirectory) {
+    if (props.treeClickMode === 'double') {
+      emit('toggle-folder', props.node)
     }
   } else {
-    if (props.node.isDirectory) {
-      emit('toggle-folder', props.node)
-    } else {
-      emit('open-file', props.node)
-    }
+    // 文件双击固定为永久标签 (Permanent Tab)
+    emit('pin-file', props.node)
   }
 }
 

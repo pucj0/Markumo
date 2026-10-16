@@ -1,8 +1,9 @@
 <template>
   <div class="pane-body" :class="{ 'class-pane': doc?.kind === 'javaClass' }">
-    <div v-if="doc?.mode === 'live' && tooLarge" class="markdown-budget" role="status">文档超过 Live 安全预算，当前使用源码编辑。</div>
-    <div v-show="doc" ref="host" class="editor-host" @scroll.capture="onEditorScroll"></div>
-    <SplitPreview v-if="doc?.mode === 'split'" ref="preview" :content="text" :too-large="tooLarge" :resources="resources" :resource-key="`${doc?.fileToken||''}|${doc?.path||''}`" @scroll-line="onPreviewScroll" @edit-image="editImage" />
+    <div v-if="currentMode === 'live' && tooLarge" class="markdown-budget" role="status">文档超过 Live 安全预算，当前使用源码编辑。</div>
+    <div v-show="doc" ref="host" class="editor-host" :style="hostStyle" @scroll.capture="onEditorScroll"></div>
+    <div v-if="currentMode === 'split' && !tooLarge" class="split-resizer" title="拖动调整双栏比例" @mousedown.prevent="startSplitResize"></div>
+    <SplitPreview v-if="currentMode === 'split'" ref="preview" :style="previewStyle" :content="text" :too-large="tooLarge" :resources="resources" :resource-key="`${doc?.fileToken||''}|${doc?.path||''}`" @scroll-line="onPreviewScroll" @edit-image="editImage" />
     <ClassHexPanel v-if="doc?.kind === 'javaClass'" :key="doc.id" :doc="doc" :files="files" />
     <EmptyEditorPane v-if="!doc" @new-doc="newDocument" @quick-open="quickOpen" />
   </div>
@@ -18,32 +19,75 @@ import ClassHexPanel from './ClassHexPanel.vue'
 import type { FileController } from '../../features/files/FileController'
 import { markdownResources } from '../../editor/markdown/images'
 import EmptyEditorPane from './EmptyEditorPane.vue'
+
 const props = defineProps<{ manager: DocumentManager; pane: Pane; doc: EditorDocument | null; files?: FileController }>()
 const emit = defineEmits<{ (e: 'quick-open'): void }>()
+
 function newDocument() { props.manager.focusPane(props.pane, false); props.manager.createUntitled() }
 function quickOpen() { props.manager.focusPane(props.pane, false); emit('quick-open') }
+
 const host = ref<HTMLElement | null>(null), preview = ref<InstanceType<typeof SplitPreview> | null>(null)
 let previousText: Text | undefined, serialized = ''
-const tooLarge = computed(() => !!props.doc && (props.manager.getState(props.doc.id)?.doc.length || 0) > 1024 * 1024)
-const resources=computed(()=>props.doc ? props.manager.getState(props.doc.id)?.facet(markdownResources) : undefined)
-function editImage(from:number,snapshot:string) {
-  const id=props.doc?.id,state=id&&props.manager.getState(id)
-  if(!id||!state||props.manager.isComposing||state.doc.toString()!==snapshot||from<0||from>state.doc.length)return
-  const line=state.doc.lineAt(from)
-  props.manager.focusPane(props.pane,false)
-  props.manager.revealPosition(id,line.number,from-line.from+1)
+
+const currentMode = computed(() => {
+  return props.doc && props.manager ? props.manager.getMarkdownMode(props.doc.id, props.pane) : null
+})
+
+const splitRatio = ref(0.5)
+const hostStyle = computed(() => {
+  if (currentMode.value === 'split') {
+    return { flex: `0 0 ${splitRatio.value * 100}%` }
+  }
+  return { flex: '1 1 0%' }
+})
+const previewStyle = computed(() => {
+  return { flex: `0 0 ${(1 - splitRatio.value) * 100}%` }
+})
+
+function startSplitResize(_e: MouseEvent) {
+  const container = host.value?.parentElement
+  if (!container) return
+  const startRect = container.getBoundingClientRect()
+  const onMouseMove = (moveEvent: MouseEvent) => {
+    const newRatio = (moveEvent.clientX - startRect.left) / startRect.width
+    splitRatio.value = Math.max(0.2, Math.min(0.8, newRatio))
+  }
+  const onMouseUp = () => {
+    window.removeEventListener('mousemove', onMouseMove)
+    window.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup', onMouseUp)
 }
+
+const tooLarge = computed(() => !!props.doc && (props.manager.getState(props.doc.id)?.doc.length || 0) > 1024 * 1024)
+const resources = computed(() => props.doc ? props.manager.getState(props.doc.id)?.facet(markdownResources) : undefined)
+
+function editImage(from: number, snapshot: string) {
+  const id = props.doc?.id, state = id && props.manager.getState(id)
+  if (!id || !state || props.manager.isComposing || state.doc.toString() !== snapshot || from < 0 || from > state.doc.length) return
+  const line = state.doc.lineAt(from)
+  props.manager.focusPane(props.pane, false)
+  props.manager.revealPosition(id, line.number, from - line.from + 1)
+}
+
 const text = computed(() => {
-  const doc = props.doc?.mode === 'split' ? props.manager.getState(props.doc.id)?.doc : undefined
+  const doc = (currentMode.value === 'split' && props.doc) ? props.manager.getState(props.doc.id)?.doc : undefined
   if (!doc || tooLarge.value) { previousText = undefined; serialized = ''; return '' }
   if (doc !== previousText) { previousText = doc; serialized = doc.toString() }
   return serialized
 })
+
 let expectedTop: number | null = null
 function currentView() { const element = host.value?.querySelector<HTMLElement>('.cm-editor'); return element ? EditorView.findFromDOM(element) : null }
+
 function onEditorScroll(event: Event) {
   const scroller = event.target as HTMLElement
-  if (props.doc?.mode !== 'split' || !scroller.classList.contains('cm-scroller')) return
+  if (currentMode.value !== 'split' || !scroller.classList.contains('cm-scroller')) return
   if (expectedTop !== null && Math.abs(scroller.scrollTop - expectedTop) <= 1) { expectedTop = null; return }
   expectedTop = null
   const view = currentView()
@@ -52,9 +96,10 @@ function onEditorScroll(event: Event) {
   const block = view.lineBlockAtHeight(height), line = view.state.doc.lineAt(block.from)
   preview.value?.syncScroll(line.number + Math.max(0, Math.min(1, (height - block.top) / Math.max(block.height, 1))))
 }
+
 function onPreviewScroll(lineNumber: number) {
   const scroller = host.value?.querySelector<HTMLElement>('.cm-scroller')
-  if (!scroller) return
+  if (!scroller || currentMode.value !== 'split') return
   const view = currentView()
   if (!view) return
   const line = view.state.doc.line(Math.min(view.state.doc.lines, Math.max(1, Math.floor(lineNumber))))
@@ -62,17 +107,28 @@ function onPreviewScroll(lineNumber: number) {
   const next = block.top + (lineNumber % 1) * block.height + view.documentTop - scroller.getBoundingClientRect().top + scroller.scrollTop
   if (Math.abs(next - scroller.scrollTop) > 1) { scroller.scrollTop = next; expectedTop = scroller.scrollTop }
 }
+
 onMounted(() => { if (host.value) props.manager.mountPane(host.value, props.pane) })
-// A newly bound view may have been created while its host was still v-show hidden.
 watch(() => !!props.doc, (present, previous) => {
   if (present && !previous && props.manager.activePane === props.pane) props.manager.focusPane(props.pane)
 }, { flush: 'post' })
 onUnmounted(() => props.manager.unmount(props.pane))
 </script>
 <style scoped>
-.pane-body { flex:1;display:flex;min-width:0;min-height:0;position:relative;overflow:hidden }
-.editor-host { flex:1;min-height:0;min-width:0;overflow:hidden;display:flex }
-.editor-host :deep(.cm-editor) { height:100%;width:100% }
-.markdown-budget {position:absolute;top:0;right:12px;z-index:8;font-size: var(--ui-font-size);background:var(--side);padding:5px;color:var(--muted)}
-@media(max-width:900px) { .class-pane { flex-direction:column } }
+.pane-body { flex: 1; display: flex; min-width: 0; min-height: 0; position: relative; overflow: hidden }
+.editor-host { min-height: 0; min-width: 0; overflow: hidden; display: flex }
+.editor-host :deep(.cm-editor) { height: 100%; width: 100% }
+.split-resizer {
+  width: 5px;
+  background: var(--line);
+  cursor: col-resize;
+  flex: none;
+  transition: background 0.15s;
+  z-index: 5;
+}
+.split-resizer:hover {
+  background: var(--accent);
+}
+.markdown-budget { position: absolute; top: 0; right: 12px; z-index: 8; font-size: var(--ui-font-size); background: var(--side); padding: 5px; color: var(--muted) }
+@media(max-width:900px) { .class-pane { flex-direction: column } }
 </style>

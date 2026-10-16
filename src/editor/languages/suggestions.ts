@@ -79,6 +79,7 @@ export function createLanguageIconSvg(langKey: string): SVGSVGElement {
 
   if (def.monogram) {
     const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    text.setAttribute('aria-hidden', 'true')
     text.setAttribute('x', def.id === 'go' ? '14' : '12')
     text.setAttribute('y', def.id === 'rust' ? '15.6' : '16.3')
     text.setAttribute('text-anchor', 'middle')

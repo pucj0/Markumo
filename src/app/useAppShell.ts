@@ -20,6 +20,7 @@ import type { Encoding, FileOpenEncoding, Preferences } from '../features/files/
 import { WorkspaceController } from '../features/workspace/WorkspaceController'
 import { tauriWorkspace } from '../features/workspace/tauriWorkspace'
 import { currentSettingsVersion, defaultShortcuts, eventShortcut, fontFamilies, loadEditorSettings, saveEditorSettings, validateShortcuts, relativeFilePath, type EditorSettings, type ShortcutAction } from '../features/shell/editorSettings'
+import type { KeymapPresetId } from '../features/shell/keybindings'
 import { readablePath } from '../features/shell/pathDisplay'
 import { CommandRegistry, recentFileCommand, recentWorkspaceCommand } from '../features/shell/menuModel'
 import { mainMenu } from '../features/shell/mainMenu'
@@ -47,6 +48,7 @@ export function useAppShell() {
   const fontFamily = ref<EditorSettings['fontFamily']>('system'), indentSize = ref(2), useTabs = ref(false)
   const autoSave = ref(false), autoSaveDelay = ref(1500)
   const treeClickMode = ref<'double' | 'single'>('double')
+  const keymapPreset = ref<KeymapPresetId>('lightedit')
   const markdownTypography=ref(defaultMarkdownTypography())
   const imageRules = ref(defaultImageRules()), documentImageRules = ref<Record<string, ImageRules>>({})
   const shortcuts = ref<EditorSettings['shortcuts']>({ ...defaultShortcuts }), fileModes = ref<Record<string, MarkdownMode>>({})
@@ -511,6 +513,50 @@ export function useAppShell() {
       { id: 'restore-pane', title: '恢复编辑器布局', detail: '', category: 'action', action: () => manager.layout.restoreMaximized() },
       { id: 'merge-panes', title: '合并所有分栏', detail: '', category: 'action', action: () => manager.mergeAllPanes() },
       { id: 'close-current-pane', title: '关闭当前分栏', detail: '', category: 'action', disabled: !manager.isSplit, action: () => manager.closePane(manager.activePaneId) },
+      { id: 'delete-line', title: '删除当前行', detail: 'Ctrl+Shift+K', category: 'action', action: () => manager.command('delete-line') },
+      { id: 'copy-line-down', title: '向下复制行', detail: 'Shift+Alt+Down', category: 'action', action: () => manager.command('copy-line-down') },
+      { id: 'move-line-up', title: '向上移动行', detail: 'Alt+Up', category: 'action', action: () => manager.command('move-line-up') },
+      { id: 'move-line-down', title: '向下移动行', detail: 'Alt+Down', category: 'action', action: () => manager.command('move-line-down') },
+      { id: 'comment-line', title: '切换行注释', detail: 'Ctrl+/', category: 'action', action: () => manager.command('comment-line') },
+      { id: 'fold-code', title: '折叠当前代码块', detail: 'Ctrl+Alt+[', category: 'action', action: () => manager.command('fold-code') },
+      { id: 'unfold-code', title: '展开当前代码块', detail: 'Ctrl+Alt+]', category: 'action', action: () => manager.command('unfold-code') },
+      { id: 'next-tab', title: '切换到下一标签', detail: 'Ctrl+Alt+Right', category: 'action', action: () => {
+        const group = manager.paneGroup(manager.activePane)
+        const tabs = group.tabs
+        if (tabs.length > 1 && group.activeId) {
+          const idx = tabs.findIndex(t => t.documentId === group.activeId)
+          const next = tabs[(idx + 1) % tabs.length]
+          if (next) manager.select(next.documentId, manager.activePane)
+        }
+      }},
+      { id: 'previous-tab', title: '切换到上一标签', detail: 'Ctrl+Alt+Left', category: 'action', action: () => {
+        const group = manager.paneGroup(manager.activePane)
+        const tabs = group.tabs
+        if (tabs.length > 1 && group.activeId) {
+          const idx = tabs.findIndex(t => t.documentId === group.activeId)
+          const prev = tabs[(idx - 1 + tabs.length) % tabs.length]
+          if (prev) manager.select(prev.documentId, manager.activePane)
+        }
+      }},
+      { id: 'toggle-outline', title: '显示/隐藏大纲', detail: '', category: 'action', action: () => { showOutline.value = !showOutline.value } },
+      { id: 'toggle-focus', title: '切换专注模式', detail: 'F8', category: 'action', action: toggleFocus },
+      { id: 'table', title: '插入表格', detail: 'Ctrl+T', category: 'action', action: () => manager.formatMarkdown('table') },
+      { id: 'code-block', title: '插入代码块', detail: 'Ctrl+Shift+K', category: 'action', action: () => manager.formatMarkdown('code-block') },
+      { id: 'quote', title: '插入引用块', detail: 'Ctrl+Shift+Q', category: 'action', action: () => manager.formatMarkdown('quote') },
+      { id: 'link', title: '插入/编辑链接', detail: 'Ctrl+K', category: 'action', action: () => manager.formatMarkdown('link') },
+      { id: 'image', title: '插入图片', detail: 'Ctrl+Shift+I', category: 'action', action: () => { if (!desktop || fileBusy.value || activeDoc.value?.readOnly) return; void chooseImages() } },
+      { id: 'inline-code', title: '插入行内代码', detail: 'Ctrl+Shift+`', category: 'action', action: () => manager.formatMarkdown('inline-code') },
+      { id: 'strike', title: '删除线', detail: 'Alt+Shift+5', category: 'action', action: () => manager.formatMarkdown('strike') },
+      { id: 'heading-1', title: '一级标题 (H1)', detail: 'Ctrl+1', category: 'action', action: () => manager.formatMarkdown('heading-1') },
+      { id: 'heading-2', title: '二级标题 (H2)', detail: 'Ctrl+2', category: 'action', action: () => manager.formatMarkdown('heading-2') },
+      { id: 'heading-3', title: '三级标题 (H3)', detail: 'Ctrl+3', category: 'action', action: () => manager.formatMarkdown('heading-3') },
+      { id: 'heading-4', title: '四级标题 (H4)', detail: 'Ctrl+4', category: 'action', action: () => manager.formatMarkdown('heading-4') },
+      { id: 'heading-5', title: '五级标题 (H5)', detail: 'Ctrl+5', category: 'action', action: () => manager.formatMarkdown('heading-5') },
+      { id: 'heading-6', title: '六级标题 (H6)', detail: 'Ctrl+6', category: 'action', action: () => manager.formatMarkdown('heading-6') },
+      { id: 'heading-0', title: '普通段落', detail: 'Ctrl+0', category: 'action', action: () => manager.formatMarkdown('heading-0' as any) },
+      { id: 'md-mode-live', title: 'Markdown 实时排版', detail: 'Ctrl+Alt+1', category: 'action', action: () => setMarkdownMode('live') },
+      { id: 'md-mode-source', title: 'Markdown 源码编辑', detail: 'Ctrl+Alt+2', category: 'action', action: () => setMarkdownMode('source') },
+      { id: 'md-mode-split', title: 'Markdown 双栏预览', detail: 'Ctrl+Alt+3', category: 'action', action: () => setMarkdownMode('split') },
       { id: 'focus-left-pane', title: '聚焦左侧分栏', detail: '', category: 'action', action: () => manager.layout.focusDirection('left') },
       { id: 'focus-right-pane', title: '聚焦右侧分栏', detail: '', category: 'action', action: () => manager.layout.focusDirection('right') },
       { id: 'focus-up-pane', title: '聚焦上方分栏', detail: '', category: 'action', action: () => manager.layout.focusDirection('up') },
@@ -601,6 +647,7 @@ export function useAppShell() {
   }
 
   function handleGlobalKeydown(event: KeyboardEvent) {
+    if (document.querySelector('.recording-box')) return
     if(startupLoading.value){if(event.ctrlKey||event.metaKey)event.preventDefault();return}
     const alreadyHandled = event.defaultPrevented
     // Never let the WebView reload, including dialogs and customized bindings.
@@ -659,7 +706,7 @@ export function useAppShell() {
   watch(fontFamily, value => { document.documentElement.style.setProperty('--font-mono', fontFamilies[value]); manager.refreshTypography() }, { immediate: true })
   watch([indentSize,useTabs], () => manager.setIndent(indentSize.value,useTabs.value), { immediate: true })
   function settingsSnapshot(): EditorSettings {
-    return { markdownTypography:{...markdownTypography.value},theme: theme.value, uiFontSize: uiFontSize.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value, treeClickMode: treeClickMode.value,
+    return { markdownTypography:{...markdownTypography.value},theme: theme.value, uiFontSize: uiFontSize.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value, treeClickMode: treeClickMode.value, keymapPreset: keymapPreset.value,
       defaultMdMode: defaultMdMode.value, indentSize: indentSize.value, useTabs: useTabs.value, imageRules:{...imageRules.value},documentImageRules:{...documentImageRules.value}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[...customShortcuts.value], shortcuts: { ...shortcuts.value }, fileModes: { ...fileModes.value } }
   }
   function flushSettings() {
@@ -677,7 +724,7 @@ export function useAppShell() {
     shortcuts.value = value
   }
   watch([autoSave, autoSaveDelay], () => autoSaver.configure(desktop && settingsReady && autoSave.value, autoSaveDelay.value))
-  watch([markdownTypography,theme,uiFontSize,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,treeClickMode,imageRules,documentImageRules], () => {
+  watch([markdownTypography,theme,uiFontSize,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,treeClickMode,keymapPreset,imageRules,documentImageRules], () => {
     if (!settingsReady) return
     if (settingsTimer) clearTimeout(settingsTimer)
     settingsTimer = setTimeout(() => void flushSettings(),250)
@@ -716,6 +763,7 @@ export function useAppShell() {
       imageRules.value=settings.imageRules;documentImageRules.value=settings.documentImageRules
       showOutline.value = settings.showOutline; defaultMdMode.value = settings.defaultMdMode; indentSize.value = settings.indentSize; useTabs.value = settings.useTabs
       treeClickMode.value = settings.treeClickMode || 'double'
+      keymapPreset.value = settings.keymapPreset || 'lightedit'
       shortcuts.value = settings.shortcuts; fileModes.value = settings.fileModes; manager.setFileModes(settings.fileModes)
       customShortcuts.value=settings.customShortcuts
       // An older version could not record who enabled automatic save. Preserve
@@ -797,7 +845,7 @@ export function useAppShell() {
     sessionWriter?.dispose()
     autoSaver.dispose(); files.dispose(); workspace.destroy(); unsubscribeWorkspace(); unsubscribe(); manager.dispose()
   })
-  return { markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
+  return { markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
     paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, mainOpenedDocuments, mainActiveId, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
     setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, selectDocById, handleSelectDoc,
     pinDocById, createNewDoc, closeDocById,closeOtherTabs,cancelPendingClose, discardPending, savePending, setLanguage, setMarkdownMode,

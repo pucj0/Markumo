@@ -1,6 +1,7 @@
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { FileController } from '../files/FileController'
 import { displayPathKey } from '../shell/pathDisplay'
+import { sameFilePath } from '../files/pathKey'
 import type {
   SearchDonePayload,
   SearchMatch,
@@ -32,6 +33,9 @@ export class WorkspaceController {
   private searchSequence = 0
   private revealSequence = 0
   private expandSequence = 0
+  private openFileSeq = 0
+  private latestPaneSeq = new Map<string, number>()
+  private inFlightOpens = new Map<string, { seq: number; preview: boolean; promise: Promise<void> }>()
   private folderLoads = new Map<WorkspaceNode,Promise<boolean>>()
   expanding = false
 
@@ -304,12 +308,65 @@ export class WorkspaceController {
 
   async openFile(node: WorkspaceNode, preview = true) {
     if (node.isDirectory || this.documentManager.isComposing) return
-    try {
-      const openFile = await this.gateway.openWorkspaceFile(node.path)
-      this.fileController.accept(openFile, preview)
-    } catch (e) {
-      this.notify(`打开工作区文件失败: ${e}`)
+
+    const targetPane = this.documentManager.activePaneId
+    const targetPath = node.path
+
+    // 1. 若目标文件已打开：直接激活聚焦；若为双击(preview=false)则固定
+    const existingDoc = this.documentManager.openedDocuments.find(
+      doc => doc.path && sameFilePath(doc.path, targetPath)
+    )
+    if (existingDoc) {
+      if (!preview) {
+        this.documentManager.pin(existingDoc.id)
+      }
+      this.documentManager.select(existingDoc.id, targetPane)
+      return
     }
+
+    // 2. 若同一文件已有正在进行中的异步请求（如快速双击事件）：合并固定标记
+    const inFlight = this.inFlightOpens.get(targetPath)
+    if (inFlight) {
+      if (!preview) {
+        inFlight.preview = false
+      }
+      return inFlight.promise
+    }
+
+    const seq = ++this.openFileSeq
+    this.latestPaneSeq.set(targetPane, seq)
+
+    const requestInfo = { seq, preview, promise: Promise.resolve() }
+
+    const promise = (async () => {
+      try {
+        const openFile = await this.gateway.openWorkspaceFile(targetPath)
+
+        // 3. 过期检查：如果在等待读取期间同 Pane 发起了更新的打开请求（如 A->B->C）
+        const latestSeq = this.latestPaneSeq.get(targetPane) || 0
+        if (seq < latestSeq) {
+          // 当前响应已过期，释放其文件 token，避免泄漏
+          const alreadyOpen = this.documentManager.openedDocuments.some(
+            doc => doc.fileToken === openFile.token
+          )
+          if (!alreadyOpen) {
+            void this.fileController.gateway.release(openFile.token).catch(() => {})
+          }
+          return
+        }
+
+        // 4. 正常接收并展示（使用最终的 preview 标记）
+        this.fileController.accept(openFile, requestInfo.preview)
+      } catch (e) {
+        this.notify(`打开工作区文件失败: ${e}`)
+      } finally {
+        this.inFlightOpens.delete(targetPath)
+      }
+    })()
+
+    requestInfo.promise = promise
+    this.inFlightOpens.set(targetPath, requestInfo)
+    return promise
   }
 
   async createFile(parentDir: string, name: string) {

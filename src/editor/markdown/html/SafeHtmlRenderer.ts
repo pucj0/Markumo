@@ -1,0 +1,245 @@
+import DOMPurify from 'dompurify'
+import { safeMarkdownURL } from '../links'
+import { imageDestination, type MarkdownResources } from '../images'
+
+const ALLOWED_TAGS = [
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'p', 'div', 'span', 'strong', 'b', 'em', 'i', 'u', 's', 'del', 'mark',
+  'small', 'sub', 'sup', 'ruby', 'rt', 'rp', 'kbd', 'code', 'pre', 'br', 'hr',
+  'a', 'img', 'button', 'svg', 'path',
+  'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col',
+  'details', 'summary', 'blockquote', 'ul', 'ol', 'li',
+  'figure', 'figcaption', 'section', 'article', 'q', 'cite', 'abbr', 'time', 'var', 'samp',
+]
+
+const ALLOWED_ATTR = [
+  'id', 'class', 'style', 'title', 'dir', 'lang',
+  'href', 'target', 'rel',
+  'src', 'alt', 'width', 'height', 'loading',
+  'colspan', 'rowspan', 'headers', 'scope', 'align', 'valign',
+  'open', 'data-source-line', 'data-md-copy', 'viewbox', 'viewBox', 'fill', 'stroke', 'stroke-width', 'd',
+]
+
+const SAFE_CSS_PROPERTIES = new Set([
+  'color', 'background-color',
+  'font-size', 'font-weight', 'font-style', 'font-family',
+  'text-align', 'text-decoration', 'text-indent', 'line-height',
+  'width', 'height', 'max-width', 'max-height', 'min-width', 'min-height',
+  'margin', 'margin-left', 'margin-right', 'margin-top', 'margin-bottom',
+  'padding', 'padding-left', 'padding-right', 'padding-top', 'padding-bottom',
+  'border', 'border-radius', 'border-color', 'border-style', 'border-width',
+  'vertical-align', 'letter-spacing', 'word-spacing', 'opacity', 'display',
+])
+
+export function sanitizeCssStyle(rawStyle: string): string {
+  if (!rawStyle || typeof rawStyle !== 'string') return ''
+  const declarations = rawStyle.split(';')
+  const valid: string[] = []
+
+  for (const decl of declarations) {
+    const colonIdx = decl.indexOf(':')
+    if (colonIdx === -1) continue
+    const prop = decl.slice(0, colonIdx).trim().toLowerCase()
+    const val = decl.slice(colonIdx + 1).trim()
+
+    if (!SAFE_CSS_PROPERTIES.has(prop)) continue
+
+    const lowerVal = val.toLowerCase()
+    if (
+      lowerVal.includes('url(') ||
+      lowerVal.includes('@import') ||
+      lowerVal.includes('expression') ||
+      lowerVal.includes('javascript:') ||
+      lowerVal.includes('behavior') ||
+      lowerVal.includes('position') ||
+      lowerVal.includes('fixed')
+    ) {
+      continue
+    }
+
+    valid.push(`${prop}: ${val}`)
+  }
+
+  return valid.join('; ')
+}
+
+// 安全初始化 DOMPurify 实例（兼容浏览器与 Node 测试环境）
+let purifyInstance: any = null
+
+function getPurifier(): any {
+  if (purifyInstance) return purifyInstance
+  if (typeof window !== 'undefined') {
+    const raw = DOMPurify as any
+    purifyInstance = typeof raw === 'function' ? raw(window) : raw.default ? (typeof raw.default === 'function' ? raw.default(window) : raw.default) : raw
+    if (purifyInstance && purifyInstance.addHook && !purifyInstance.__hookAdded) {
+      purifyInstance.__hookAdded = true
+      purifyInstance.addHook('afterSanitizeAttributes', (node: Element) => {
+        if (node.tagName === 'A') {
+          const href = node.getAttribute('href')
+          if (href) {
+            const safe = safeMarkdownURL(href)
+            if (!safe) {
+              node.removeAttribute('href')
+            } else {
+              node.setAttribute('href', safe)
+              if (safe.startsWith('http:') || safe.startsWith('https:')) {
+                node.setAttribute('target', '_blank')
+                node.setAttribute('rel', 'noopener noreferrer')
+              }
+            }
+          }
+        }
+
+        if (node.hasAttribute('style')) {
+          const original = node.getAttribute('style') || ''
+          const clean = sanitizeCssStyle(original)
+          if (clean) {
+            node.setAttribute('style', clean)
+          } else {
+            node.removeAttribute('style')
+          }
+        }
+
+        if (node.tagName === 'IMG') {
+          if (node.getAttribute('width') === '') node.removeAttribute('width')
+          if (node.getAttribute('height') === '') node.removeAttribute('height')
+        }
+      })
+    }
+  }
+  return purifyInstance
+}
+
+/**
+ * 净化不可信的用户 HTML 源码，返回安全可直接渲染的 HTML 字符串
+ */
+export function sanitizeHtml(rawHtml: string): string {
+  if (!rawHtml || typeof rawHtml !== 'string') return ''
+
+  const purifier = getPurifier()
+  if (purifier && typeof purifier.sanitize === 'function') {
+    return purifier.sanitize(rawHtml, {
+      ALLOWED_TAGS,
+      ALLOWED_ATTR,
+      ALLOW_DATA_ATTR: false,
+      RETURN_DOM_FRAGMENT: false,
+      RETURN_DOM: false,
+      WHOLE_DOCUMENT: false,
+      CUSTOM_ELEMENT_HANDLING: {
+        tagNameCheck: () => false,
+        attributeNameCheck: () => false,
+      },
+    })
+  }
+
+  // Node 单元测试环境下的备用安全防线（严格剔除 script、iframe、事件属性）
+  return rawHtml
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+    .replace(/\s+on\w+\s*=\s*(?:'[^']*'|"[^"]*"|[^\s>]+)/gi, '')
+    .replace(/href\s*=\s*['"]javascript:[^'"]*['"]/gi, '')
+}
+
+export interface MountedImageHandle {
+  destroy: () => void
+}
+
+/**
+ * 扫描指定容器中的所有 <img>，接入本地授权资源或远程确认加载服务
+ */
+export function mountHtmlImages(
+  container: HTMLElement,
+  resources?: MarkdownResources,
+  onImageClick?: (img: HTMLImageElement) => void
+): MountedImageHandle {
+  const objectUrls: string[] = []
+  const imgElements = Array.from(container.querySelectorAll<HTMLImageElement>('img'))
+
+  for (const img of imgElements) {
+    const rawSrc = img.getAttribute('src') || ''
+    if (!rawSrc) continue
+
+    const dest = imageDestination(rawSrc)
+
+    if (onImageClick) {
+      img.style.cursor = 'pointer'
+      img.onclick = e => {
+        e.stopPropagation()
+        onImageClick(img)
+      }
+    }
+
+    if (dest.kind === 'blocked') {
+      replaceWithImageError(img, rawSrc, '只允许授权本地路径或合法的 HTTPS 图片')
+      continue
+    }
+
+    if (dest.kind === 'remote') {
+      if (resources && !resources.allowedRemote.has(dest.path)) {
+        const placeholder = document.createElement('span')
+        placeholder.className = 'md-html-remote-image-btn'
+        placeholder.textContent = `点击加载网络图片 (${dest.path})`
+        placeholder.onclick = (e) => {
+          e.stopPropagation()
+          resources.allowedRemote.add(dest.path)
+          img.src = dest.path
+          placeholder.replaceWith(img)
+        }
+        img.replaceWith(placeholder)
+      } else {
+        img.src = dest.path
+      }
+      continue
+    }
+
+    // 本地图片资源：通过 resources.loadLocal 加载
+    if (dest.kind === 'local' && resources) {
+      img.classList.add('md-html-img-loading')
+      resources
+        .loadLocal(dest.path)
+        .then(bytes => {
+          if (!img.isConnected) return
+          const type =
+            bytes[0] === 0x89
+              ? 'image/png'
+              : bytes[0] === 0xff
+              ? 'image/jpeg'
+              : bytes[0] === 0x47
+              ? 'image/gif'
+              : 'image/webp'
+          const url = URL.createObjectURL(new Blob([bytes], { type }))
+          objectUrls.push(url)
+          img.src = url
+          img.classList.remove('md-html-img-loading')
+          img.classList.add('md-html-img-ready')
+        })
+        .catch(err => {
+          if (!img.isConnected) return
+          img.classList.remove('md-html-img-loading')
+          const msg = err instanceof Error ? err.message : String(err)
+          replaceWithImageError(img, rawSrc, msg.includes('系统找不到') ? '目标路径图片不存在' : msg)
+        })
+    }
+  }
+
+  return {
+    destroy: () => {
+      for (const url of objectUrls) {
+        URL.revokeObjectURL(url)
+      }
+      objectUrls.length = 0
+    },
+  }
+}
+
+function replaceWithImageError(img: HTMLImageElement, src: string, reason: string) {
+  const errWrap = document.createElement('span')
+  errWrap.className = 'md-html-image-error'
+  errWrap.title = `${reason}\n${src}`
+  errWrap.innerHTML = `
+    <span class="md-image-error-icon">🖼️</span>
+    <span class="md-image-error-path">${src}</span>
+    <span class="md-image-error-tip">(${reason})</span>
+  `
+  img.replaceWith(errWrap)
+}

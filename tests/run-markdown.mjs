@@ -11,7 +11,7 @@ try {
   await server.listen()
   const port = server.httpServer.address().port
   const requested = process.argv.slice(2)
-  for (const script of requested.length ? requested : ['typora-codeblock-ui.mjs', 'markdown-interactions-ui.mjs', 'markdown-wysiwyg-ui.mjs', 'typora-parity-ui.mjs', 'language-experience-ui.mjs', 'typora-visual-ui.mjs', 'markdown-wysiwyg-performance.mjs']) {
+  for (const script of requested.length ? requested : ['filetree-preview-tab-ui.mjs', 'markdown-html-parity-ui.mjs', 'fleet-tab-drag-ui.mjs', 'typora-codeblock-ui.mjs', 'markdown-interactions-ui.mjs', 'markdown-wysiwyg-ui.mjs', 'typora-parity-ui.mjs', 'language-experience-ui.mjs', 'typora-visual-ui.mjs', 'markdown-wysiwyg-performance.mjs']) {
     const code = await new Promise((done, reject) => {
       const child = spawn(process.execPath, [resolve(root, 'tests', script)], {
         cwd: root, stdio: 'inherit', windowsHide: true,

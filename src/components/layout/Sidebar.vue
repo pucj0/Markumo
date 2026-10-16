@@ -402,10 +402,15 @@ function handleToggleFolder(node: WorkspaceNode) {
   void props.workspace.toggleFolder(node)
 }
 
+let lastRootClickTime = 0
 function handleRootClick(rootPath: string) {
   selectedPath.value = rootPath
   if (props.treeClickMode === 'single') {
-    toggleRoot(rootPath)
+    const now = Date.now()
+    if (now - lastRootClickTime > 250) {
+      lastRootClickTime = now
+      toggleRoot(rootPath)
+    }
   }
 }
 

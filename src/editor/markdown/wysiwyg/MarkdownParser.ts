@@ -11,7 +11,8 @@ const tokens = { ...defaultMarkdownParser.tokens,
   s:{mark:'strike'}, softbreak:{node:'soft_break'},
   math_inline:{node:'math_inline',getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({latex:tok.content})},
   footnote_reference:{node:'footnote_reference',getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({label:tok.content})},
-  html_inline:{node:'hard_break',getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>{if(!/^<br\s*\/?\s*>$/i.test(tok.content))throw new Error('HTML 保留源码');return null}},
+  html_inline:{node:'html_inline',getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({source:tok.content})},
+  html_block:{block:'html_block',noCloseToken:true,getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({source:tok.content})},
   fence:{block:'code_block',noCloseToken:true,getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({params:tok.info,fence:tok.markup})},
   bullet_list:{...defaultMarkdownParser.tokens.bullet_list,getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({bullet:tok.markup,tight:true})},
   list_item:{block:'list_item',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({checked:tok.meta?.checked ?? null})},
@@ -35,7 +36,55 @@ tokenizer.core.ruler.after('inline','lightedit_tasks', state => {
     if(match){stack[stack.length-1].meta={checked:match[1]!==' '};first!.content=first!.content.slice(match[0].length)}
   }
 })
-tokenizer.core.ruler.after('lightedit_tasks','lightedit_cells', state=>{
+tokenizer.core.ruler.after('lightedit_tasks','lightedit_inline_html_pairs', state => {
+  const voidTags = new Set(['img', 'br', 'hr', 'input', 'meta', 'link', 'area', 'base', 'col', 'embed', 'param', 'source', 'track', 'wbr'])
+  for (const token of state.tokens) {
+    if (token.type !== 'inline' || !token.children) continue
+    const children = token.children
+    const nextChildren: typeof children = []
+    let i = 0
+    while (i < children.length) {
+      const child = children[i]
+      if (child.type === 'html_inline') {
+        const openMatch = /^<([a-zA-Z][a-zA-Z0-9-]*)\b([^>]*)>$/.exec(child.content.trim())
+        const tag = openMatch ? openMatch[1].toLowerCase() : ''
+        if (openMatch && !voidTags.has(tag) && !child.content.endsWith('/>')) {
+          let closeIdx = -1
+          let depth = 1
+          for (let j = i + 1; j < children.length; j++) {
+            const nextChild = children[j]
+            if (nextChild.type === 'html_inline') {
+              if (new RegExp(`^<\\/${tag}\\s*>$`, 'i').test(nextChild.content.trim())) {
+                depth--
+                if (depth === 0) {
+                  closeIdx = j
+                  break
+                }
+              } else if (new RegExp(`^<${tag}\\b[^>]*>$`, 'i').test(nextChild.content.trim())) {
+                depth++
+              }
+            }
+          }
+          if (closeIdx !== -1) {
+            let merged = ''
+            for (let k = i; k <= closeIdx; k++) {
+              merged += children[k].content
+            }
+            const mergedToken = new state.Token('html_inline', '', 0)
+            mergedToken.content = merged
+            nextChildren.push(mergedToken)
+            i = closeIdx + 1
+            continue
+          }
+        }
+      }
+      nextChildren.push(child)
+      i++
+    }
+    token.children = nextChildren
+  }
+})
+tokenizer.core.ruler.after('lightedit_inline_html_pairs','lightedit_cells', state=>{
   const result:typeof state.tokens=[]
   for(const token of state.tokens){
     if(token.type==='th_close'||token.type==='td_close')result.push(new state.Token('paragraph_close','p',-1))
@@ -55,7 +104,7 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
   const scan=yaml ? yaml[0].replace(/[^\n]/g,' ') + source.slice(yaml[0].length) : source
   const env: Record<string, unknown> = { ...referenceEnvironment, references: { ...referenceEnvironment.references as object } }
   const parsed=tokenizer.parse(scan,env)
-  const ranges:{from:number;to:number;raw?:boolean;label?:string}[]=[]
+  const ranges:{from:number;to:number;raw?:boolean;isHtml?:boolean;label?:string}[]=[]
   if(yaml)ranges.push({from:0,to:yaml[0].replace(/\n$/,'').length,raw:true,label:'YAML Front Matter'})
   let level=0
   for(const token of parsed){
@@ -65,7 +114,7 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
         to--
         if(source[to-1]==='\r')to--
       }
-      ranges.push({from:starts[token.map[0]],to,raw:token.type==='html_block',label:'HTML（安全源码）'})
+      ranges.push({from:starts[token.map[0]],to,raw:token.type==='html_block',label:token.type==='html_block'?'HTML（安全源码）':'扩展语法（保留源码）'})
     }
     level+=token.nesting
   }

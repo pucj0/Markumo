@@ -69,3 +69,55 @@ body.light {
   --syntax-operator: #536175;
   --shadow: 0 24px 60px rgba(24, 32, 49, 0.15);
 }
+
+/* Fleet 风格标签拖拽悬浮幽灵卡片 */
+body.is-tab-dragging {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+body.is-tab-dragging * {
+  user-select: none !important;
+}
+
+.tab-drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--paper);
+  border: 1px solid var(--accent);
+  color: var(--bright);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  opacity: 0.92;
+  will-change: transform;
+}
+
+.tab-ghost-icon {
+  font-size: 13px;
+}
+
+.tab-ghost-name {
+  font-weight: 500;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-ghost-badge {
+  font-size: 10px;
+  background: var(--accentbg);
+  color: var(--accent);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+}

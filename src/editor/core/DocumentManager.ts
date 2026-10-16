@@ -1,10 +1,10 @@
 import { Annotation, Compartment, EditorState, EditorSelection, Prec, Transaction, Text, type Extension, type StateEffect, type TransactionSpec } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
-import { undo, redo, undoSelection, redoSelection, isolateHistory } from '@codemirror/commands'
+import { undo, redo, undoSelection, redoSelection, isolateHistory, deleteLine, copyLineDown, moveLineUp, moveLineDown, toggleComment } from '@codemirror/commands'
 import { findNext, findPrevious } from '@codemirror/search'
 import { showEditorSearch } from './searchPanel'
 import { createSearchQuery, expandReplacement } from './searchQuery'
-import { indentUnit } from '@codemirror/language'
+import { indentUnit, foldCode, unfoldCode } from '@codemirror/language'
 import { coreExtensions, editorTheme } from './extensions'
 import { detectLanguage, loadLanguage, type LanguageName } from '../languages'
 import { TabGroup } from '../../features/tabs/TabGroup'
@@ -38,7 +38,7 @@ interface CachedDocument {
   languageGeneration: number
   readyLanguageGeneration: number | null
   scroll: { top: number; left: number }
-  panes: Record<string, { selection: EditorSelection; top: number; left: number }>
+  panes: Record<string, { selection: EditorSelection; top: number; left: number; mode?: MarkdownMode }>
 }
 
 export class DocumentManager {
@@ -320,8 +320,23 @@ export class DocumentManager {
       record = this.create(seed)
     }
     this.captureScroll(targetPane)
+    const isMarkdown = /\.(md|markdown)$/i.test(record.meta.name)
+    if (!record.panes[targetPane]) {
+      record.panes[targetPane] = {
+        selection: record.state.selection,
+        top: 0,
+        left: 0,
+        mode: isMarkdown ? (record.meta.mode || this.defaultMarkdownMode || 'live') : undefined,
+      }
+    } else if (isMarkdown && !record.panes[targetPane].mode) {
+      record.panes[targetPane].mode = record.meta.mode || this.defaultMarkdownMode || 'live'
+    }
     const group = this.paneGroup(targetPane), previousId = group.activeId
-    const replaced = group.open(id, preview)
+    const canReplace = (docId: string) => {
+      const rec = this.records.get(docId)
+      return !rec?.meta.dirty
+    }
+    const replaced = group.open(id, preview, canReplace)
     if (replaced) this.release(replaced)
     this.activePane = targetPane
     if (previousId !== id) this.showActive(targetPane)
@@ -416,7 +431,8 @@ export class DocumentManager {
     const record = targetId && this.records.get(targetId)
     if (!record) { this.destroyView(resolved); return }
     if (!record.panes[resolved]) record.panes[resolved] = { selection: record.state.selection, top: 0, left: 0 }
-    if(record.meta.mode==='live' && record.state.doc.length<=1024*1024){
+    const paneMode = this.getMarkdownMode(record.meta.id, resolved)
+    if(paneMode==='live' && record.state.doc.length<=1024*1024){
       const existing=this.liveViews.get(resolved)
       if(existing?.id===record.meta.id){existing.editor.sync(record.state.doc.toString());return}
       this.destroyView(resolved)
@@ -424,7 +440,7 @@ export class DocumentManager {
       if(!parent||this.disposed)return
       const load={};this.liveLoads.set(resolved,load)
       void import('../markdown/wysiwyg/MarkdownEditorController').then(({MarkdownEditorController})=>{
-        if(this.disposed||this.liveLoads.get(resolved)!==load||this.paneGroup(resolved).activeId!==record.meta.id||record.meta.mode!=='live'||this.hosts.get(resolved)!==parent)return
+        if(this.disposed||this.liveLoads.get(resolved)!==load||this.paneGroup(resolved).activeId!==record.meta.id||this.getMarkdownMode(record.meta.id, resolved)!=='live'||this.hosts.get(resolved)!==parent)return
         const source=record.state.doc.toString(),saved=record.panes[resolved]
         const sibling=[...this.liveViews.values()].find(live=>live.id===record.meta.id)?.editor
         const editor=new MarkdownEditorController(parent,{
@@ -444,7 +460,7 @@ export class DocumentManager {
         this.liveLoads.delete(resolved)
         const root=parent.querySelector('.markdown-live');if(root){root.scrollTop=saved.top;root.scrollLeft=saved.left}
         this.notify()
-      }).catch(error=>{if(this.liveLoads.get(resolved)===load){this.liveLoads.delete(resolved);parent.querySelector('.markdown-live')?.remove();record.meta.mode='source';this.showActive(resolved);window.dispatchEvent(new CustomEvent('editor-notice',{detail:`Markdown Live 加载失败，已切到源码：${String(error)}`}))}})
+      }).catch(error=>{if(this.liveLoads.get(resolved)===load){this.liveLoads.delete(resolved);parent.querySelector('.markdown-live')?.remove();this.setMarkdownMode(record.meta.id, 'source', resolved);this.showActive(resolved);window.dispatchEvent(new CustomEvent('editor-notice',{detail:`Markdown Live 加载失败，已切到源码：${String(error)}`}))}})
       return
     }
     if(this.liveViews.has(resolved)||this.liveLoads.has(resolved)){this.destroyView(resolved);view=null}
@@ -510,9 +526,11 @@ export class DocumentManager {
         if (seed) record = this.create(seed)
       }
       if (record) {
-        if (!record.panes[newPaneId]) {
-          record.panes[newPaneId] = record.panes[resolvedTarget] ? { ...record.panes[resolvedTarget] } : { selection: record.state.selection, top: 0, left: 0 }
-        }
+        const sourcePaneState = record.panes[resolvedTarget]
+        const sourceMode = this.getMarkdownMode(openDocId, resolvedTarget)
+        record.panes[newPaneId] = sourcePaneState
+          ? { ...sourcePaneState, mode: sourceMode }
+          : { selection: record.state.selection, top: 0, left: 0, mode: sourceMode }
       }
     }
     this.activePane = newPaneId
@@ -727,8 +745,7 @@ export class DocumentManager {
     if (docChanged) {
       record.meta.dirty = !state.doc.eq(record.baseline) || !record.endings.equal(state, record.baselineEndings)
       record.meta.charCount = state.doc.length
-      this.group.pin(record.meta.id)
-      this.secondaryGroup.pin(record.meta.id)
+      this.pin(record.meta.id)
     }
     const position = state.selection.main.head
     const line = state.doc.lineAt(position)
@@ -806,14 +823,37 @@ export class DocumentManager {
     }
     this.notify()
   }
-  setMarkdownMode(id: string, mode: MarkdownMode): boolean {
+  getMarkdownMode(id?: string | null, pane: Pane = this.activePane): MarkdownMode | undefined {
+    if (!id) return undefined
+    const record = this.records.get(id)
+    if (!record || record.meta.kind === 'javaClass' || record.meta.encoding === 'Hex' || !/\.(md|markdown)$/i.test(record.meta.name)) {
+      return undefined
+    }
+    const resolved = this.resolvePaneId(pane)
+    return record.panes[resolved]?.mode || record.meta.mode || this.defaultMarkdownMode || 'live'
+  }
+  setMarkdownMode(id: string, mode: MarkdownMode, pane?: Pane): boolean {
     const record = this.records.get(id)
     if (!record || record.meta.kind === 'javaClass' || record.meta.encoding === 'Hex' || !/\.(md|markdown)$/i.test(record.meta.name) || !['live', 'source', 'split'].includes(mode) || this.disposed || this.isComposing) return false
     if(mode==='live'&&record.state.doc.length>1024*1024){window.dispatchEvent(new CustomEvent('editor-notice',{detail:'Markdown 超过 1 Mi 字符安全预算，请使用源码或双栏模式。'}));return false}
-    for(const pane of this.layout.getAllLeafIds())if(this.paneGroup(pane).activeId===id)this.captureScroll(pane)
-    record.meta.mode = mode
+
+    const resolved = this.resolvePaneId(pane || this.activePane)
+    if (!record.panes[resolved]) {
+      record.panes[resolved] = { selection: record.state.selection, top: 0, left: 0 }
+    }
+    this.captureScroll(resolved)
+    record.panes[resolved].mode = mode
+
+    // 只有当修改的是当前活动 Pane 或未传 pane 时，才同步更新 meta.mode 保持向下兼容
+    if (!pane || resolved === this.resolvePaneId(this.activePane)) {
+      record.meta.mode = mode
+    }
+
     this.effects(record, [record.markdownMode.reconfigure([])])
-    for(const pane of this.layout.getAllLeafIds())if(this.paneGroup(pane).activeId===id){this.destroyView(pane);this.showActive(pane)}
+    if (this.paneGroup(resolved).activeId === id) {
+      this.destroyView(resolved)
+      this.showActive(resolved)
+    }
     this.notify()
     return true
   }
@@ -839,7 +879,7 @@ export class DocumentManager {
   }
   refreshTypography() { this.setTheme(this.theme) }
   setMarkdownTypography(settings:MarkdownTypography){this.markdownTypography={...settings};for(const live of this.liveViews.values())live.editor.typography(settings)}
-  command(command: 'undo' | 'redo' | 'find' | 'replace' | 'find-next' | 'find-previous') {
+  command(command: 'undo' | 'redo' | 'find' | 'replace' | 'find-next' | 'find-previous' | 'delete-line' | 'copy-line-down' | 'move-line-up' | 'move-line-down' | 'comment-line' | 'fold-code' | 'unfold-code') {
     if (!this.activeId || this.isComposing) return
     if (command === 'undo') { this.historyCommand(false); return }
     if (command === 'redo') { this.historyCommand(true); return }
@@ -856,6 +896,13 @@ export class DocumentManager {
     view.focus()
     if (command === 'find-next') findNext(view)
     else if (command === 'find-previous') findPrevious(view)
+    else if (command === 'delete-line') deleteLine(view)
+    else if (command === 'copy-line-down') copyLineDown(view)
+    else if (command === 'move-line-up') moveLineUp(view)
+    else if (command === 'move-line-down') moveLineDown(view)
+    else if (command === 'comment-line') toggleComment(view)
+    else if (command === 'fold-code') foldCode(view)
+    else if (command === 'unfold-code') unfoldCode(view)
     else showEditorSearch(view, command === 'replace')
   }
   dispose() {

@@ -6,6 +6,13 @@ import { foldKeymap } from '@codemirror/language'
 import { defaultImageRules, imageRulesFrom, type ImageRules } from '../../editor/markdown/imageImport'
 import { completionKeymap, closeBracketsKeymap } from '@codemirror/autocomplete'
 import { defaultMarkdownTypography, type MarkdownTypography } from '../../editor/markdown/wysiwyg/contracts'
+import {
+  type KeymapPresetId,
+  keybindingLabel,
+  eventToKeybinding,
+} from './keybindings'
+
+export { keybindingLabel, eventToKeybinding }
 export const defaultShortcuts = {
   new: 'Mod+N', open: 'Mod+O', save: 'Mod+S', 'save-as': 'Mod+Shift+S',
   palette: 'Mod+Shift+P', 'quick-open': 'Mod+P', find: 'Mod+F', replace: 'Mod+R',
@@ -16,7 +23,7 @@ export const defaultShortcuts = {
   undo: 'Mod+Z', redo: 'Mod+Y', uppercase: 'Mod+Alt+U', lowercase: 'Mod+Alt+L',
 } as const
 export type ShortcutAction = keyof typeof defaultShortcuts
-export const shortcutLabels: Record<ShortcutAction, string> = {
+export const shortcutLabels: Record<string, string> = {
   new: '新建文档', open: '打开文件', save: '保存文件', 'save-as': '另存为', palette: '命令面板', 'quick-open': '快速打开',
   find: '查找', replace: '替换', 'find-next': '查找下一个', 'find-previous': '查找上一个', 'goto-line': '转到行',
   'split-editor': '切换分栏', 'switch-pane': '切换窗格', sidebar: '切换侧边栏', 'workspace-search': '工作区搜索',
@@ -34,6 +41,7 @@ export interface EditorSettings {
   wordWrap: boolean; showOutline: boolean; indentSize: number; useTabs: boolean; defaultMdMode: MarkdownMode
   autoSave: boolean; autoSaveDelay: number
   treeClickMode: 'double' | 'single'
+  keymapPreset: KeymapPresetId
   imageRules: ImageRules
   documentImageRules: Record<string, ImageRules>
   settingsVersion: number
@@ -45,7 +53,7 @@ export interface EditorSettings {
 }
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
 export function defaultSettings(): EditorSettings {
-  return { markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, treeClickMode: 'double', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
+  return { markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, treeClickMode: 'double', keymapPreset: 'lightedit', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
 }
 /** Drop the transient migration notice before writing preferences to disk. */
 export function persistedSettings(settings: EditorSettings) {
@@ -64,7 +72,7 @@ export function validateShortcuts(shortcuts: Record<string, string>): string | n
   const used = new Set<string>()
   for (const id of Object.keys(defaultShortcuts)) {
     const raw = shortcuts[id], key = typeof raw === 'string' ? normalizeShortcut(raw) : null
-    if (!key) return `无效快捷键：${shortcutLabels[id as ShortcutAction]}（使用 Mod、Alt、Shift 和按键）`
+    if (!key) return `无效快捷键：${shortcutLabels[id] || id}（使用 Mod、Alt、Shift 和按键）`
     if (['Mod+C','Mod+V','Mod+X','Mod+A','Mod+Shift+Z','Mod+U','Mod+Shift+U','Mod+D','Mod+Enter','Mod+Shift+K','Mod+/','Mod+Alt+[','Mod+Alt+]','Mod+Shift+[','Mod+Shift+]'].includes(key)) return `快捷键 ${key} 已被编辑器保留`
     if (reservedEditorKeys.has(key)) return `快捷键 ${key} 已被编辑器保留`
     if (used.has(key)) return `快捷键 ${key} 重复`
@@ -124,6 +132,9 @@ export function settingsFrom(raw: unknown): EditorSettings {
   if (Number.isInteger(s.indentSize) && s.indentSize! >= 1 && s.indentSize! <= 8) defaults.indentSize = s.indentSize!
   if (['live','source','split'].includes(s.defaultMdMode || '')) defaults.defaultMdMode = s.defaultMdMode!
   if (s.treeClickMode === 'single' || s.treeClickMode === 'double') defaults.treeClickMode = s.treeClickMode
+  if (['lightedit', 'fleet', 'typora'].includes(s.keymapPreset || '')) {
+    defaults.keymapPreset = s.keymapPreset as KeymapPresetId
+  }
   const shortcuts = { ...defaults.shortcuts, ...s.shortcuts }
   for (const id of Object.keys(defaultShortcuts) as ShortcutAction[]) {
     if (typeof shortcuts[id] === 'string') shortcuts[id] = normalizeShortcut(shortcuts[id]) || shortcuts[id]
@@ -132,7 +143,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
   const legacyDefaults = { ...defaultShortcuts, sidebar:'Mod+B', replace:version < 2 ? 'Mod+H' : 'Mod+R' }
   // Old files have no per-key customization provenance. Migrate an untouched
   // old default map; preserve ambiguous/custom maps rather than overwrite intent.
-  const explicit = new Set<ShortcutAction>(Array.isArray(s.customShortcuts) ? s.customShortcuts.filter(id => Object.prototype.hasOwnProperty.call(defaultShortcuts,id)) : [])
+  const explicit = new Set<ShortcutAction>(Array.isArray(s.customShortcuts) ? s.customShortcuts.filter(id => Object.prototype.hasOwnProperty.call(defaultShortcuts,id)) as ShortcutAction[] : [])
   const untouched = !explicit.size && Object.entries(s.shortcuts || {}).every(([id, value]) => legacyDefaults[id as ShortcutAction] === value)
   if (version < 2 && untouched && shortcuts.replace === 'Mod+H') shortcuts.replace = 'Mod+R'
   if (version < 3 && untouched && shortcuts.sidebar === 'Mod+B') shortcuts.sidebar = defaultShortcuts.sidebar

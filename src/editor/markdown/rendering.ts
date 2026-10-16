@@ -5,6 +5,7 @@ import { fenceLanguage, loadLanguage, type LanguageName } from '../languages'
 import { parser } from '@lezer/markdown'
 import { imageDestination } from './images'
 import { markdownSemantics, markdownSyntaxExtensions } from './semantics'
+import { sanitizeHtml } from './html/SafeHtmlRenderer'
 const imageParser=parser.configure(markdownSyntaxExtensions)
 
 // Shared semantics: GFM tables/tasks, literal punctuation, visible soft line breaks,
@@ -68,7 +69,13 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
     if(token.meta?.inTable||typeof token.meta?.from!=='number')return md.utils.escapeHtml(`![${alt}](${source})`)
     return `<span class="md-image-slot" data-md-source="${md.utils.escapeHtml(source)}" data-md-alt="${md.utils.escapeHtml(alt)}" data-source-from="${token.meta.from}"></span>`
   }
-  const fence=md.renderer.rules.fence!
-  md.renderer.rules.fence=(tokens,index,options,env,self)=>`<div class="md-preview-fence"><div class="md-preview-fence-header"><span>${md.utils.escapeHtml(tokens[index].info.trim()||'text')}</span><button type="button" data-md-copy>复制代码</button></div>${fence(tokens,index,options,env,self)}</div>`
+  const fence = md.renderer.rules.fence!
+  md.renderer.rules.fence = (tokens, index, options, env, self) => {
+    const copyIcon = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 9h11v12H9z M5 15H3V3h12v2"/></svg>`
+    const copyButton = `<button type="button" class="md-code-copy" data-md-copy title="复制代码" aria-label="复制代码">${copyIcon}</button>`
+    return `<div class="md-preview-fence md-code-surface">${copyButton}${fence(tokens, index, options, env, self)}</div>`
+  }
+  md.renderer.rules.html_block = (tokens, index) => sanitizeHtml(tokens[index].content)
+  md.renderer.rules.html_inline = (tokens, index) => sanitizeHtml(tokens[index].content)
   return md
 }

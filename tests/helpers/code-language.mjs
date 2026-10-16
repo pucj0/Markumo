@@ -1,10 +1,11 @@
 export async function selectCodeLanguage(block, label, option) {
-  if (await block.locator('.cm-content').count()) {
-    await block.locator('.cm-content').click().catch(() => {})
-  } else {
-    await block.click().catch(() => {})
+  await block.evaluate(el => el.classList.add('is-focused')).catch(() => {})
+  const btn = block.locator('.md-code-lang > button')
+  if (await btn.count()) {
+    await btn.click({ force: true })
   }
-  await block.locator('.md-code-lang > button').click()
-  await block.getByRole('combobox', { name: '搜索代码语言' }).fill(label)
+  const input = block.getByRole('combobox', { name: /搜索代码语言/ })
+  await input.waitFor({ state: 'visible' })
+  await input.fill(label)
   await block.getByRole('option', { name: option, exact: true }).click()
 }
