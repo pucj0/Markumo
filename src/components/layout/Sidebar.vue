@@ -25,12 +25,12 @@
             <div ref="treeContainer" class="workspace-tree-container" tabindex="0" aria-label="工作区目录树" @scroll="treeScrollTop = ($event.target as HTMLElement).scrollTop">
               <div :style="{ height: `${treeStart * rowHeight}px` }"></div>
               <template v-for="row in visibleTree" :key="row.node.path">
-              <div v-if="row.root" class="treenode folder root-folder" :title="`${row.root.name}\n${readablePath(row.root.rootPath)}`" @contextmenu.prevent.stop="rootMenu($event,row.root)" @keydown.shift.f10.prevent.stop="rootMenu($event,row.root)">
-                <button class="root-toggle" @click="toggleRoot(row.root.rootPath)"><span class="twisty">{{ collapsedRoots.includes(row.root.rootPath) ? '▸' : '▾' }}</span><Icon name="folder" size="small" /><span class="label">{{ row.root.name }}</span></button>
+              <div v-if="row.root" class="treenode folder root-folder" :class="{ active: selectedPath && displayPathKey(selectedPath) === displayPathKey(row.root.rootPath) }" :title="`${row.root.name}\n${readablePath(row.root.rootPath)}`" @click="handleRootClick(row.root.rootPath)" @dblclick="handleRootDblClick(row.root.rootPath)" @contextmenu.prevent.stop="rootMenu($event,row.root)" @keydown.shift.f10.prevent.stop="rootMenu($event,row.root)">
+                <div class="root-toggle"><span class="twisty" @click.stop="toggleRoot(row.root.rootPath)">{{ collapsedRoots.includes(row.root.rootPath) ? '▸' : '▾' }}</span><Icon name="folder" size="small" /><span class="label">{{ row.root.name }}</span></div>
                 <div class="root-actions">
-                <button class="ib small" :aria-label="`在 ${row.root.name} 中新建文件`" title="在此文件夹中新建文件" @click="handleCreateFile(row.root.rootPath)">+</button>
-                <button class="ib small" :aria-label="`在 ${row.root.name} 中新建文件夹`" title="在此文件夹中新建文件夹" @click="handleCreateDir(row.root.rootPath)"><Icon name="open" size="small" /></button>
-                <button class="ib small" :aria-label="`从工作区移除 ${row.root.name}`" title="从工作区移除（不删除文件）" @click="workspace.removeFolder(row.root.rootPath)">×</button>
+                <button class="ib small" :aria-label="`在 ${row.root.name} 中新建文件`" title="在此文件夹中新建文件" @click.stop="handleCreateFile(row.root.rootPath)">+</button>
+                <button class="ib small" :aria-label="`在 ${row.root.name} 中新建文件夹`" title="在此文件夹中新建文件夹" @click.stop="handleCreateDir(row.root.rootPath)"><Icon name="open" size="small" /></button>
+                <button class="ib small" :aria-label="`从工作区移除 ${row.root.name}`" title="从工作区移除（不删除文件）" @click.stop="workspace.removeFolder(row.root.rootPath)">×</button>
                 </div>
               </div>
               <TreeNodeItem v-else
@@ -39,11 +39,15 @@
                 :depth="row.depth"
                 flat
                 :active-path="activeDocPath"
+                :selected-path="selectedPath"
+                :tree-click-mode="treeClickMode"
                 :dirty-paths="dirtyDocPaths"
                 :desktop="desktop"
-                @select-file="workspace.openFile($event)"
+                @locate-node="handleLocateNode"
+                @select-file="handleFileSelect"
+                @open-file="handleFileOpen"
                 @pin-file="workspace.openFile($event, false)"
-                @toggle-folder="workspace.toggleFolder($event)"
+                @toggle-folder="handleToggleFolder"
                 @create-file="handleCreateFile"
                 @rename-node="handleRenameNode"
                 @delete-node="handleDeleteNode"
@@ -225,7 +229,7 @@ import ContextMenu from '../common/ContextMenu.vue'
 import { CommandRegistry, menuCommand as cmd, separator } from '../../features/shell/menuModel'
 import { textClipboard } from '../../features/shell/clipboard'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   width: number
   uiFontSize?: number
   activePanel: SidebarPanel
@@ -235,7 +239,10 @@ const props = defineProps<{
   workspace: WorkspaceController
   desktop: boolean
   manager?: DocumentManager
-}>()
+  treeClickMode?: 'double' | 'single'
+}>(), {
+  treeClickMode: 'double',
+})
 
 const emit = defineEmits<{
   (e: 'update:width', w: number): void
@@ -298,8 +305,10 @@ async function locateCurrentFile() {
   if(!found){notice('无法定位当前文件：文件不存在、被忽略或目录无法读取。');return}
   const root=props.workspace.rootForPath(path)
   collapsedRoots.value=collapsedRoots.value.filter(item=>item!==root)
+  selectedPath.value = path
   await nextTick();scrollActiveIntoView()
 }
+const selectedPath = ref<string | null>(null)
 const treeScrollTop = ref(0)
 const treeContainer = ref<HTMLElement | null>(null), treeHeight = ref(0)
 let treeObserver: ResizeObserver | undefined
@@ -350,7 +359,8 @@ const activeDocPath = computed(() => {
   return props.openDocs.find(d => d.id === props.activeDocId)?.path
 })
 function scrollActiveIntoView() {
-  const element = treeContainer.value, index = flatTree.value.findIndex(row => activeDocPath.value && displayPathKey(row.node.path) === displayPathKey(activeDocPath.value))
+  const targetPath = selectedPath.value || activeDocPath.value
+  const element = treeContainer.value, index = flatTree.value.findIndex(row => targetPath && displayPathKey(row.node.path) === displayPathKey(targetPath))
   if (!element || index < 0) return
   const top = index * rowHeight.value, bottom = top + rowHeight.value
   if (top < element.scrollTop) element.scrollTop = top
@@ -359,6 +369,7 @@ function scrollActiveIntoView() {
 }
 watch([activeDocPath, () => props.workspace.openRevision], async ([path]) => {
   if (!path || props.activePanel !== 'files') return
+  selectedPath.value = path
   const root = props.workspace.rootForPath(path)
   collapsedRoots.value = collapsedRoots.value.filter(item => item !== root)
   await props.workspace.revealFileInTree(path)
@@ -372,15 +383,48 @@ const dirtyDocPaths = computed(() => {
   return props.openDocs.filter(d => d.dirty).map(d => d.path)
 })
 
+function handleLocateNode(node: WorkspaceNode) {
+  selectedPath.value = node.path
+}
+
+function handleFileSelect(node: WorkspaceNode) {
+  selectedPath.value = node.path
+  void props.workspace.openFile(node)
+}
+
+function handleFileOpen(node: WorkspaceNode) {
+  selectedPath.value = node.path
+  void props.workspace.openFile(node, false)
+}
+
+function handleToggleFolder(node: WorkspaceNode) {
+  selectedPath.value = node.path
+  void props.workspace.toggleFolder(node)
+}
+
+function handleRootClick(rootPath: string) {
+  selectedPath.value = rootPath
+  if (props.treeClickMode === 'single') {
+    toggleRoot(rootPath)
+  }
+}
+
+function handleRootDblClick(rootPath: string) {
+  selectedPath.value = rootPath
+  if (props.treeClickMode === 'double') {
+    toggleRoot(rootPath)
+  }
+}
+
 async function handleCreateFile(parentDir: string) {
-  const name = await operationDialog.value?.ask({ title: '新建文件', description: parentDir, confirmLabel: '创建', initialValue: '' })
+  const name = await operationDialog.value?.ask({ title: '新建文件', description: '', confirmLabel: '创建', initialValue: '' })
   if (name && name.trim()) {
     void props.workspace.createFile(parentDir, name.trim())
   }
 }
 
 async function handleCreateDir(parentDir: string) {
-  const name = await operationDialog.value?.ask({ title: '新建文件夹', description: parentDir, confirmLabel: '创建', initialValue: '' })
+  const name = await operationDialog.value?.ask({ title: '新建文件夹', description: '', confirmLabel: '创建', initialValue: '' })
   if (name && name.trim()) {
     void props.workspace.createDirectory(parentDir, name.trim())
   }
@@ -569,10 +613,27 @@ onUnmounted(() => {
 }
 
 .twisty {
-  width: 12px;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   color: var(--muted);
-  font-size: var(--ui-small-font-size);
+  font-size: 13px;
+  border-radius: 3px;
+  user-select: none;
+  transition: color 0.1s, background-color 0.1s;
+}
+
+.root-folder .twisty {
+  cursor: pointer;
+}
+
+.root-folder .twisty:hover {
+  color: var(--bright);
+  background: var(--hover);
 }
 
 .label {

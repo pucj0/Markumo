@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
-  <title>LightEdit</title>
-  <desc>A quiet ink tile, a geometric L, and a sage insertion cursor.</desc>
-  <rect x="24" y="24" width="464" height="464" rx="112" fill="#252D36"/>
-  <path d="M144 128H200V328H368V384H144V128Z" fill="#F2F1EB"/>
-  <path d="M296 128H328V272H296V128Z" fill="#A9C1B0"/>
-</svg>

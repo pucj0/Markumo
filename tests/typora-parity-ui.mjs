@@ -3,6 +3,7 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises'
 
 import { chromium, browserOptions } from './helpers/markdown-browser.mjs'
 import { selectCodeLanguage } from './helpers/code-language.mjs'
+import { tableAction } from './helpers/table-tools.mjs'
 
 const output = 'test-results/typora-parity'
 await mkdir(output, { recursive: true })
@@ -244,7 +245,7 @@ try {
     await page.screenshot({ path: `${output}/step7-8-table-toolbar.png` })
 
     const initialRows = await table.locator('tr').count()
-    await toolbar.getByRole('button', { name: '后插行', exact: true }).click()
+    await tableAction(toolbar,'后插行')
     assert.equal(await table.locator('tr').count(), initialRows + 1)
 
     // Undo additions

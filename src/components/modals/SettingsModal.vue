@@ -29,6 +29,7 @@
               <div class="settingrow"><label for="settings-outline">显示文档大纲</label><input id="settings-outline" class="setting-switch" type="checkbox" :checked="showOutline" @change="$emit('update:showOutline', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><label for="settings-indent">缩进宽度</label><select id="settings-indent" :value="indentSize" @change="$emit('update:indentSize', Number(($event.target as HTMLSelectElement).value))"><option v-for="n in 8" :key="n" :value="n">{{ n }}</option></select></div>
               <div class="settingrow"><label for="settings-tabs">使用 Tab 缩进</label><input id="settings-tabs" class="setting-switch" type="checkbox" :checked="useTabs" @change="$emit('update:useTabs', ($event.target as HTMLInputElement).checked)" /></div>
+              <div class="settingrow"><label for="settings-tree-click">目录树打开行为</label><select id="settings-tree-click" :value="treeClickMode || 'double'" @change="$emit('update:treeClickMode', ($event.target as HTMLSelectElement).value as ('double' | 'single'))"><option value="double">双击打开与展开（单击定位，默认）</option><option value="single">单击打开与展开</option></select></div>
             </section>
             <section id="settings-save" class="settings-section">
               <h3>保存</h3>
@@ -75,6 +76,7 @@ const props = defineProps<{
   theme: ThemePreference; uiFontSize: number; fontSize: number; wordWrap: boolean; showOutline: boolean; defaultMdMode: MarkdownMode
   fontFamily: EditorSettings['fontFamily']; indentSize: number; useTabs: boolean; shortcuts: EditorSettings['shortcuts']
   autoSave: boolean; autoSaveDelay: number
+  treeClickMode?: 'double' | 'single'
   imageRules: ImageRules; documentImageRules: ImageRules | null; markdownPath?: string; markdownName?: string
 }>()
 const emit = defineEmits<{
@@ -88,6 +90,7 @@ const emit = defineEmits<{
   (e: 'update:fontFamily', val: EditorSettings['fontFamily']): void
   (e: 'update:indentSize', val: number): void
   (e: 'update:useTabs', val: boolean): void
+  (e: 'update:treeClickMode', val: 'double' | 'single'): void
   (e: 'update:shortcuts', val: EditorSettings['shortcuts']): void
   (e: 'update:autoSave', val: boolean): void
   (e: 'update:autoSaveDelay', val: number): void

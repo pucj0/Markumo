@@ -214,12 +214,17 @@ export class CodeBlockView implements NodeView {
               tr.setSelection(TextSelection.create(tr.doc, pos + 1 + sel.anchor, pos + 1 + sel.head))
               this.outer.dispatch(tr)
             } else if (update.selectionSet || (update.focusChanged && update.view.hasFocus)) {
+              if (update.focusChanged) {
+                this.dom.classList.toggle('is-focused', update.view.hasFocus)
+              }
               const sel = update.state.selection.main
               this.outer.dispatch(
                 this.outer.state.tr.setSelection(
                   TextSelection.create(this.outer.state.doc, pos + 1 + sel.anchor, pos + 1 + sel.head)
                 )
               )
+            } else if (update.focusChanged) {
+              this.dom.classList.toggle('is-focused', update.view.hasFocus)
             }
           }),
         ],

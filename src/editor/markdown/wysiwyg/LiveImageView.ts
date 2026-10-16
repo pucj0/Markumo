@@ -12,6 +12,7 @@ export class LiveImageView implements NodeView {
   private disposed = false
   private generation = 0
   private resourceIdentity: string
+  private previewButton=document.createElement('button')
 
   constructor(
     private node: PMNode,
@@ -19,7 +20,8 @@ export class LiveImageView implements NodeView {
     readonly getPos: () => number | undefined,
     private resources: MarkdownResources,
     private onEditRequest: (imgEl: HTMLElement, node: PMNode, pos: number) => void,
-    private onPropertiesRequest?: (imgEl: HTMLElement, node: PMNode, pos: number) => void
+    private onPropertiesRequest?: (imgEl: HTMLElement, node: PMNode, pos: number) => void,
+    private onPreviewRequest?: (image: HTMLImageElement, current: () => boolean) => void
   ) {
     this.resourceIdentity = resources.identity()
     this.dom = document.createElement('span')
@@ -28,7 +30,11 @@ export class LiveImageView implements NodeView {
 
     this.placeholder = document.createElement('span')
     this.placeholder.className = 'md-image-placeholder'
-    this.dom.append(this.placeholder)
+    this.previewButton.type='button';this.previewButton.className='md-image-open';this.previewButton.textContent='放大预览';this.previewButton.hidden=true
+    this.previewButton.onclick=event=>{event.preventDefault();event.stopPropagation();this.openPreview()}
+    this.dom.append(this.placeholder,this.previewButton)
+    this.dom.title='单击编辑图片信息，双击放大预览'
+    this.dom.ondblclick=event=>{event.preventDefault();event.stopPropagation();this.openPreview()}
 
     // Do not blur/collapse the source on pointer-down: that moves the image
     // before the browser delivers click/contextmenu at the original point.
@@ -63,7 +69,14 @@ export class LiveImageView implements NodeView {
     this.dom.classList.toggle('md-image-standalone',parent.type.name==='paragraph'&&parent.childCount===1&&parent.firstChild?.type.name==='image')
   }
 
+  private openPreview(){
+    if(!this.img?.naturalWidth || this.disposed)return
+    const expected=this.node
+    this.onPreviewRequest?.(this.img,()=>{if(this.disposed)return false;const pos=this.getPos();return pos!==undefined&&this.view.state.doc.nodeAt(pos)===expected})
+  }
+
   async loadImage() {
+    this.previewButton.hidden=true
     const current = ++this.generation
     const source = this.node.attrs.src || ''
     const alt = this.node.attrs.alt || ''
@@ -149,6 +162,7 @@ export class LiveImageView implements NodeView {
       img.onload = () => {
         if (this.disposed || current !== this.generation) return
         this.placeholder.hidden = true
+        this.previewButton.hidden = !this.onPreviewRequest
       }
 
       img.onerror = () => {
@@ -213,6 +227,7 @@ export class LiveImageView implements NodeView {
   }
 
   destroy() {
+    this.dom.onclick=null;this.dom.ondblclick=null;this.dom.oncontextmenu=null
     this.disposed = true
     this.generation++
     if (this.objectURL) {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {mkdir,writeFile,readFile} from 'node:fs/promises'
 import { chromium, browserOptions } from './helpers/markdown-browser.mjs'
 import { selectCodeLanguage } from './helpers/code-language.mjs'
+import { tableAction } from './helpers/table-tools.mjs'
 const output='test-results/markdown-wysiwyg';await mkdir(output,{recursive:true})
 const markdown=await readFile('tests/fixtures/markdown-wysiwyg.md','utf8')
 const fixtureModule=`fixture-${Date.now()}.ts`
@@ -34,8 +35,8 @@ try{
     const target=page.locator('.md-prose td').filter({hasText:'内容'}).first();await target.click();await page.keyboard.press('End');await page.keyboard.insertText('编辑')
     assert.ok((await raw()).includes('内容编辑'));assert.equal(await page.locator('.md-prose table').count(),1);assert.equal(await page.locator('.md-prose').innerText().then(t=>t.includes('| :---')),false)
     await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>window.fixture.view().state.selection.$from.node(-1).type.name),'table_cell')
-    const rows=await page.locator('.md-prose tr').count();await page.getByRole('button',{name:'后插行',exact:true}).click();assert.equal(await page.locator('.md-prose tr').count(),rows+1)
-    await page.getByRole('button',{name:'后插列',exact:true}).click();assert.equal(await page.locator('.md-prose tr').first().locator('th').count(),4)
+    const rows=await page.locator('.md-prose tr').count();await tableAction(page,'后插行');assert.equal(await page.locator('.md-prose tr').count(),rows+1)
+    await tableAction(page,'后插列');assert.equal(await page.locator('.md-prose tr').first().locator('th').count(),4)
     await page.evaluate(()=>window.fixture.manager.command('undo'));assert.equal(await page.locator('.md-prose tr').first().locator('th').count(),3)
     await page.evaluate(()=>window.fixture.manager.command('undo'));assert.equal(await page.locator('.md-prose tr').count(),rows)
     void cell

@@ -1,0 +1,42 @@
+// Preview only uses the URL of an image already loaded through MarkdownResources.
+// Zoom changes this dialog's pixels, never the Markdown or a neighbouring image.
+export class ImagePreview {
+  readonly dom=document.createElement('dialog')
+  private image=document.createElement('img')
+  private surface=document.createElement('div')
+  private percent=document.createElement('output')
+  private target:HTMLImageElement|null=null
+  private restore:HTMLElement|null=null
+  private scale=1
+  private current=()=>true
+  constructor(parent:HTMLElement){
+    this.dom.className='md-image-lightbox';this.dom.setAttribute('aria-label','图片放大预览')
+    const bar=document.createElement('div');bar.className='md-image-lightbox-tools'
+    const button=(label:string,action:()=>void)=>{const el=document.createElement('button');el.type='button';el.textContent=label;el.setAttribute('aria-label',label);el.onclick=action;return el}
+    bar.append(button('缩小',()=>this.zoom(this.scale/1.25)),this.percent,button('放大',()=>this.zoom(this.scale*1.25)),button('适应窗口',()=>this.fit()),button('原始大小',()=>this.zoom(1)),button('关闭预览',()=>this.dom.close()))
+    this.surface.className='md-image-lightbox-surface';this.surface.append(this.image);this.dom.append(bar,this.surface);parent.append(this.dom)
+    this.dom.onclick=event=>{if(event.target===this.dom)this.dom.close()}
+    this.dom.onclose=()=>{this.target=null;this.image.removeAttribute('src');if(this.restore?.isConnected)this.restore.focus({preventScroll:true});this.restore=null}
+    window.addEventListener('resize',this.onResize)
+  }
+  private onResize=()=>{if(this.dom.open)this.fit()}
+  open(image:HTMLImageElement,current:()=>boolean=()=>true){
+    if(!image.isConnected || !image.naturalWidth)return
+    this.restore=document.activeElement instanceof HTMLElement?document.activeElement:null
+    this.target=image;this.current=current;this.image.src=image.src;this.image.alt=image.alt
+    if(!this.dom.open)this.dom.showModal()
+    this.fit()
+  }
+  private fit(){
+    if(!this.target)return
+    this.zoom(Math.min(1,Math.max(120,this.surface.clientWidth-32)/this.target.naturalWidth,Math.max(120,this.surface.clientHeight-32)/this.target.naturalHeight))
+    this.surface.scrollTo(0,0)
+  }
+  private zoom(scale:number){
+    if(!this.target)return
+    this.scale=Math.max(.05,Math.min(8,scale));this.percent.value=`${Math.round(this.scale*100)}%`
+    this.image.style.width=`${this.target.naturalWidth*this.scale}px`;this.image.style.height=`${this.target.naturalHeight*this.scale}px`
+  }
+  refresh(){if(this.dom.open && (!this.current() || !this.target?.isConnected || this.target.src!==this.image.src))this.dom.close()}
+  destroy(){window.removeEventListener('resize',this.onResize);this.restore=null;if(this.dom.open)this.dom.close();this.dom.remove()}
+}

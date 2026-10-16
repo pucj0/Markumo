@@ -13,6 +13,8 @@ import { InlineSourceView, inlineSourceRange } from './InlineSourceView'
 import { Decoration, DecorationSet } from 'prosemirror-view'
 import { CodeBlockView } from './CodeBlockView'
 import { LiveImageView } from './LiveImageView'
+import { ImagePreview } from './ImagePreview'
+import { FenceAutocomplete } from './FenceAutocomplete'
 import { createLiveSearchPlugin } from './plugins/LiveSearch'
 import { LiveSearchController } from './LiveSearchController'
 import { createNodeTargetPlugin, nodeTargetKey, type NodeTarget } from './plugins/NodeTarget'
@@ -37,14 +39,20 @@ export class MarkdownEditorController implements LiveEditor {
   bridge: MarkdownSourceBridge
   readonly dom = document.createElement('div')
   private tableTools = document.createElement('div')
+  private tableMenu = document.createElement('div')
+  private imagePreview: ImagePreview
   private properties = document.createElement('div')
   private selectionBubble = document.createElement('div')
   private searchController: LiveSearchController
+  private fenceAutocomplete: FenceAutocomplete
   private codeViews = new Set<CodeBlockView>()
   private liveImages = new Set<LiveImageView>()
   private extensionViews = new Set<() => void>()
   private compositionActive = false
-  private onCompositionStart = () => { this.compositionActive = true }
+  private onCompositionStart = () => {
+    this.compositionActive = true
+    this.fenceAutocomplete?.hide()
+  }
   private settings: MarkdownTypography
   private disposed = false
   private pendingSource: string | null = null
@@ -96,8 +104,10 @@ export class MarkdownEditorController implements LiveEditor {
     const mount = document.createElement('div')
     mount.className = 'md-document'
 
-    this.dom.append(this.tableTools, this.properties, this.selectionBubble, mount)
+    this.dom.append(this.properties, this.selectionBubble, mount)
     parent.append(this.dom)
+    this.imagePreview = new ImagePreview(this.dom)
+    this.fenceAutocomplete = new FenceAutocomplete(this.dom)
 
     // Build Table Tools buttons
     const tableCommands: [string, Command][] = [
@@ -107,19 +117,47 @@ export class MarkdownEditorController implements LiveEditor {
       ['前插列', addColumnBefore],
       ['后插列', addColumnAfter],
       ['删除列', deleteColumn],
-      ['左对齐', this.align('left')],
-      ['居中对齐', this.align('center')],
-      ['右对齐', this.align('right')],
-      ['删除表格', deleteTable],
     ]
+    const iconButton = (label: string, path: string, action: () => void) => {
+      const button = document.createElement('button')
+      button.type = 'button'; button.title = label; button.setAttribute('aria-label', label)
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.6');svg.setAttribute('stroke-linecap','round');svg.setAttribute('aria-hidden','true')
+      const shape = document.createElementNS(svg.namespaceURI,'path');shape.setAttribute('d',path);svg.append(shape);button.append(svg)
+      button.onmousedown = event => event.preventDefault()
+      button.onclick = action
+      return button
+    }
+    const toggleMenu = () => {
+      this.tableMenu.hidden = !this.tableMenu.hidden
+      this.tableTools.querySelectorAll('[aria-expanded]').forEach(el=>el.setAttribute('aria-expanded',String(!this.tableMenu.hidden)))
+    }
+    const grid = iconButton('表格行列操作','M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',toggleMenu)
+    grid.setAttribute('aria-expanded','false')
+    this.tableTools.append(grid)
+    for(const [label,value,path] of [
+      ['左对齐','left','M3 5h18 M3 10h12 M3 15h18 M3 20h12'],
+      ['居中对齐','center','M3 5h18 M6 10h12 M3 15h18 M6 20h12'],
+      ['右对齐','right','M3 5h18 M9 10h12 M3 15h18 M9 20h12'],
+    ]) {
+      const button=iconButton(label,path,()=>this.run(this.align(value),true));button.dataset.align=value;this.tableTools.append(button)
+    }
+    const spacer=document.createElement('span');spacer.className='md-table-tools-spacer';this.tableTools.append(spacer)
+    const more=iconButton('更多操作','M12 4h.01 M12 12h.01 M12 20h.01',toggleMenu);more.setAttribute('aria-expanded','false')
+    this.tableTools.append(more,iconButton('删除表格','M4 6h16 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7',()=>this.run(deleteTable,true)))
+    this.tableMenu.className='md-table-menu';this.tableMenu.hidden=true;this.tableMenu.setAttribute('aria-label','表格行列操作菜单')
     for (const [label, command] of tableCommands) {
       const button = document.createElement('button')
       button.type = 'button'
       button.textContent = label
       button.onmousedown = event => event.preventDefault()
-      button.onclick = () => this.run(command, true)
-      this.tableTools.append(button)
+      button.onclick = () => { this.tableMenu.hidden=true;this.tableTools.querySelectorAll('[aria-expanded]').forEach(el=>el.setAttribute('aria-expanded','false'));this.run(command, true) }
+      this.tableMenu.append(button)
     }
+    this.tableTools.append(this.tableMenu)
+    const closeTableMenu=()=>{this.tableMenu.hidden=true;this.tableTools.querySelectorAll('[aria-expanded]').forEach(el=>el.setAttribute('aria-expanded','false'))}
+    this.tableTools.onkeydown=event=>{if(event.key==='Escape'&&!this.tableMenu.hidden){event.preventDefault();event.stopPropagation();closeTableMenu();more.focus()}}
+    this.dom.addEventListener('mousedown',event=>{if(!this.tableTools.contains(event.target as globalThis.Node))closeTableMenu()})
 
     // Input Rules
     const rules = inputRules({
@@ -173,6 +211,11 @@ export class MarkdownEditorController implements LiveEditor {
           new Plugin({ props: { decorations: state => {
             const decorations = this.inlineSource?.decorations(state.doc).find() || []
             const { $from } = state.selection
+            if(isInTable(state)) {
+              for(let depth=$from.depth;depth>0;depth--)if($from.node(depth).type===s.nodes.table){
+                decorations.push(Decoration.widget($from.before(depth),this.tableTools,{key:'active-table-tools',side:-1,stopEvent:()=>true,ignoreSelection:true}));break
+              }
+            }
             if ($from.parent.type === s.nodes.heading) {
               const pos = $from.before()
               decorations.push(Decoration.node(pos, pos + $from.parent.nodeSize, { class: 'md-heading-focused', 'data-heading-level': `h${$from.parent.attrs.level}` }))
@@ -191,7 +234,13 @@ export class MarkdownEditorController implements LiveEditor {
             'Mod-i': toggleMark(s.marks.em),
             'Mod-Shift-x': toggleMark(s.marks.strike),
             'Mod-`': toggleMark(s.marks.code),
-            'Enter': chainCommands(splitListItem(s.nodes.list_item, { checked: null }), liftEmptyBlock, baseKeymap.Enter),
+            'Backspace': (state, dispatch) => {
+              const {empty,$from}=state.selection
+              if(!empty || $from.parent.type!==s.nodes.heading || $from.parentOffset!==0)return false
+              dispatch?.(state.tr.setNodeMarkup($from.before(),s.nodes.paragraph,{sourceId:$from.parent.attrs.sourceId}).setMeta('isolated',true).scrollIntoView())
+              return true
+            },
+            'Enter': chainCommands(this.enterFence,splitListItem(s.nodes.list_item, { checked: null }), liftEmptyBlock, baseKeymap.Enter),
             'Tab': chainCommands(this.nextCell(1), sinkListItem(s.nodes.list_item)),
             'Shift-Tab': chainCommands(this.nextCell(-1), liftListItem(s.nodes.list_item)),
             'Shift-Enter': (state, dispatch) => {
@@ -218,6 +267,12 @@ export class MarkdownEditorController implements LiveEditor {
           gapCursor(),
           new Plugin({
             props: {
+              handleKeyDown: (_view, event) => {
+                if (this.fenceAutocomplete?.handleKeyDown(event)) {
+                  return true
+                }
+                return false
+              },
               handleDOMEvents: {
                 focus: () => { options.focus(); return false },
                 beforeinput: (_view, event) => {
@@ -313,7 +368,8 @@ export class MarkdownEditorController implements LiveEditor {
             getPos,
             this.options.resources,
             (_imgEl, _n, pos) => { this.properties.hidden = true; this.openInlineAt(pos, 'image') },
-            (imgEl, node, pos) => { this.closeInline(); this.imageProperties(imgEl, node, pos) }
+            (imgEl, node, pos) => { this.closeInline(); this.imageProperties(imgEl, node, pos) },
+            (image, current) => this.imagePreview.open(image, current)
           )
           this.liveImages.add(imgView)
           const destroy = imgView.destroy.bind(imgView)
@@ -369,14 +425,120 @@ export class MarkdownEditorController implements LiveEditor {
       if (this.currentAnchorEl && !this.properties.hidden) {
         this.positionAnchoredElement(this.properties, this.currentAnchorEl)
       }
-      if (!this.tableTools.hidden) {
-        this.positionTableTools()
-      }
     })
 
     this.typography(options.typography)
     this.reveal(options.head)
     this.updateTools()
+  }
+
+  private enterFence: Command = (state, dispatch) => {
+    const { empty, $from } = state.selection
+    if (!empty || $from.parent.type !== s.nodes.paragraph || $from.parentOffset !== $from.parent.content.size) return false
+    const fence = /^(`{3,}|~{3,})([^`~\s]*)[ \t]*$/.exec($from.parent.textContent)
+    if (!fence) return false
+    this.fenceAutocomplete?.hide()
+    const pos = $from.before()
+    const tr = state.tr
+      .delete($from.start(), $from.end())
+      .setNodeMarkup(pos, s.nodes.code_block, {
+        sourceId: $from.parent.attrs.sourceId,
+        params: fence[2] || '',
+        fence: fence[1] || '```',
+      })
+    dispatch?.(tr.setSelection(TextSelection.create(tr.doc, pos + 1)).setMeta('isolated', true).scrollIntoView())
+    queueMicrotask(() => {
+      if (!this.disposed) {
+        const code = [...this.codeViews].find(c => c.getPos() === pos)
+        if (code) {
+          code.cm.focus()
+          code.setSelection(0, 0)
+        }
+      }
+    })
+    return true
+  }
+
+  private commitFence(language: string, fenceMarks: string) {
+    const { state } = this.view
+    const { selection } = state
+    const { $from } = selection
+    if ($from.parent.type !== s.nodes.paragraph) return
+    this.fenceAutocomplete?.hide()
+    const pos = $from.before()
+    const tr = state.tr
+      .delete($from.start(), $from.end())
+      .setNodeMarkup(pos, s.nodes.code_block, {
+        sourceId: $from.parent.attrs.sourceId,
+        params: language || '',
+        fence: fenceMarks || '```',
+      })
+      .setSelection(TextSelection.create(state.doc, pos + 1))
+      .setMeta('isolated', true)
+      .scrollIntoView()
+
+    this.view.dispatch(tr)
+    queueMicrotask(() => {
+      if (!this.disposed) {
+        const code = [...this.codeViews].find(c => c.getPos() === pos)
+        if (code) {
+          code.cm.focus()
+          code.setSelection(0, 0)
+        }
+      }
+    })
+  }
+
+  private tabCompleteFence(language: string, fenceMarks: string) {
+    const { state } = this.view
+    const { selection } = state
+    const { $from } = selection
+    if ($from.parent.type !== s.nodes.paragraph) return
+    const newText = fenceMarks + language
+    const tr = state.tr
+      .replaceWith($from.start(), $from.end(), state.schema.text(newText))
+      .scrollIntoView()
+    this.view.dispatch(tr)
+  }
+
+  private updateFenceAutocomplete() {
+    if (this.disposed || !this.fenceAutocomplete || this.compositionActive || this.view.composing) {
+      this.fenceAutocomplete?.hide()
+      return
+    }
+
+    const { state } = this.view
+    const { selection } = state
+    if (!selection.empty) {
+      this.fenceAutocomplete.hide()
+      return
+    }
+
+    const { $from } = selection
+    if ($from.parent.type !== s.nodes.paragraph || $from.parentOffset !== $from.parent.content.size) {
+      this.fenceAutocomplete.hide()
+      return
+    }
+
+    const text = $from.parent.textContent
+    const match = /^(`{3,}|~{3,})([a-zA-Z0-9_+#.-]*)$/.exec(text)
+    if (!match) {
+      this.fenceAutocomplete.hide()
+      return
+    }
+
+    const fence = match[1]
+    const query = match[2]
+    const pos = $from.pos
+    try {
+      const coords = this.view.coordsAtPos(pos)
+      this.fenceAutocomplete.show(coords, query, fence, {
+        onCommit: (lang, f) => this.commitFence(lang, f),
+        onTabComplete: (lang, f) => this.tabCompleteFence(lang, f),
+      })
+    } catch {
+      this.fenceAutocomplete.hide()
+    }
   }
 
   get composing() {
@@ -400,6 +562,7 @@ export class MarkdownEditorController implements LiveEditor {
         const sel = this.selection
         this.options.selected(sel.anchor, sel.head)
         this.scheduleInlineEntry()
+        this.updateFenceAutocomplete()
         return
       }
       const prepared = this.bridge.prepare(applied.state.doc, tr.getMeta('inlineSourcePatch') as SourcePatch | undefined)
@@ -419,6 +582,7 @@ export class MarkdownEditorController implements LiveEditor {
       this.updateSelectionBubble()
       const sel = this.selection
       this.options.selected(sel.anchor, sel.head)
+      this.updateFenceAutocomplete()
     } catch (error) {
       notice(`Markdown 修改未应用：${String(error)}`)
     }
@@ -616,29 +780,8 @@ export class MarkdownEditorController implements LiveEditor {
     el.style.zIndex = '25'
   }
 
-  private findActiveTable(): HTMLElement | null {
-    const { $from } = this.view.state.selection
-    for (let depth = $from.depth; depth > 0; depth--) {
-      if ($from.node(depth).type.name === 'table') {
-        const pos = $from.before(depth)
-        const dom = this.view.nodeDOM(pos)
-        if (dom instanceof HTMLElement) return (dom.closest('table') || dom) as HTMLElement
-        const at = this.view.domAtPos(pos + 1)
-        const el = (at.node instanceof Element ? at.node : at.node.parentElement)?.closest('table')
-        if (el) return el as HTMLElement
-      }
-    }
-    return (this.view.dom.querySelector('.selectedCell')?.closest('table') as HTMLElement | null) || null
-  }
-
-  private positionTableTools() {
-    const tableEl = this.findActiveTable()
-    if (tableEl) {
-      this.positionAnchoredElement(this.tableTools, tableEl, true)
-    }
-  }
-
   private updateTools() {
+    this.imagePreview?.refresh()
     for(const image of this.liveImages)image.refreshLayout()
     if (this.propertyTargetToken && nodeTargetKey.getState(this.view.state)?.token !== this.propertyTargetToken) {
       this.properties.hidden = true
@@ -650,9 +793,11 @@ export class MarkdownEditorController implements LiveEditor {
     this.searchController?.updateCount()
     const inTable = isInTable(this.view.state)
     this.tableTools.hidden = !inTable
-    if (inTable) {
-      setTimeout(() => this.positionTableTools(), 10)
-    }
+    if (!inTable) { this.tableMenu.hidden=true;this.tableTools.querySelectorAll('[aria-expanded]').forEach(el=>el.setAttribute('aria-expanded','false')) }
+    const { $from }=this.view.state.selection
+    let alignment: string | null=null
+    for(let depth=$from.depth;depth>0;depth--)if(['table_cell','table_header'].includes($from.node(depth).type.name)){alignment=$from.node(depth).attrs.align || 'left';break}
+    this.tableTools.querySelectorAll<HTMLButtonElement>('[data-align]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.align===alignment)))
     for (const refresh of this.extensionViews) refresh()
   }
 
@@ -1235,6 +1380,8 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   destroy() {
+    this.imagePreview.destroy()
+    this.fenceAutocomplete?.destroy()
     this.disposed = true
     this.inlineSource?.destroy()
     this.inlineSource = null

@@ -15,6 +15,7 @@ const entry = <N extends string>(id: string, name: N, extensions: string[], alia
 export const languageRegistry = [
   entry('text', 'Plain Text', ['txt', 'text'], ['text', 'plain', 'plaintext'], async () => [], [], false),
   entry('markdown', 'Markdown', ['md', 'markdown', 'mdown'], ['md', 'gfm'], loadMarkdown),
+  entry('jade', 'Jade', ['jade', 'pug'], ['pug'], async () => [], [], false),
   entry('batch', 'Batch', ['bat', 'cmd'], ['bat', 'cmd', 'dos'], async () => (await import('./batch')).batch()),
   entry('json', 'JSON', ['json'], [], async () => (await import('@codemirror/lang-json')).json()),
   entry('jsonc', 'JSONC', ['jsonc'], [], async () => stream((await import('@codemirror/legacy-modes/mode/javascript')).json)),

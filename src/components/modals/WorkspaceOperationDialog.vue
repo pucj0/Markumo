@@ -2,7 +2,7 @@
   <div v-if="visible" class="workspace-operation-overlay" @click.self="finish(null)" @keydown="onKeydown">
     <form ref="dialogRef" class="workspace-operation-dialog" role="dialog" aria-modal="true" aria-label="工作区文件操作" @submit.prevent="finish(value)">
       <h2>{{ request.title }}</h2>
-      <p>{{ request.description }}</p>
+      <p v-if="request.description">{{ request.description }}</p>
       <input v-if="request.initialValue !== undefined" v-model="value" aria-label="名称或目标目录" autocomplete="off" />
       <div class="operation-buttons">
         <button type="button" @click="finish(null)">取消</button>
@@ -15,7 +15,7 @@
 <script setup lang="ts">
 import { ref, onUnmounted } from 'vue'
 import { useModal } from '../../features/shell/useModal'
-interface Request { title: string; description: string; confirmLabel: string; initialValue?: string }
+interface Request { title: string; description?: string; confirmLabel: string; initialValue?: string }
 const request = ref<Request>({ title: '', description: '', confirmLabel: '确认' })
 const value = ref('')
 const { visible, dialogRef, open, close, handleKeydown } = useModal()

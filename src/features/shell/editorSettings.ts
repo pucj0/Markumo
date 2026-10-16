@@ -33,6 +33,7 @@ export interface EditorSettings {
   theme: ThemePreference; uiFontSize: number; fontSize: number; fontFamily: 'system' | 'consolas' | 'cascadia'
   wordWrap: boolean; showOutline: boolean; indentSize: number; useTabs: boolean; defaultMdMode: MarkdownMode
   autoSave: boolean; autoSaveDelay: number
+  treeClickMode: 'double' | 'single'
   imageRules: ImageRules
   documentImageRules: Record<string, ImageRules>
   settingsVersion: number
@@ -44,7 +45,7 @@ export interface EditorSettings {
 }
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
 export function defaultSettings(): EditorSettings {
-  return { markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
+  return { markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, treeClickMode: 'double', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
 }
 /** Drop the transient migration notice before writing preferences to disk. */
 export function persistedSettings(settings: EditorSettings) {
@@ -122,6 +123,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
   if (Number.isInteger(s.autoSaveDelay) && s.autoSaveDelay! >= 500 && s.autoSaveDelay! <= 10000) defaults.autoSaveDelay = s.autoSaveDelay!
   if (Number.isInteger(s.indentSize) && s.indentSize! >= 1 && s.indentSize! <= 8) defaults.indentSize = s.indentSize!
   if (['live','source','split'].includes(s.defaultMdMode || '')) defaults.defaultMdMode = s.defaultMdMode!
+  if (s.treeClickMode === 'single' || s.treeClickMode === 'double') defaults.treeClickMode = s.treeClickMode
   const shortcuts = { ...defaults.shortcuts, ...s.shortcuts }
   for (const id of Object.keys(defaultShortcuts) as ShortcutAction[]) {
     if (typeof shortcuts[id] === 'string') shortcuts[id] = normalizeShortcut(shortcuts[id]) || shortcuts[id]

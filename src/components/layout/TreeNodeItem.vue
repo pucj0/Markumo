@@ -5,7 +5,7 @@
       :class="[
         node.isDirectory ? 'folder' : 'file',
         `depth-${depth}`,
-        { active: !node.isDirectory && activePath && displayPathKey(activePath) === displayPathKey(node.path) }
+        { active: isNodeActive }
       ]"
       :style="{ paddingLeft: `${Math.min(depth, 10) * 12 + 10}px` }"
       :title="`${node.name}\n${readablePath(node.path)}`"
@@ -17,13 +17,13 @@
       tabindex="0"
       @click="handleClick"
       @dblclick="handleDblClick"
-      @keydown.enter.self.prevent="handleClick"
-      @keydown.space.self.prevent="handleClick"
+      @keydown.enter.self="handleKeydown"
+      @keydown.space.self="handleKeydown"
       @contextmenu.prevent.stop="openMenu"
       @keydown.shift.f10.prevent.stop="openMenu"
     >
       <template v-if="node.isDirectory">
-        <span class="twisty">
+        <span class="twisty" @click.stop="handleTwistyClick">
           <span v-if="node.isLoading" class="loading-spin">⟳</span>
           <span v-else>{{ node.isExpanded ? '▾' : '▸' }}</span>
         </span>
@@ -36,33 +36,6 @@
         <span class="label">{{ node.name }}</span>
         <span v-if="isDirty" class="dirty-dot">●</span>
       </template>
-
-      <!-- 悬停快捷按钮 -->
-      <div class="node-actions" @click.stop @keydown.stop>
-        <button
-          v-if="node.isDirectory"
-          class="ib-tiny"
-          title="新建子文件"
-          @click="$emit('create-file', node.path)"
-        >
-          +
-        </button>
-        <button
-          class="ib-tiny"
-          title="重命名"
-          @click="startRename"
-        >
-          ✎
-        </button>
-        <button
-          class="ib-tiny danger"
-          title="删除"
-          @click="$emit('delete-node', node)"
-        >
-          ✕
-        </button>
-        <button class="ib-tiny" title="移动到…" @click="$emit('move-node', node)">↗</button>
-      </div>
     </div>
 
     <!-- 子目录递归展开 -->
@@ -73,8 +46,12 @@
         :node="child"
         :depth="depth + 1"
         :active-path="activePath"
+        :selected-path="selectedPath"
+        :tree-click-mode="treeClickMode"
         :dirty-paths="dirtyPaths"
         :desktop="desktop"
+        @locate-node="$emit('locate-node', $event)"
+        @open-file="$emit('open-file', $event)"
         @select-file="$emit('select-file', $event)"
         @pin-file="$emit('pin-file', $event)"
         @toggle-folder="$emit('toggle-folder', $event)"
@@ -99,17 +76,23 @@ import FileIcon from '../common/FileIcon.vue'
 import type { WorkspaceNode } from '../../features/workspace/contracts'
 import { readablePath, displayPathKey } from '../../features/shell/pathDisplay'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   node: WorkspaceNode
   depth: number
   activePath?: string
+  selectedPath?: string | null
+  treeClickMode?: 'double' | 'single'
   dirtyPaths?: string[]
   flat?: boolean
   desktop?: boolean
-}>()
+}>(), {
+  treeClickMode: 'double',
+})
 
 const emit = defineEmits<{
+  (e: 'locate-node', node: WorkspaceNode): void
   (e: 'select-file', node: WorkspaceNode): void
+  (e: 'open-file', node: WorkspaceNode): void
   (e: 'pin-file', node: WorkspaceNode): void
   (e: 'toggle-folder', node: WorkspaceNode): void
   (e: 'create-file', parentDir: string): void
@@ -124,33 +107,69 @@ const isDirty = computed(() => {
   return props.dirtyPaths?.includes(props.node.path) ?? false
 })
 
+const isNodeActive = computed(() => {
+  if (props.selectedPath) {
+    return displayPathKey(props.selectedPath) === displayPathKey(props.node.path)
+  }
+  return !props.node.isDirectory && !!props.activePath && displayPathKey(props.activePath) === displayPathKey(props.node.path)
+})
+
 function handleDragStart(event: DragEvent) {
   if (props.node.isDirectory) return
   event.dataTransfer?.setData('application/x-lightedit-file', JSON.stringify({ path: props.node.path, name: props.node.name }))
   if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove'
 }
 
-
 function handleClick() {
-  if (props.node.isDirectory) {
-    emit('toggle-folder', props.node)
-  } else {
-    emit('select-file', props.node)
+  emit('locate-node', props.node)
+  if (props.treeClickMode === 'single') {
+    if (props.node.isDirectory) {
+      emit('toggle-folder', props.node)
+    } else {
+      emit('select-file', props.node)
+    }
   }
 }
 
 function handleDblClick() {
-  if (!props.node.isDirectory) {
-    emit('pin-file', props.node)
+  emit('locate-node', props.node)
+  if (props.treeClickMode === 'single') {
+    if (!props.node.isDirectory) {
+      emit('pin-file', props.node)
+    }
+  } else {
+    if (props.node.isDirectory) {
+      emit('toggle-folder', props.node)
+    } else {
+      emit('open-file', props.node)
+    }
   }
 }
 
-function startRename() {
-  emit('rename-node', props.node)
+function handleTwistyClick() {
+  if (props.node.isDirectory) {
+    emit('toggle-folder', props.node)
+  }
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    emit('locate-node', props.node)
+    if (props.node.isDirectory) {
+      emit('toggle-folder', props.node)
+    } else {
+      emit('open-file', props.node)
+    }
+  } else if (event.key === ' ') {
+    event.preventDefault()
+    handleClick()
+  }
 }
 
 const contextMenu = ref<InstanceType<typeof ContextMenu> | null>(null)
 function openMenu(event: MouseEvent | KeyboardEvent) {
+  emit('locate-node', props.node)
   const node = props.node
   const registry = new CommandRegistry([
     { id:'node-new-file',title:'新建文件…',enabled:node.isDirectory,run:()=>emit('create-file',node.path) },
@@ -192,15 +211,31 @@ function openMenu(event: MouseEvent | KeyboardEvent) {
 }
 
 .twisty {
-  flex:none;
-  width: 12px;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   color: var(--muted);
-  font-size: var(--ui-small-font-size);
+  font-size: 13px;
+  border-radius: 3px;
+  user-select: none;
+  transition: color 0.1s, background-color 0.1s;
+}
+
+.treenode.folder .twisty {
+  cursor: pointer;
+}
+
+.treenode.folder .twisty:hover {
+  color: var(--bright);
+  background: var(--hover);
 }
 
 .label {
-  min-width:0;
+  min-width: 0;
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -211,37 +246,6 @@ function openMenu(event: MouseEvent | KeyboardEvent) {
   font-size: var(--ui-small-font-size);
   color: var(--yellow);
   margin-right: 4px;
-}
-
-.node-actions {
-  display: none;
-  align-items: center;
-  gap: 2px;
-  margin-right: 6px;
-}
-
-.treenode:hover .node-actions, .treenode:focus-within .node-actions {
-  display: flex;
-}
-
-.ib-tiny {
-  width: var(--ui-row-height);
-  height: var(--ui-row-height);
-  border-radius: 3px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--ui-small-font-size);
-  color: var(--muted);
-}
-
-.ib-tiny:hover {
-  background: var(--hover);
-  color: var(--bright);
-}
-
-.ib-tiny.danger:hover {
-  color: #ff6b6b;
 }
 
 .loading-spin {
