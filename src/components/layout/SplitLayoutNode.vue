@@ -3,6 +3,7 @@
   <template v-if="manager.layout.maximizedPaneId">
     <EditorPaneItem
       v-if="maximizedPaneExists"
+      :key="manager.layout.maximizedPaneId"
       :pane-id="manager.layout.maximizedPaneId"
       :manager="manager"
       :revision="revision"
@@ -24,6 +25,7 @@
   <!-- Leaf Node: Render single pane -->
   <EditorPaneItem
     v-else-if="node.type === 'leaf'"
+    :key="node.id"
     :pane-id="node.id"
     :manager="manager"
     :revision="revision"
@@ -44,6 +46,7 @@
   <!-- Split Node: Render split container with divider -->
   <div
     v-else-if="node.type === 'split'"
+    :key="node.id"
     ref="splitContainer"
     class="split-node"
     :class="`split-${node.orientation}`"
@@ -55,6 +58,7 @@
         : { flex: `0 0 calc(${node.ratio * 100}% - 2px)` }"
     >
       <SplitLayoutNode
+        :key="node.first.id"
         :node="node.first"
         :manager="manager"
         :revision="revision"
@@ -89,6 +93,7 @@
 
     <div class="split-child second-child">
       <SplitLayoutNode
+        :key="node.second.id"
         :node="node.second"
         :manager="manager"
         :revision="revision"
