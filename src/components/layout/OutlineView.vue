@@ -17,7 +17,18 @@
         :title="`跳转至第 ${item.lineNumber} 行: ${item.name}`"
         @click="$emit('select-item', item)"
       >
-        <span v-if="hasChildren(item)" class="outline-fold" role="button" :aria-label="collapsed.has(item.id) ? '展开标题' : '折叠标题'" tabindex="0" @click.stop="toggle(item.id)" @keydown.enter.stop.prevent="toggle(item.id)" @keydown.space.stop.prevent="toggle(item.id)">{{ collapsed.has(item.id) ? '▸' : '▾' }}</span>
+        <span class="outline-fold-slot">
+          <span
+            v-if="hasChildren(item)"
+            class="outline-fold"
+            role="button"
+            :aria-label="collapsed.has(item.id) ? '展开标题' : '折叠标题'"
+            tabindex="0"
+            @click.stop="toggle(item.id)"
+            @keydown.enter.stop.prevent="toggle(item.id)"
+            @keydown.space.stop.prevent="toggle(item.id)"
+          >{{ collapsed.has(item.id) ? '▸' : '▾' }}</span>
+        </span>
         <span v-if="item.kind && item.kind !== 'heading'" class="kind-badge">
           {{ item.kind.slice(0, 2).toUpperCase() }}
         </span>
@@ -90,6 +101,35 @@ defineEmits<{
 }
 
 .outline-item:hover {
+  background: var(--hover);
+  color: var(--bright);
+}
+
+.outline-fold-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.outline-fold {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 2px;
+  user-select: none;
+  transition: color 0.15s, background 0.15s;
+}
+
+.outline-fold:hover {
   background: var(--hover);
   color: var(--bright);
 }

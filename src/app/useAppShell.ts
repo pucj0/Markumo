@@ -52,6 +52,7 @@ export function useAppShell() {
   const treeClickMode = ref<'double' | 'single'>('double')
   const keymapPreset = ref<KeymapPresetId>('markumo')
   const markdownTypography=ref(defaultMarkdownTypography())
+  const outlineWidth=ref(240)
   const markdownClipboard=ref(defaultMarkdownClipboard())
   const imageRules = ref(defaultImageRules()), documentImageRules = ref<Record<string, ImageRules>>({})
   const shortcuts = ref<EditorSettings['shortcuts']>({ ...defaultShortcuts }), fileModes = ref<Record<string, MarkdownMode>>({})
@@ -759,7 +760,7 @@ export function useAppShell() {
   watch(fontFamily, value => { document.documentElement.style.setProperty('--font-mono', fontFamilies[value]); manager.refreshTypography() }, { immediate: true })
   watch([indentSize,useTabs], () => manager.setIndent(indentSize.value,useTabs.value), { immediate: true })
   function settingsSnapshot(): EditorSettings {
-    return { markdownClipboard:{...markdownClipboard.value},markdownTypography:{...markdownTypography.value},theme: theme.value, uiFontSize: uiFontSize.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value, treeClickMode: treeClickMode.value, keymapPreset: keymapPreset.value,
+    return { outlineWidth:outlineWidth.value,markdownClipboard:{...markdownClipboard.value},markdownTypography:{...markdownTypography.value},theme: theme.value, uiFontSize: uiFontSize.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value, treeClickMode: treeClickMode.value, keymapPreset: keymapPreset.value,
       defaultMdMode: defaultMdMode.value, indentSize: indentSize.value, useTabs: useTabs.value, imageRules:{...imageRules.value},documentImageRules:{...documentImageRules.value}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[...customShortcuts.value], shortcuts: { ...shortcuts.value }, fileModes: { ...fileModes.value } }
   }
   function flushSettings() {
@@ -777,7 +778,7 @@ export function useAppShell() {
     shortcuts.value = value
   }
   watch([autoSave, autoSaveDelay], () => autoSaver.configure(desktop && settingsReady && autoSave.value, autoSaveDelay.value))
-  watch([markdownClipboard,markdownTypography,theme,uiFontSize,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,treeClickMode,keymapPreset,imageRules,documentImageRules], () => {
+  watch([outlineWidth,markdownClipboard,markdownTypography,theme,uiFontSize,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,treeClickMode,keymapPreset,imageRules,documentImageRules], () => {
     if (!settingsReady) return
     if (settingsTimer) clearTimeout(settingsTimer)
     settingsTimer = setTimeout(() => void flushSettings(),250)
@@ -813,6 +814,7 @@ export function useAppShell() {
       uiFontSize.value = settings.uiFontSize; theme.value = settings.theme; fontSize.value = settings.fontSize; fontFamily.value = settings.fontFamily; wordWrap.value = settings.wordWrap
       autoSave.value = settings.autoSave; autoSaveDelay.value = settings.autoSaveDelay
       markdownTypography.value=settings.markdownTypography
+      outlineWidth.value=settings.outlineWidth
       markdownClipboard.value=settings.markdownClipboard
       imageRules.value=settings.imageRules;documentImageRules.value=settings.documentImageRules
       showOutline.value = settings.showOutline; defaultMdMode.value = settings.defaultMdMode; indentSize.value = settings.indentSize; useTabs.value = settings.useTabs
@@ -899,7 +901,7 @@ export function useAppShell() {
     sessionWriter?.dispose()
     autoSaver.dispose(); files.dispose(); workspace.destroy(); unsubscribeWorkspace(); unsubscribe(); manager.dispose()
   })
-  return { markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
+  return { outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
     paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, mainOpenedDocuments, mainActiveId, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
     setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, selectDocById, handleSelectDoc,
     pinDocById, createNewDoc, closeDocById,closeOtherTabs,cancelPendingClose, discardPending, savePending, setLanguage, setMarkdownMode,

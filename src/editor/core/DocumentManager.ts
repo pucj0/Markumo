@@ -21,6 +21,7 @@ import { createMarkdownResources, markdownResources, refreshMarkdownResources } 
 import { imageImportBookmarks } from '../markdown/imageImport'
 import { sameFilePath } from '../../features/files/pathKey'
 import { isMedia, newMediaViewState, type MediaViewState } from '../../features/files/media'
+import { cancelSmoothScroll, smoothScrollTo } from './smoothScroll'
 
 export interface DocumentSeed { id: string; name: string; path: string; text: string; pinned?: boolean; mode?: MarkdownMode; kind?: 'text' | 'javaClass'; classInfo?: ClassInfo; encoding?: string }
 export type Pane = string
@@ -354,6 +355,18 @@ export class DocumentManager {
     const pos = line.from + (col - 1)
     const live=this.liveViews.get(this.activePane)
     if(live?.id===id){live.editor.reveal(pos,align);live.editor.focus();return}
+    const view = this.activeId === id ? this.paneView(this.activePane) : null
+    cancelSmoothScroll(view?.scrollDOM)
+    if (align === 'start' && view) {
+      const pane = this.activePane, before = view.scrollDOM.scrollTop
+      view.dispatch({ selection: { anchor: pos, head: pos } })
+      view.focus()
+      view.scrollDOM.scrollTop = before
+      const document = view.state.doc
+      smoothScrollTo(view.scrollDOM, () => (view.coordsAtPos(pos)?.top ?? view.lineBlockAt(pos).top + view.documentTop) - view.scrollDOM.getBoundingClientRect().top + view.scrollDOM.scrollTop - 24,
+        () => this.paneView(pane) === view && this.activePane === pane && view.state.doc === document)
+      return
+    }
     this.dispatch(id, {
       selection: { anchor: pos, head: pos },
       ...(align === 'start' ? { effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: 24 }) } : { scrollIntoView: true }),
@@ -469,9 +482,14 @@ export class DocumentManager {
     const resolved = this.resolvePaneId(pane)
     return this.views.get(resolved) || null
   }
+  private cancelPaneScroll(pane: Pane) {
+    cancelSmoothScroll(this.paneView(pane)?.scrollDOM)
+    cancelSmoothScroll(this.hosts.get(pane)?.querySelector<HTMLElement>('.markdown-live'))
+  }
   focusPane(pane: Pane, focus = true) {
     const resolved = this.resolvePaneId(pane)
     if (resolved !== this.activePane && this.isComposing) return
+    if (resolved !== this.activePane) this.cancelPaneScroll(this.activePane)
     this.layout.focusPane(resolved)
     if (focus) { this.views.get(resolved)?.focus();this.liveViews.get(resolved)?.editor.focus() }
     this.notify()
@@ -774,6 +792,7 @@ export class DocumentManager {
   }
 
   private destroyView(pane: Pane) {
+    this.cancelPaneScroll(pane)
     // View ownership is exact, even after the layout removes a legacy pane ID.
     this.views.get(pane)?.destroy()
     this.views.delete(pane)
@@ -1031,7 +1050,7 @@ export class DocumentManager {
   dispose() {
     this.disposed = true
     if (this.timer) clearTimeout(this.timer)
-    for (const view of this.views.values()) view.destroy()
+    for (const view of this.views.values()) { cancelSmoothScroll(view.scrollDOM); view.destroy() }
     for(const live of this.liveViews.values())live.editor.destroy()
     this.liveViews.clear();this.liveLoads.clear()
     this.views.clear()

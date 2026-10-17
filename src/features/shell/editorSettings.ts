@@ -36,6 +36,7 @@ export const shortcutLabels: Record<string, string> = {
  * default, so that value cannot prove intent. Version 5 adds independent UI typography. */
 export const currentSettingsVersion = 5
 export interface EditorSettings {
+  outlineWidth: number
   markdownClipboard:MarkdownClipboardSettings
   markdownTypography:MarkdownTypography
   theme: ThemePreference; uiFontSize: number; fontSize: number; fontFamily: 'system' | 'consolas' | 'cascadia'
@@ -54,8 +55,8 @@ export interface EditorSettings {
 }
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
 export function defaultSettings(): EditorSettings {
-  const markdownClipboard = defaultMarkdownClipboard()
-  return { markdownClipboard, markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, treeClickMode: 'double', keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
+  const markdownClipboard = defaultMarkdownClipboard(), outlineWidth = 240
+  return { outlineWidth, markdownClipboard, markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, treeClickMode: 'double', keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
 }
 /** Drop the transient migration notice before writing preferences to disk. */
 export function persistedSettings(settings: EditorSettings) {
@@ -100,6 +101,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
   const defaults = defaultSettings()
   if (!raw || typeof raw !== 'object') return defaults
   const s = raw as Partial<EditorSettings>
+  if (Number.isInteger(s.outlineWidth) && s.outlineWidth! >= 160 && s.outlineWidth! <= 520) defaults.outlineWidth = s.outlineWidth!
   if (s.markdownClipboard && typeof s.markdownClipboard === 'object') {
     for (const key of ['copyMarkdown', 'copyWholeLine'] as const) if (typeof s.markdownClipboard[key] === 'boolean') defaults.markdownClipboard[key] = s.markdownClipboard[key]
   }

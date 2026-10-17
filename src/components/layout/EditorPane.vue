@@ -11,7 +11,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref, watch, nextTick } from 'vue'
 import { isMedia } from '../../features/files/media'
 const ImageViewer = defineAsyncComponent(() => import('../viewers/ImageViewer.vue'))
 const PdfViewer = defineAsyncComponent(() => import('../viewers/PdfViewer.vue'))
@@ -112,6 +112,13 @@ function onPreviewScroll(lineNumber: number) {
   const next = block.top + (lineNumber % 1) * block.height + view.documentTop - scroller.getBoundingClientRect().top + scroller.scrollTop
   if (Math.abs(next - scroller.scrollTop) > 1) { scroller.scrollTop = next; expectedTop = scroller.scrollTop }
 }
+
+watch([currentMode, preview], async () => {
+  expectedTop = null
+  await nextTick()
+  const view = currentView()
+  if (currentMode.value === 'split' && view) onEditorScroll({ target: view.scrollDOM } as unknown as Event)
+}, { flush: 'post' })
 
 onMounted(() => { if (host.value) props.manager.mountPane(host.value, props.pane) })
 watch(() => props.pane, (pane, previous) => {

@@ -27,7 +27,7 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
 .markdown-live .md-document {
   max-width: var(--md-content-width);
   margin: 0 auto;
-  padding: 30px 30px 100px;
+  padding: 30px 48px 100px;
   font: var(--md-font-size)/var(--md-line-height) var(--md-font-family);
 }
 
@@ -58,8 +58,16 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
 
 .markdown-live .md-heading-focused { position: relative; }
 .markdown-live .md-heading-focused::before {
-  content: attr(data-heading-level); position: absolute; left: -34px; top: 0.25em;
-  font: 11px/1.4 var(--font-mono); color: var(--muted); user-select: none;
+  content: attr(data-heading-level);
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 0.25em;
+  width: 24px;
+  text-align: right;
+  font: 11px/1.4 var(--font-mono);
+  color: var(--muted);
+  user-select: none;
+  pointer-events: none;
 }
 .markdown-live .md-prose:not(.ProseMirror-focused) .md-heading-focused::before { display: none; }
 .markdown-live .md-local-source { display: inline; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -194,7 +202,7 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
   border-collapse: collapse;
   table-layout: auto;
   width: 100%;
-  margin: .8em 0;
+  margin: 32px 0 16px;
   border: 1px solid var(--md-table-border);
 }
 
@@ -225,22 +233,25 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
 
 /* Floating Table Toolbar (anchored above table) */
 .markdown-live .md-table-floating-bar {
-  position: relative;
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-  padding: 0;
-  width: 100%;
+  display: none;
+  position: absolute;
   height: 24px;
   box-sizing: border-box;
-  display: flex;
   gap: 2px;
   align-items: center;
   flex-wrap: nowrap;
   font: var(--ui-font-size)/var(--ui-line-height) var(--font-sans);
+  z-index: 25;
+  margin: 0;
 }
+
+/* 默认隐藏，只有光标进入表格内部时才显示表格操作行 */
+.markdown-live .md-table-floating-bar.is-active,
+.markdown-live .md-table-floating-bar:focus-within {
+  display: flex;
+}
+
 .markdown-live .md-table-tools-spacer { flex: 1; }
-.markdown-live .md-table-tools + table { margin-top: 0; }
 .markdown-live .md-table-tools.md-table-floating-bar > button { width: 24px; height: 24px; min-height: 24px; padding: 4px; background: transparent; border-radius: 0; flex: none; }
 .markdown-live .md-table-tools svg { display: block; width: 16px; height: 16px; }
 .markdown-live .md-table-tools [aria-pressed="true"] { outline: 1px solid var(--line); background: var(--soft); }
@@ -992,7 +1003,7 @@ kbd,
 
 @media (max-width: 700px) {
   .markdown-live .md-document {
-    padding: 24px 18px 100px;
+    padding: 24px 38px 100px;
   }
   .markdown-live .md-live-search {
     top: 6px;

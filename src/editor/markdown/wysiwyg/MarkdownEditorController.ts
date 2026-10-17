@@ -30,6 +30,7 @@ import { LiveContextMenu, type LiveMenuEntry, type LiveMenuItem } from './LiveCo
 import { defaultMarkdownClipboard, type MarkdownClipboardSettings } from './contracts'
 import { shortcutLabel } from '../../../features/shell/editorSettings'
 import { textClipboard } from '../../../features/shell/clipboard'
+import { cancelSmoothScroll, smoothScrollTo } from '../../core/smoothScroll'
 import type { MarkdownFormat } from '../formatCommands'
 import type { LiveEditor, LiveOptions, MarkdownTypography } from './contracts'
 import 'prosemirror-view/style/prosemirror.css'
@@ -589,6 +590,7 @@ export class MarkdownEditorController implements LiveEditor {
 
   private dispatch(tr: Transaction) {
     if (this.disposed) return
+    if (tr.docChanged) cancelSmoothScroll(this.dom)
     try {
       const applied = this.view.state.applyTransaction(tr)
       const before = this.bridge.source
@@ -627,6 +629,7 @@ export class MarkdownEditorController implements LiveEditor {
 
   sync(source: string, update?: unknown) {
     if (this.disposed || source === this.bridge.source) return
+    cancelSmoothScroll(this.dom)
     this.contextMenu.close()
     if (this.composing) {
       this.pendingSource = source
@@ -672,20 +675,23 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   reveal(position: number, align: 'nearest' | 'start' = 'nearest') {
+    cancelSmoothScroll(this.dom)
+    const before = this.dom.scrollTop
     const at = Math.min(this.view.state.doc.content.size, this.bridge.documentPosition(position))
     let tr = this.view.state.tr.setSelection(Selection.near(this.view.state.doc.resolve(at)))
     if (align === 'nearest') tr = tr.scrollIntoView()
     this.view.dispatch(tr)
     if (align === 'start') {
       this.view.focus()
-      const found = this.view.domAtPos(this.view.state.selection.from).node
-      const element = found instanceof Element ? found : found.parentElement
-      const heading = element?.closest('h1,h2,h3,h4,h5,h6')
-      const top = heading && this.view.dom.contains(heading)
-        ? heading.getBoundingClientRect().top : this.view.coordsAtPos(this.view.state.selection.from).top
-      // Outline navigation aligns even an already-visible heading. Scroll only
-      // this pane, rather than scrollIntoView() moving surrounding UI or peers.
-      this.dom.scrollTop += top - this.dom.getBoundingClientRect().top - 24
+      this.dom.scrollTop = before
+      smoothScrollTo(this.dom, () => {
+        const found = this.view.domAtPos(this.view.state.selection.from).node
+        const element = found instanceof Element ? found : found.parentElement
+        const heading = element?.closest('h1,h2,h3,h4,h5,h6')
+        const top = heading && this.view.dom.contains(heading)
+          ? heading.getBoundingClientRect().top : this.view.coordsAtPos(this.view.state.selection.from).top
+        return this.dom.scrollTop + top - this.dom.getBoundingClientRect().top - 24
+      }, () => !this.disposed)
     }
   }
 
@@ -1061,12 +1067,28 @@ export class MarkdownEditorController implements LiveEditor {
     this.searchController?.updateCount()
     const inTable = isInTable(this.view.state)
     const { $from } = this.view.state.selection
+    let activeTablePos: number | null = null
     let alignment: string | null = null
     if (inTable) {
       for (let depth = $from.depth; depth > 0; depth--) {
-        if (['table_cell', 'table_header'].includes($from.node(depth).type.name)) {
-          alignment = $from.node(depth).attrs.align || 'left'
-          break
+        const node = $from.node(depth)
+        if (node.type === s.nodes.table) {
+          activeTablePos = $from.before(depth)
+        }
+        if (['table_cell', 'table_header'].includes(node.type.name) && alignment === null) {
+          alignment = node.attrs.align || 'left'
+        }
+      }
+    }
+    for (const [pos, bar] of this.tableToolbars) {
+      const active = inTable && activeTablePos !== null && activeTablePos === pos
+      bar.classList.toggle('is-active', active)
+      if (active) {
+        const table = bar.nextElementSibling as HTMLElement | null
+        if (table && table.tagName === 'TABLE') {
+          bar.style.top = `${table.offsetTop - 28}px`
+          bar.style.left = `${table.offsetLeft}px`
+          bar.style.width = `${table.offsetWidth}px`
         }
       }
     }
@@ -1815,6 +1837,7 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   destroy() {
+    cancelSmoothScroll(this.dom)
     this.contextMenu.close()
     this.imagePreview.destroy()
     this.fenceAutocomplete?.destroy()

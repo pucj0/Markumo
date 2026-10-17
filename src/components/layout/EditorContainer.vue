@@ -1,5 +1,5 @@
 <template>
-  <div class="editor-container" :data-revision="revision">
+  <div ref="container" class="editor-container" :data-revision="revision">
     <div class="editor-main" :class="{ 'is-split-pane': manager.isSplit }">
       <div v-if="doc?.languageStatus === 'error'" class="language-message" role="status">
         {{ doc.languageError }}
@@ -27,8 +27,13 @@
       </div>
     </div>
 
-    <!-- 右侧大纲容器（Phase 6 真实 Lezer AST 大纲接入） -->
-    <aside v-if="showOutline && doc" class="outline-sidebar">
+    <div v-if="showOutline && doc" class="outline-resizer" role="separator" aria-label="调整大纲宽度" aria-orientation="vertical" tabindex="0"
+      :aria-valuenow="visibleOutlineWidth" :aria-valuemin="160" :aria-valuemax="maxOutlineWidth" title="拖动调整大纲宽度，双击恢复默认"
+      @pointerdown="startOutlineResize" @lostpointercapture="stopOutlineResize" @dblclick="setOutlineWidth(240)"
+      @keydown.left.prevent="setOutlineWidth(visibleOutlineWidth + 10)" @keydown.right.prevent="setOutlineWidth(visibleOutlineWidth - 10)"
+      @keydown.home.prevent="setOutlineWidth(160)" @keydown.end.prevent="setOutlineWidth(maxOutlineWidth)"
+    ></div>
+    <aside v-if="showOutline && doc" class="outline-sidebar" :style="{ width: `${visibleOutlineWidth}px` }">
       <div class="outline-head">
         <span>大纲</span>
         <button
@@ -51,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import SplitLayoutNode from './SplitLayoutNode.vue'
 import OutlineView from './OutlineView.vue'
 import { extractOutline, type OutlineItem } from '../../editor/outline/outlineService'
@@ -65,6 +70,7 @@ const props = defineProps<{
   doc: EditorDocument | null
   manager: DocumentManager
   showOutline: boolean
+  outlineWidth?: number
   desktop: boolean
   wordWrap?: boolean
   files?: FileController
@@ -79,6 +85,7 @@ const emit = defineEmits<{
   (e: 'open-workspace'): void
   (e: 'open-palette', cat: 'action' | 'file' | 'all'): void
   (e: 'close-outline'): void
+  (e: 'update:outlineWidth', width: number): void
   // One event for every pane: the pane id travels with the tab, so a close can
   // never be handled twice (which would prompt for the same dirty file twice).
   (e: 'close-tab', payload: { id: string; pane: string }): void
@@ -88,6 +95,53 @@ const emit = defineEmits<{
 
 const revision = ref(0)
 const unsubscribe = props.manager.subscribe(() => revision.value++)
+const container = ref<HTMLElement | null>(null), containerWidth = ref(800), localOutlineWidth = ref(240)
+const maxOutlineWidth = computed(() => Math.max(160, Math.min(520, containerWidth.value - 244)))
+const visibleOutlineWidth = computed(() => Math.min(maxOutlineWidth.value, Math.max(160, props.outlineWidth ?? localOutlineWidth.value)))
+let observer: ResizeObserver | undefined
+let resize: { pointer: number; x: number; width: number; cursor: string; selection: string; handle: HTMLElement } | null = null
+function setOutlineWidth(width: number) {
+  const value = Math.round(Math.max(160, Math.min(maxOutlineWidth.value, width)))
+  localOutlineWidth.value = value
+  emit('update:outlineWidth', value)
+}
+function startOutlineResize(event: PointerEvent) {
+  if (event.button !== 0) return
+  stopOutlineResize()
+  event.preventDefault()
+  const handle = event.currentTarget as HTMLElement
+  resize = {pointer:event.pointerId,x:event.clientX,width:visibleOutlineWidth.value,cursor:document.body.style.cursor,selection:document.body.style.userSelect,handle}
+  handle.setPointerCapture(event.pointerId)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('pointermove', moveOutlineResize)
+  window.addEventListener('pointerup', stopOutlineResize)
+  window.addEventListener('pointercancel', stopOutlineResize)
+  window.addEventListener('blur', stopOutlineResize)
+}
+function moveOutlineResize(event: PointerEvent) {
+  if (resize && event.pointerId === resize.pointer) setOutlineWidth(resize.width + resize.x - event.clientX)
+}
+function stopOutlineResize(event?: Event) {
+  if (!resize) return
+  if (event instanceof PointerEvent && event.pointerId !== resize.pointer) return
+  const {handle, pointer} = resize
+  document.body.style.cursor = resize.cursor
+  document.body.style.userSelect = resize.selection
+  resize = null
+  if (handle.hasPointerCapture(pointer)) handle.releasePointerCapture(pointer)
+  window.removeEventListener('pointermove', moveOutlineResize)
+  window.removeEventListener('pointerup', stopOutlineResize)
+  window.removeEventListener('pointercancel', stopOutlineResize)
+  window.removeEventListener('blur', stopOutlineResize)
+}
+watch(() => props.showOutline && !!props.doc, shown => { if (!shown) stopOutlineResize() })
+onMounted(() => {
+  if (!container.value) return
+  containerWidth.value = container.value.clientWidth
+  observer = new ResizeObserver(entries => { containerWidth.value = entries[0].contentRect.width })
+  observer.observe(container.value)
+})
 
 function handleCloseTab(payload: { id: string; pane: string }) {
   emit('close-tab', payload)
@@ -123,6 +177,8 @@ function handleSelectOutline(item: OutlineItem) {
 }
 
 onUnmounted(() => {
+  observer?.disconnect()
+  stopOutlineResize()
   unsubscribe()
 })
 </script>
@@ -163,13 +219,13 @@ onUnmounted(() => {
 }
 
 .outline-sidebar {
-  width: 240px;
   background: var(--side);
-  border-left: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   flex: none;
 }
+.outline-resizer {width:4px;flex:none;background:var(--line);cursor:col-resize;touch-action:none;user-select:none;position:relative;z-index:3}
+.outline-resizer:hover,.outline-resizer:focus-visible {background:var(--accent);outline:none}
 
 .outline-head {
   height: 38px;

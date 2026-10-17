@@ -40,14 +40,16 @@ Markdown 富文本正文提供 Google 搜索、剪切/复制/粘贴/删除图标
 
 执行 `node scripts/rich-clipboard-regression.mjs` 运行 14 项无界面浏览器验证（按现有测试约定可设置 `MARKUMO_PLAYWRIGHT_MODULE` 和 `MARKUMO_CHROME`）。测试使用隔离剪贴板，不读取或修改用户的系统剪贴板。截图和结果写入忽略目录 `test-results/rich-clipboard/`。
 
-另已执行 `pnpm typecheck`、`pnpm build`、Cargo check/test（8 项通过），以及空 Markdown、发布控制器和 20 轮媒体切换回归。真实 Windows/macOS/Linux 应用之间的系统剪贴板互通仍需桌面人工验收。
+另已执行 `pnpm typecheck`、`pnpm build`、Cargo check/test（9 项通过），以及空 Markdown、发布控制器和 20 轮媒体切换回归。真实 Windows/macOS/Linux 应用之间的系统剪贴板互通仍需桌面人工验收。
 
 ## 大纲定位
 
-左右大纲使用统一的 `DocumentManager.revealOutline`：点击后将标题滚动到当前编辑窗格顶部附近（24px 留白），重复点击和点击已可见标题也会对齐。源码使用 CodeMirror 的定向滚动效果，富文本只滚动所属的 `.markdown-live`，Markdown 双栏沿用源码与预览的滚动同步。
+左右大纲使用统一的 `DocumentManager.revealOutline`：点击后平滑滚动至标题，并在当前编辑窗格顶部留出 24px。源码与富文本共用约 240–420ms 的缓出动画；连续点击从当前位置转向最新标题，滚轮、触摸、键盘和手动操作会停止动画。切换窗格、关闭编辑器及修改文档时清理过期动画。系统启用「减少动态效果」时直接定位。Markdown 双栏沿用源码与预览的同步滚动。
+
+右侧大纲与编辑区之间的分隔条支持拖动调整宽度（160–520px），并按窗口可用空间限制上限。双击恢复 240px；聚焦分隔条后可用左右方向键微调、Home/End 调整至边界。宽度通过现有首选项服务保存，隐藏再显示或重启后保留。
 
 Markdown 标题提取按文档快照缓存，独立于 CodeMirror 的增量语法树，解决富文本模式下长文档后半部分标题遗漏。仍保留 1Mi 字符与 1000 项预算，代码符号大纲沿用原解析器。
 
-`node scripts/outline-navigation-regression.mjs` 验证 5 组场景：远距离与重复点击、左右大纲、源码光标位置、双栏预览同步、左右分栏独立滚动。`scripts/outline-regression.mjs` 验证原有安全渲染和折叠行为。
+`node scripts/outline-navigation-regression.mjs` 验证 9 组场景，包括逐帧确认源码与富文本存在中间滚动位置、连续点选与滚轮中断、宽度拖动及持久化、窗口收缩、双栏同步、分栏独立滚动、减少动态效果和关闭时清理。`scripts/outline-regression.mjs` 验证原有安全渲染和折叠行为。
 
 额外检查了工作区原有的未提交多表格工具栏测试：第 4 项（第一张表格工具栏可见性）仍失败；使用本次修改前的控制器及原有排版改动重跑，同样失败。该既有问题与本次剪贴板和大纲定位修改分别保留。

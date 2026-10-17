@@ -12,6 +12,7 @@ pub struct EditorSettings {
     font_family: String,
     word_wrap: bool,
     show_outline: bool,
+    outline_width: u16,
     indent_size: u8,
     use_tabs: bool,
     default_md_mode: String,
@@ -67,6 +68,7 @@ impl Default for EditorSettings {
             font_family: "system".into(),
             word_wrap: false,
             show_outline: false,
+            outline_width: 240,
             indent_size: 2,
             use_tabs: false,
             default_md_mode: "live".into(),
@@ -108,6 +110,7 @@ fn validate(settings: &EditorSettings) -> Result<(), String> {
     }
     if !["dark", "light", "system"].contains(&settings.theme.as_str())
         || !(12..=20).contains(&settings.ui_font_size)
+        || !(160..=520).contains(&settings.outline_width)
         || !(10..=24).contains(&settings.font_size)
         || !["system", "consolas", "cascadia"].contains(&settings.font_family.as_str())
         || !(1..=8).contains(&settings.indent_size)
@@ -192,6 +195,19 @@ pub async fn save_editor_settings(
 #[cfg(test)]
 mod branding_tests {
     use super::*;
+
+    #[test]
+    fn outline_width_defaults_and_saved_preferences() {
+        let old: EditorSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.outline_width, 240);
+        let settings: EditorSettings = serde_json::from_str(r#"{"outlineWidth":360}"#).unwrap();
+        validate(&settings).unwrap();
+        assert_eq!(serde_json::to_value(settings).unwrap()["outlineWidth"], 360);
+        for width in [0, 159, 521] {
+            let invalid: EditorSettings = serde_json::from_str(&format!(r#"{{"outlineWidth":{width}}}"#)).unwrap();
+            assert!(validate(&invalid).is_err());
+        }
+    }
 
     #[test]
     fn rich_clipboard_defaults_and_preferences_round_trip() {

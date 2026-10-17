@@ -60,6 +60,7 @@
       <section class="center-area">
         <!-- 主编辑器容器 -->
         <EditorContainer
+          v-model:outline-width="outlineWidth"
           :doc="activeDoc"
           :manager="manager"
           :show-outline="showOutline"
@@ -156,7 +157,7 @@ import GotoLineModal from './components/modals/GotoLineModal.vue'
 import Toast from './components/common/Toast.vue'
 import { computed } from 'vue'
 import { useAppShell } from './app/useAppShell'
-const { markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
+const { outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
   paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
   setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,
