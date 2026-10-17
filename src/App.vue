@@ -1,5 +1,5 @@
 <template>
-  <div class="app" :class="{ focus: focusMode }">
+  <div class="app" :class="{ focus: focusMode }" :inert="updateInstalling || undefined">
     <!-- 顶部标题栏 -->
     <TopBar
       v-if="!focusMode"
@@ -11,6 +11,9 @@
       :menu-groups="menuGroups"
       :command-registry="commandRegistry"
       :quick-shortcut="shortcuts['quick-open']"
+      :before-update="prepareUpdate"
+      :update-enabled="!fileBusy && !startupLoading"
+      @update-installing="updateInstalling=$event"
       @execute-command="executeCommand"
       @open-file="openFile()"
       @save-file="saveActive()"
@@ -135,6 +138,7 @@
     <!-- 操作提示 Toast -->
     <DiscardDialog ref="discardRef" :can-save="desktop" :busy="fileBusy" @save="savePending" @discard="discardPending" @cancel="cancelPendingClose" />
     <Toast ref="toastRef" />
+    <div v-if="updateInstalling" class="update-install-overlay" role="status">正在安装更新并重启，请稍候…</div>
   </div>
 </template>
 
@@ -157,7 +161,7 @@ const { markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, 
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,
   reopenEncoding, convertEncoding, saveAsEncoding,
   gotoLineRef, handleGotoLine, revealInExplorerToken,
-  desktop, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading } = useAppShell()
+  desktop, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading,updateInstalling,prepareUpdate } = useAppShell()
 
 const activeDocLineCount = computed(() => {
   if (!activeDoc.value) return 1
@@ -168,6 +172,7 @@ const activeRoot = computed(() => appMode.value === 'workspace' && activeDoc.val
 </script>
 
 <style scoped>
+.update-install-overlay {position:fixed;inset:0;z-index:2000;display:grid;place-items:center;background:var(--app);color:var(--ink);font-size:15px}
 .app {
   height: 100vh;
   display: flex;

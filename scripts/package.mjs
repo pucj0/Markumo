@@ -89,6 +89,7 @@ No installation, Git operations, signing-key generation or publishing is perform
   // Read Cargo configuration through Cargo, including a custom CARGO_TARGET_DIR.
   const metadata = JSON.parse(run('cargo', ['metadata', '--no-deps', '--format-version', '1', '--manifest-path', 'src-tauri/Cargo.toml'], true))
   const runner = join(project, 'scripts/tauri.mjs'), buildArgs = [runner, 'build', '--bundles', options.bundles.join(',')]
+  if (env.CARGO_BUILD_TARGET) buildArgs.push('--target', env.CARGO_BUILD_TARGET)
   if (options.platform === 'darwin') {
     // Derive ICNS from the existing logo without rewriting source icon assets.
     const icons = join(metadata.target_directory, 'packaging-icons')

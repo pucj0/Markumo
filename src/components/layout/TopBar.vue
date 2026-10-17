@@ -16,8 +16,8 @@
     </button>
 
     <div class="topright">
-
-
+      <button class="ib github-link" aria-label="在 GitHub 查看 Markumo" title="GitHub · pucj0/Markumo" @click="openGitHub"><Icon name="github" /></button>
+      <UpdateControl v-if="desktop" :before-install="beforeUpdate" :enabled="updateEnabled" @installing="$emit('update-installing',$event)" />
       <button
         class="ib"
         :title="theme === 'dark' ? '深色 · 切换浅色主题' : theme === 'light' ? '浅色 · 切换跟随系统' : '跟随系统 · 切换深色主题'"
@@ -44,6 +44,8 @@
 
 <script setup lang="ts">
 import Icon from '../common/Icon.vue'
+import UpdateControl from '../common/UpdateControl.vue'
+import { openProjectPage } from '../../features/shell/AppUpdater'
 import AppMenu from './AppMenu.vue'
 import type { AppMode, ThemePreference } from '../../types'
 import type { MenuGroup, CommandRegistry } from '../../features/shell/menuModel'
@@ -58,7 +60,11 @@ const props = defineProps<{
   menuGroups: MenuGroup[]
   commandRegistry: CommandRegistry
   quickShortcut: string
+  beforeUpdate: () => Promise<boolean>
+  updateEnabled: boolean
 }>()
+
+async function openGitHub(){try{await openProjectPage(props.desktop)}catch{globalThis.window.dispatchEvent(new CustomEvent('editor-notice',{detail:'无法打开 GitHub，请检查系统默认浏览器。'}))}}
 
 async function windowAction(action: 'minimize' | 'maximize' | 'close') {
   if (!props.desktop) return
@@ -88,6 +94,7 @@ const emit = defineEmits<{
   (e: 'save-file'): void
   (e: 'open-palette', category: 'action' | 'file' | 'all'): void
   (e:'execute-command',id:string):void
+  (e:'update-installing',value:boolean):void
 }>()
 
 </script>
@@ -168,7 +175,7 @@ const emit = defineEmits<{
   .quickbtn .kbd,.quick-label { display: none; }
   .topbar { grid-template-columns: auto 32px auto; gap:6px;justify-content:space-between }
   .quickbtn { padding:0;justify-content:center }
-  .topright > .ib:not([title='设置']) { display:none }
+  .topright > .ib:not(.github-link):not([title='设置']) { display:none }
 }
 
 .topright {

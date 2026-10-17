@@ -5,6 +5,8 @@
   "windows": ["main", "file-*", "app-*"],
   "permissions": [
     "core:default",
+    "updater:default",
+    "process:allow-restart",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-read-image",
     "clipboard-manager:allow-write-text",

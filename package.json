@@ -1,7 +1,7 @@
 {
   "name": "markumo",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -38,6 +38,8 @@
     "@lezer/markdown": "^1.8.0",
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/plugin-clipboard-manager": "^2.4.2",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.0",
     "dompurify": "^3.4.17",
     "html2canvas": "^1.4.1",
     "katex": "^0.19.0",

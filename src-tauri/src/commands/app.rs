@@ -3,6 +3,15 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+#[tauri::command]
+pub fn ensure_update_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    use tauri::Manager;
+    if window.app_handle().webview_windows().len() != 1 {
+        return Err("请先保存修改并关闭其他 Markumo 窗口，再安装更新。".into());
+    }
+    Ok(())
+}
+
 fn validated_external_url(raw: &str) -> Result<String, String> {
     let url = tauri::Url::parse(raw).map_err(|_| "无效链接".to_string())?;
     if !["http", "https"].contains(&url.scheme())

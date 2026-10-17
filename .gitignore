@@ -8,6 +8,7 @@ playwright-report/
 test-results/
 .markumo-dev/
 .markumo-media-test/
+.release-artifacts/
 # Retired profile is kept only as a migration backup; never track its data.
 .lightedit-dev/
 *.log

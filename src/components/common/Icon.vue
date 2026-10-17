@@ -8,6 +8,12 @@
     <template v-if="name === 'copy' || name === 'check'">
       <path :d="commonIconPaths[name]" />
     </template>
+    <template v-else-if="name === 'github'">
+      <path d="M9 19c-4.3 1.3-4.3-2.2-6-2.7M15 22v-3.9a3.4 3.4 0 0 0-1-2.7c3.3-.4 6.7-1.6 6.7-7.4a5.8 5.8 0 0 0-1.6-4 5.4 5.4 0 0 0-.1-4s-1.2-.4-4.1 1.5a14 14 0 0 0-7.5 0C4.6-.4 3.4 0 3.4 0a5.4 5.4 0 0 0-.1 4 5.8 5.8 0 0 0-1.6 4c0 5.8 3.4 7 6.7 7.4a3.4 3.4 0 0 0-1 2.7V22" transform="translate(2 1) scale(.86)" />
+    </template>
+    <template v-else-if="name === 'download'">
+      <path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" />
+    </template>
     <template v-else-if="name === 'files'">
       <rect x="5" y="3" width="15" height="18" rx="2" />
       <path d="M9 7h7M9 11h7M9 15h4" />

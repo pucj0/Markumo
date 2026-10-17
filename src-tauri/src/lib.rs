@@ -111,6 +111,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(Arc::new(Mutex::new(files::FileService::default())))
         .manage(workspace_store)
         .manage(session::LaunchStore::default())
@@ -151,6 +153,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app::get_app_version,
+            commands::app::ensure_update_window,
             commands::session::initialize_launch,commands::session::persist_session,
             commands::app::open_external_link,
             commands::settings::load_editor_settings, commands::settings::save_editor_settings,

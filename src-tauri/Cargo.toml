@@ -1,6 +1,6 @@
 [package]
 name = "markumo"
-version = "0.1.0"
+version = "1.0.0"
 description = "Lightweight text and Markdown editor"
 authors = ["Markumo Team"]
 edition = "2021"
@@ -19,6 +19,8 @@ serde_json = "1.0"
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 encoding_rs = "0.8"
 sha2 = "0.10"
 tempfile = "3"

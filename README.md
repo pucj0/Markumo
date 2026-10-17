@@ -2,7 +2,7 @@
 
 轻量的桌面文本与 Markdown 编辑器。支持直接打开单个文件，也可以用文件夹工作区管理多个文档。
 
-主要面向 Windows；macOS 和 Linux 可在对应系统准备开发环境后构建。
+提供 Windows、Linux、macOS（Apple Silicon / Intel）版本，支持签名验证的应用内更新。
 
 ## 功能
 
@@ -16,7 +16,7 @@
 
 ## 安装与使用
 
-从仓库的 [Releases](https://github.com/pucj0/Markumo/releases) 获取已发布版本；没有可用版本时，可按下文自行构建。
+从仓库的 [Releases](https://github.com/pucj0/Markumo/releases/latest) 获取已发布版本，也可按下文自行构建。标题栏 GitHub 图标可打开项目，更新图标提供版本检查和一键更新；有未保存修改时请先保存。自动发布与签名配置见 [发布说明](docs/releasing.md)。
 
 Windows 构建产物为 `Markumo_*_x64-setup.exe`。安装后可通过菜单打开文件或文件夹，也可使用系统“打开方式”选择 Markumo。
 

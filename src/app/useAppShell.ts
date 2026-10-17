@@ -70,6 +70,7 @@ export function useAppShell() {
   workspace.connect()
   const recentFiles = ref<Preferences['recent']>([])
   const fileBusy = ref(false)
+  const updateInstalling=ref(false)
   const autoSaver = new AutoSaveController(manager, files, () => fileBusy.value || !!discardRef.value?.visible || !!settingsRef.value?.visible || !!document.querySelector('.workspace-operation-dialog'))
   const revision = ref(0)
   const unsubscribe = manager.subscribe(() => revision.value++)
@@ -183,7 +184,7 @@ export function useAppShell() {
   let launchReady=false
   let closeSource: CloseSource = 'native'
   const windowClose = new WindowCloseGuard({
-    status: () => ({ fileBusy: fileBusy.value || files.workspaceBusy, savingCount: files.saving.size,
+    status: () => ({ fileBusy: fileBusy.value || files.workspaceBusy || updateInstalling.value, savingCount: files.saving.size,
       composing: manager.isComposing, dirtyCount: manager.openedDocuments.filter(doc => doc.dirty).length,
       documentCount: manager.openedDocuments.length, activePane: manager.activePane, hasActiveDocument: !!manager.activeId }),
     flush: async()=>{await flushSettings();scheduleSession();await sessionWriter?.flush()},
@@ -207,7 +208,7 @@ export function useAppShell() {
 
   function toast(message: string) { toastRef.value?.show(message) }
   async function refreshRecent() {
-    if (!desktop || !alive) return
+    if (!desktop || !alive || updateInstalling.value) return
     try { const prefs = await tauriFiles.preferences(); if (alive) recentFiles.value = prefs.recent }
     catch (error) { toast(fileError(error)) }
   }
@@ -235,6 +236,16 @@ export function useAppShell() {
     closeSource = source
     try { await (await import('@tauri-apps/api/window')).getCurrentWindow().close() }
     catch (error) { closeSource = 'native'; toast(`退出失败：${fileError(error)}`) }
+  }
+  async function prepareUpdate(){
+    const safe=()=>!startupLoading.value&&!fileBusy.value&&!files.workspaceBusy&&!files.saving.size&&!manager.isComposing&&!discardRef.value?.visible&&!manager.openedDocuments.some(doc=>doc.dirty)
+    if(!desktop||!safe())return false
+    await invoke('ensure_update_window')
+    await flushSettings();scheduleSession();await sessionWriter?.flush()
+    if(!safe())return false
+    // Check again after asynchronous persistence, before invoking the installer.
+    await invoke('ensure_update_window')
+    return safe()
   }
   async function reopenEncoding(encoding: FileOpenEncoding, force = false) {
     const doc = manager.activeDocument
@@ -275,7 +286,7 @@ export function useAppShell() {
     void saveActive(true, encoding)
   }
   async function drainPending() {
-    if (!desktop || !alive) return
+    if (!desktop || !alive || updateInstalling.value) return
     pendingDrain = true
     if (!launchReady || draining || fileBusy.value || manager.isComposing || discardRef.value?.visible) return
     draining = true
@@ -680,6 +691,7 @@ export function useAppShell() {
   }
 
   function handleGlobalKeydown(event: KeyboardEvent) {
+    if(updateInstalling.value){event.preventDefault();event.stopPropagation();return}
     if (document.querySelector('.recording-box')) return
     if(startupLoading.value){if(event.ctrlKey||event.metaKey)event.preventDefault();return}
     const alreadyHandled = event.defaultPrevented
@@ -884,5 +896,5 @@ export function useAppShell() {
     pinDocById, createNewDoc, closeDocById,closeOtherTabs,cancelPendingClose, discardPending, savePending, setLanguage, setMarkdownMode,
     reopenEncoding, convertEncoding, saveAsEncoding,
     gotoLineRef, openGotoLine, handleGotoLine, toggleSplitPane, copyFullPath, copyRelativePath, revealInExplorer, revealInExplorerToken, zoomIn, zoomOut, resetZoom,
-    desktop, demo, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading }
+    desktop, demo, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading,updateInstalling,prepareUpdate }
 }
