@@ -3,6 +3,7 @@ import { delimiter, dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { normalizeWindowsArtifacts } from './windows-artifacts.mjs'
 
 export const platforms = {
   win32: { name: 'Windows', bundles: ['nsis'] },
@@ -101,16 +102,8 @@ No installation, Git operations, signing-key generation or publishing is perform
   const output = bundleDirectory(metadata.target_directory, env.CARGO_BUILD_TARGET)
   if (!existsSync(output)) throw Error(`Build exited successfully but no bundle directory was found at ${output}. Check any Cargo build.target configuration.`)
   if (options.platform === 'win32') {
-    // Generated executables can inherit a Low label from a restricted build
-    // directory, preventing NSIS from extracting into the user's normal Temp.
-    // Normalize only our output directory and executables, never user folders.
-    const installers = join(output, 'nsis')
-    run('icacls', [installers, '/setintegritylevel', '(OI)(CI)M'], true)
-    for (const file of readdirSync(installers).filter(file => file.endsWith('.exe'))) {
-      run('icacls', [join(installers, file), '/setintegritylevel', 'M'], true)
-    }
     const config = JSON.parse(readFileSync(join(project, 'src-tauri/tauri.conf.json'), 'utf8'))
-    run('icacls', [join(dirname(output), `${config.mainBinaryName || 'markumo'}.exe`), '/setintegritylevel', 'M'], true)
+    normalizeWindowsArtifacts(metadata.target_directory,config.mainBinaryName||'markumo')
   }
   console.log(`\n[OK] Packaging completed. Output directory:\n${output}`)
   for (const directory of options.platform === 'darwin' ? ['macos','dmg'] : options.platform === 'win32' ? ['nsis'] : ['deb','appimage']) {

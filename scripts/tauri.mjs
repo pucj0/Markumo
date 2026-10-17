@@ -1,8 +1,10 @@
-import { mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { mkdirSync,readFileSync } from 'node:fs'
+import { dirname,join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { run } from '@tauri-apps/cli'
 import { devOptions } from './devOptions.mjs'
+import { normalizeWindowsArtifacts } from './windows-artifacts.mjs'
 
 const project = dirname(dirname(fileURLToPath(import.meta.url)))
 const options = devOptions(process.argv.slice(2), project)
@@ -13,5 +15,13 @@ if (options.directories.length) {
   console.log(options.watch ? 'Code hot reload enabled (default for pnpm tauri dev).' : 'File-test mode (--no-watch): automatic restart and frontend reload disabled.')
 }
 
-try { await run(options.args, 'tauri') }
+try {
+  await run(options.args, 'tauri')
+  if(process.platform==='win32'&&options.args[0]==='build'){
+    const metadata=JSON.parse(execFileSync('cargo',['metadata','--no-deps','--format-version','1','--manifest-path','src-tauri/Cargo.toml'],{cwd:project,encoding:'utf8',windowsHide:true}))
+    const config=JSON.parse(readFileSync(join(project,'src-tauri/tauri.conf.json'),'utf8'))
+    normalizeWindowsArtifacts(metadata.target_directory,config.mainBinaryName||'markumo')
+    console.log('Windows installers and executable: set to Medium integrity.')
+  }
+}
 catch (error) { console.error(error instanceof Error ? error.message : error); process.exitCode = 1 }

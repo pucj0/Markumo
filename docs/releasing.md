@@ -30,6 +30,8 @@ Release 包含安装包、`.sig`、`SHA256SUMS` 和合并后的 `latest.json`。
 
 本地打包需要设置相同的 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 环境变量。只校验编译、不生成签名安装包时可使用 `pnpm build` 或 `cargo check`。
 
+Windows 所有 `pnpm tauri build` / `build.bat` / CI 入口都会把生成的安装包、NSIS 输出目录及主程序设为 Medium 完整性，防止从受限工作目录继承 Low 标签，导致安装器无法写入普通安装目录。仅修改生成产物的安全元数据，不改变签名字节或用户安装目录的权限。回归命令：`node scripts/windows-artifacts-regression.mjs`。
+
 验证：`node scripts/release-regression.mjs`；浏览器环境变量同 `scripts/media-regression.mjs`。
 
 实现参考：[Tauri updater](https://v2.tauri.app/plugin/updater/)、[GitHub Actions 官方工作流文档](https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions)。
