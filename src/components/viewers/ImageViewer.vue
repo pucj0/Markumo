@@ -125,7 +125,7 @@ onMounted(()=>{ observer=new ResizeObserver(()=>{bounds.width=viewport.value?.cl
 onBeforeUnmount(()=>{disposed=true;generation++;observer?.disconnect();saveScroll();release();drag.value=undefined})
 </script>
 <style scoped>
-.image-viewer {container-type:inline-size;--image-canvas:color-mix(in srgb,var(--editor) 84%,var(--soft));--checker-light:color-mix(in srgb,var(--editor) 88%,#888);--checker-dark:color-mix(in srgb,var(--editor) 70%,#888)}
+.image-viewer {container-type:inline-size;--image-canvas:color-mix(in srgb,var(--editor) 84%,var(--soft));--checker-light:#f5f5f5;--checker-dark:#e6e6e6}
 .image-toolbar { display:flex;align-items:center;gap:16px;min-height:36px;padding:3px 10px;flex:none;border-bottom:1px solid var(--line);background:var(--editor) }
 .image-tools {display:flex;align-items:center;gap:2px;flex:0 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none}
 .image-toolbar button {display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--sub);cursor:pointer;flex:none}
