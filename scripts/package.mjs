@@ -91,12 +91,19 @@ No installation, Git operations, signing-key generation or publishing is perform
   const metadata = JSON.parse(run('cargo', ['metadata', '--no-deps', '--format-version', '1', '--manifest-path', 'src-tauri/Cargo.toml'], true))
   const runner = join(project, 'scripts/tauri.mjs'), buildArgs = [runner, 'build', '--bundles', options.bundles.join(',')]
   if (env.CARGO_BUILD_TARGET) buildArgs.push('--target', env.CARGO_BUILD_TARGET)
+  const bundleOverrides = {}
+  if (!env.TAURI_SIGNING_PRIVATE_KEY) {
+    bundleOverrides.createUpdaterArtifacts = false
+  }
   if (options.platform === 'darwin') {
     // Derive ICNS from the existing logo without rewriting source icon assets.
     const icons = join(metadata.target_directory, 'packaging-icons')
     mkdirSync(icons, { recursive: true })
     run(process.execPath, [runner, 'icon', join(project, 'src-tauri/icons/icon.png'), '--output', icons])
-    buildArgs.push('--config', JSON.stringify({ bundle: { icon: [join(icons, 'icon.icns'), join(project, 'src-tauri/icons/icon.png')] } }))
+    bundleOverrides.icon = [join(icons, 'icon.icns'), join(project, 'src-tauri/icons/icon.png')]
+  }
+  if (Object.keys(bundleOverrides).length > 0) {
+    buildArgs.push('--config', JSON.stringify({ bundle: bundleOverrides }))
   }
   run(process.execPath, buildArgs)
   const output = bundleDirectory(metadata.target_directory, env.CARGO_BUILD_TARGET)
