@@ -51,7 +51,9 @@ export class MarkdownSourceBridge {
       }
       let raw=inlineRaw??(old?.node.eq(node)?old.raw:old&&node.type.name==='table'&&old.node.type===node.type?(patchTable(old.node,node,old.raw)??serializeBlock(node)):serializeBlock(node))
       if(old && !old.node.eq(node) && old.raw.includes('\r\n')) raw=raw.replace(/\r?\n/g,'\r\n')
-      const prefix = !blocks.length ? (old === this.blocks[0] ? old.prefix : '') : (old ? old.prefix || (!raw.startsWith('\n') ? '\n\n' : '') : (!raw.startsWith('\n') ? '\n\n' : ''))
+      // An empty source has a placeholder paragraph but no source block. Two
+      // missing blocks must not count as the same existing first block.
+      const prefix = !blocks.length ? (old && old === this.blocks[0] ? old.prefix : '') : (old ? old.prefix || (!raw.startsWith('\n') ? '\n\n' : '') : (!raw.startsWith('\n') ? '\n\n' : ''))
       source+=prefix;const from=source.length;source+=raw
       if(node.type.name==='protected_source' && !old?.node.eq(node) && /^\s*\[[^\]]+\]:/m.test(raw))definitionsChanged=true
       blocks.push({id,from,to:source.length,raw,prefix,node})
