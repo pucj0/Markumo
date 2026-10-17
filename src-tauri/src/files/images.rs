@@ -24,9 +24,13 @@ mod dropped_directory_tests {
     #[test]
     fn dropped_directories_are_classified_and_open_as_workspace_roots() {
         let temporary = tempfile::tempdir().unwrap();
-        let folder = temporary.path().join("folder.png");
-        let second = temporary.path().join("second");
-        let file = temporary.path().join("note.md");
+        // macOS's temporary directory may begin with /var -> /private/var.
+        // Use its real path so these ordinary-directory fixtures do not test
+        // the separate, intentional workspace symlink rejection policy.
+        let root = temporary.path().canonicalize().unwrap();
+        let folder = root.join("folder.png");
+        let second = root.join("second");
+        let file = root.join("note.md");
         std::fs::create_dir(&folder).unwrap();
         std::fs::create_dir(&second).unwrap();
         std::fs::write(&file, "# test").unwrap();
@@ -50,15 +54,16 @@ mod dropped_directory_tests {
     #[test]
     fn dropped_directory_tokens_are_window_scoped_and_revocable() {
         let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
         let mut files = FileService::default();
         files.set_owner("main");
-        let input = files.image_inputs(vec![temporary.path().to_path_buf()]).remove(0);
+        let input = files.image_inputs(vec![root.clone()]).remove(0);
         files.set_owner("other");
         assert!(files.take_dropped_directory(&input.token).is_err());
         files.set_owner("main");
         assert!(files.take_dropped_directory("untrusted-token").is_err());
         assert!(files.take_dropped_directory(&input.token).is_ok());
-        let input = files.image_inputs(vec![temporary.path().to_path_buf()]).remove(0);
+        let input = files.image_inputs(vec![root]).remove(0);
         files.release_image_inputs(&[input.token.clone()]);
         assert!(files.take_dropped_directory(&input.token).is_err());
     }
@@ -66,12 +71,29 @@ mod dropped_directory_tests {
     #[test]
     fn dropped_directory_is_revalidated_before_use() {
         let temporary = tempfile::tempdir().unwrap();
-        let folder = temporary.path().join("changed");
+        let folder = temporary.path().canonicalize().unwrap().join("changed");
         std::fs::create_dir(&folder).unwrap();
         let mut files = FileService::default();
         let input = files.image_inputs(vec![folder.clone()]).remove(0);
         std::fs::remove_dir(&folder).unwrap();
         std::fs::write(&folder, "now a file").unwrap();
+        assert!(files.take_dropped_directory(&input.token).is_err());
+        assert!(files.take_dropped_directory(&input.token).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacing_a_dropped_directory_with_a_symlink_still_rejects_and_consumes_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let folder = root.join("changed");
+        let target = root.join("target");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::create_dir(&target).unwrap();
+        let mut files = FileService::default();
+        let input = files.image_inputs(vec![folder.clone()]).remove(0);
+        std::fs::remove_dir(&folder).unwrap();
+        std::os::unix::fs::symlink(&target, &folder).unwrap();
         assert!(files.take_dropped_directory(&input.token).is_err());
         assert!(files.take_dropped_directory(&input.token).is_err());
     }
