@@ -16,6 +16,7 @@ pub struct EditorSettings {
     use_tabs: bool,
     default_md_mode: String,
     markdown_typography: MarkdownTypography,
+    markdown_clipboard: MarkdownClipboard,
     auto_save: bool,
     auto_save_delay: u32,
     tree_click_mode: String,
@@ -42,6 +43,12 @@ impl Default for MarkdownTypography {
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct MarkdownClipboard { copy_markdown: bool, copy_whole_line: bool }
+impl Default for MarkdownClipboard {
+    fn default() -> Self { Self { copy_markdown: true, copy_whole_line: false } }
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImageRules {
     location: String, custom_directory: String, relative: bool, dot_prefix: bool, escape: bool,
 }
@@ -64,6 +71,7 @@ impl Default for EditorSettings {
             use_tabs: false,
             default_md_mode: "live".into(),
             markdown_typography: MarkdownTypography::default(),
+            markdown_clipboard: MarkdownClipboard::default(),
             auto_save: false,
             auto_save_delay: 1500,
             tree_click_mode: "double".into(),
@@ -184,6 +192,19 @@ pub async fn save_editor_settings(
 #[cfg(test)]
 mod branding_tests {
     use super::*;
+
+    #[test]
+    fn rich_clipboard_defaults_and_preferences_round_trip() {
+        let old: EditorSettings = serde_json::from_str("{}").unwrap();
+        assert!(old.markdown_clipboard.copy_markdown);
+        assert!(!old.markdown_clipboard.copy_whole_line);
+        let settings: EditorSettings = serde_json::from_str(r#"{"markdownClipboard":{"copyMarkdown":false,"copyWholeLine":true}}"#).unwrap();
+        validate(&settings).unwrap();
+        let value = serde_json::to_value(settings).unwrap();
+        assert_eq!(value["markdownClipboard"]["copyMarkdown"], false);
+        assert_eq!(value["markdownClipboard"]["copyWholeLine"], true);
+        assert!(serde_json::from_str::<EditorSettings>(r#"{"markdownClipboard":{"copyMarkdown":"false"}}"#).is_err());
+    }
 
     #[test]
     fn old_preset_is_read_but_only_markumo_is_serialized() {

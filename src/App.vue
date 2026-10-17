@@ -53,7 +53,7 @@
         @toggle-side="toggleSidebar"
         @new-doc="createNewDoc"
         @select-doc="handleSelectDoc"
-        @select-outline="activeDocId && manager.revealPosition(activeDocId, $event.lineNumber, 1)"
+        @select-outline="activeDocId && manager.revealOutline(activeDocId, $event)"
       />
 
       <!-- 编辑主体区 -->
@@ -111,6 +111,7 @@
 
     <!-- 首选项模态框 -->
     <SettingsModal
+      v-model:markdown-clipboard="markdownClipboard"
       v-model:markdown-typography="markdownTypography"
       v-model:image-rules="imageRules"
       :document-image-rules="currentDocumentImageRules"
@@ -155,7 +156,7 @@ import GotoLineModal from './components/modals/GotoLineModal.vue'
 import Toast from './components/common/Toast.vue'
 import { computed } from 'vue'
 import { useAppShell } from './app/useAppShell'
-const { markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
+const { markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
   paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
   setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,

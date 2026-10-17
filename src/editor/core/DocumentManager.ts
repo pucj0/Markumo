@@ -14,7 +14,7 @@ import type { EditorDocument, Theme, MarkdownMode } from '../../types'
 import { lineEndings, type LineEndingSnapshot } from './lineEndings'
 import type { FileMetadata, OpenFile, ClassInfo, MediaMetadata } from '../../features/files/contracts'
 import { classSummary } from '../../features/files/classSummary'
-import { defaultMarkdownTypography, type MarkdownTypography, type LiveEditor } from '../markdown/wysiwyg/contracts'
+import { defaultMarkdownTypography, defaultMarkdownClipboard, type MarkdownClipboardSettings, type MarkdownTypography, type LiveEditor } from '../markdown/wysiwyg/contracts'
 import { markdownFormatTransaction, type MarkdownFormat } from '../markdown/formatCommands'
 import { captureLineBaseline, savedLineBaseline } from './changeGutter'
 import { createMarkdownResources, markdownResources, refreshMarkdownResources } from '../markdown/images'
@@ -50,6 +50,7 @@ export class DocumentManager {
   private readonly liveLoads = new Map<string, object>()
   private liveOrigin: {pane:string;update:unknown}|null = null
   private markdownTypography = defaultMarkdownTypography()
+  private markdownClipboard = defaultMarkdownClipboard()
   private readonly records = new Map<string, CachedDocument>()
   // Media documents deliberately have no EditorState, selection, undo history or text baseline.
   private readonly mediaRecords = new Map<string, { meta: EditorDocument; panes: Map<string, MediaViewState> }>()
@@ -334,19 +335,28 @@ export class DocumentManager {
     return true
   }
 
-  revealPosition(id: string, lineNumber: number, columnNumber: number) {
+  revealOutline(id: string, item: { lineNumber: number; from?: number }) {
+    const state = this.getState(id)
+    if (!state) return
+    const line = state.doc.line(Math.min(state.doc.lines, Math.max(1, item.lineNumber)))
+    const at = item.from === undefined ? line.from : Math.min(state.doc.length, Math.max(0, item.from))
+    const target = state.doc.lineAt(at)
+    this.revealPosition(id, target.number, at - target.from + 1, 'start')
+  }
+
+  revealPosition(id: string, lineNumber: number, columnNumber: number, align: 'nearest' | 'start' = 'nearest') {
     const record = this.records.get(id)
-    if (!record) return
+    if (!record || this.isComposing) return
     const doc = record.state.doc
     const targetLine = Math.min(Math.max(1, lineNumber), doc.lines)
     const line = doc.line(targetLine)
     const col = Math.min(Math.max(1, columnNumber), line.length + 1)
     const pos = line.from + (col - 1)
     const live=this.liveViews.get(this.activePane)
-    if(live?.id===id){live.editor.reveal(pos);live.editor.focus();return}
+    if(live?.id===id){live.editor.reveal(pos,align);live.editor.focus();return}
     this.dispatch(id, {
       selection: { anchor: pos, head: pos },
-      scrollIntoView: true,
+      ...(align === 'start' ? { effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: 24 }) } : { scrollIntoView: true }),
     })
     if (this.activeId === id) this.paneView(this.activePane)?.focus()
   }
@@ -500,7 +510,7 @@ export class DocumentManager {
         const source=record.state.doc.toString(),saved=record.panes[resolved]
         const sibling=[...this.liveViews.values()].find(live=>live.id===record.meta.id)?.editor
         const editor=new MarkdownEditorController(parent,{
-          source,anchor:saved.selection.main.anchor,head:saved.selection.main.head,resources:record.state.facet(markdownResources),typography:this.markdownTypography,
+          source,anchor:saved.selection.main.anchor,head:saved.selection.main.head,resources:record.state.facet(markdownResources),typography:this.markdownTypography,clipboard:this.markdownClipboard,
           publish:(expected,patch,update,isolated)=>{
             if(this.records.get(record.meta.id)!==record||record.state.doc.toString()!==expected||record.state.readOnly)return false
             this.liveOrigin={pane:resolved,update}
@@ -986,6 +996,7 @@ export class DocumentManager {
   refreshTypography() { this.setTheme(this.theme) }
   setMarkdownTypography(settings:MarkdownTypography){this.markdownTypography={...settings};for(const live of this.liveViews.values())live.editor.typography(settings);this.notify()}
   getMarkdownTypography(){return this.markdownTypography}
+  setMarkdownClipboard(settings:MarkdownClipboardSettings){this.markdownClipboard={...settings};for(const live of this.liveViews.values())live.editor.clipboardSettings(settings)}
   command(command: 'undo' | 'redo' | 'find' | 'replace' | 'find-next' | 'find-previous' | 'delete-line' | 'copy-line-down' | 'move-line-up' | 'move-line-down' | 'comment-line' | 'fold-code' | 'unfold-code') {
     if (!this.activeId || this.isComposing) return
     if (isMedia(this.activeDocument)) {

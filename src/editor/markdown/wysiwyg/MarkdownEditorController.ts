@@ -1,7 +1,7 @@
 import { EditorState, Plugin, TextSelection, Selection, NodeSelection, AllSelection, type Transaction, type Command } from 'prosemirror-state'
 import { EditorView, type NodeView } from 'prosemirror-view'
-import type { Node } from 'prosemirror-model'
-import { baseKeymap, chainCommands, exitCode, liftEmptyBlock, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands'
+import { Slice, type Node } from 'prosemirror-model'
+import { baseKeymap, chainCommands, exitCode, lift, liftEmptyBlock, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands'
 import { keymap } from 'prosemirror-keymap'
 import { inputRules, textblockTypeInputRule, wrappingInputRule, InputRule } from 'prosemirror-inputrules'
 import { wrapInList, splitListItem, sinkListItem, liftListItem } from 'prosemirror-schema-list'
@@ -25,6 +25,10 @@ import { createLiveSearchPlugin } from './plugins/LiveSearch'
 import { LiveSearchController } from './LiveSearchController'
 import { createNodeTargetPlugin, nodeTargetKey, type NodeTarget } from './plugins/NodeTarget'
 import { safeMarkdownURL, openMarkdownLink } from '../links'
+import { LiveClipboard, type LiveClipboardOperation } from './LiveClipboard'
+import { LiveContextMenu, type LiveMenuEntry, type LiveMenuItem } from './LiveContextMenu'
+import { defaultMarkdownClipboard, type MarkdownClipboardSettings } from './contracts'
+import { shortcutLabel } from '../../../features/shell/editorSettings'
 import { textClipboard } from '../../../features/shell/clipboard'
 import type { MarkdownFormat } from '../formatCommands'
 import type { LiveEditor, LiveOptions, MarkdownTypography } from './contracts'
@@ -62,6 +66,9 @@ export class MarkdownEditorController implements LiveEditor {
   }
   private settings: MarkdownTypography
   private disposed = false
+  private copySettings = defaultMarkdownClipboard()
+  private liveClipboard!: LiveClipboard
+  private contextMenu = new LiveContextMenu(notice, () => this.view.focus())
   private pendingSource: string | null = null
   private wasReadOnly = false
   private currentAnchorEl: HTMLElement | null = null
@@ -82,6 +89,7 @@ export class MarkdownEditorController implements LiveEditor {
 
   constructor(parent: HTMLElement, private options: LiveOptions, sharedBridge?: MarkdownSourceBridge) {
     this.settings = options.typography
+    this.copySettings = { ...defaultMarkdownClipboard(), ...options.clipboard }
     // Panes must start from the same immutable PM document and source IDs.
     // Independent parses look equal on screen but force full-document syncs,
     // which destroy mapped property targets and selection/search continuity.
@@ -270,6 +278,7 @@ export class MarkdownEditorController implements LiveEditor {
           new Plugin({
             props: {
               handleKeyDown: (_view, event) => {
+                if (this.shortcut(event)) return true
                 if (this.fenceAutocomplete?.handleKeyDown(event)) {
                   return true
                 }
@@ -292,6 +301,8 @@ export class MarkdownEditorController implements LiveEditor {
               },
               handleDOMEvents: {
                 focus: () => { options.focus(); return false },
+                copy: (_view, event) => this.liveClipboard.event(event, false),
+                cut: (_view, event) => this.liveClipboard.event(event, true),
                 beforeinput: (_view, event) => {
                   const e = event as InputEvent
                   if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
@@ -302,24 +313,18 @@ export class MarkdownEditorController implements LiveEditor {
                   return false
                 },
                 contextmenu: (view, event) => {
-                  const image = (event.target as Element).closest('.md-live-image')
-                  const link = (event.target as Element).closest('a')
-                  if (image) {
-                    const pos = view.posAtDOM(image, 0)
-                    const node = view.state.doc.nodeAt(pos)
-                    if (node?.type === s.nodes.image) {
-                      event.preventDefault(); this.closeInline(); this.imageProperties(image as HTMLElement, node, pos); return true
-                    }
+                  if ((event.target as Element).closest('input,textarea,.cm-editor')) return false
+                  const keyboard = event.clientX === 0 && event.clientY === 0
+                  const pos = keyboard ? null : view.posAtCoords({ left: event.clientX, top: event.clientY })
+                  if (pos && (pos.pos < view.state.selection.from || pos.pos > view.state.selection.to)) {
+                    view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(pos.pos))))
                   }
-                  if (link) {
-                    event.preventDefault(); this.closeInline(); this.linkProperties(link as HTMLElement, link.getAttribute('data-href') || ''); return true
-                  }
-                  if (!(event.target as Element).closest('td,th')) return false
-                  const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })
-                  if (pos) view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(pos.pos))))
                   event.preventDefault()
-                  this.updateTools()
-                  this.tableTools.querySelector('button')?.focus()
+                  this.selectionBubble.hidden = true
+                  this.properties.hidden = true
+                  this.fenceAutocomplete.hide()
+                  const caret = keyboard ? view.coordsAtPos(view.state.selection.from) : null
+                  this.contextMenu.open(caret?.left ?? event.clientX, caret?.bottom ?? event.clientY, this.contextEntries(event.target as Element), keyboard)
                   return true
                 },
               },
@@ -430,6 +435,9 @@ export class MarkdownEditorController implements LiveEditor {
       editable: () => !options.readOnly?.(),
       dispatchTransaction: tr => this.dispatch(tr),
     })
+
+    this.liveClipboard = new LiveClipboard(this.view, () => this.copySettings, () => this.bridge,
+      () => !this.options.readOnly?.() && !this.composing, () => !this.disposed)
 
     // Live Search Controller
     this.searchController = new LiveSearchController(this.view, this.dom, () => this.codeViews)
@@ -619,6 +627,7 @@ export class MarkdownEditorController implements LiveEditor {
 
   sync(source: string, update?: unknown) {
     if (this.disposed || source === this.bridge.source) return
+    this.contextMenu.close()
     if (this.composing) {
       this.pendingSource = source
       return
@@ -662,9 +671,22 @@ export class MarkdownEditorController implements LiveEditor {
     this.view.focus()
   }
 
-  reveal(position: number) {
+  reveal(position: number, align: 'nearest' | 'start' = 'nearest') {
     const at = Math.min(this.view.state.doc.content.size, this.bridge.documentPosition(position))
-    this.view.dispatch(this.view.state.tr.setSelection(Selection.near(this.view.state.doc.resolve(at))).scrollIntoView())
+    let tr = this.view.state.tr.setSelection(Selection.near(this.view.state.doc.resolve(at)))
+    if (align === 'nearest') tr = tr.scrollIntoView()
+    this.view.dispatch(tr)
+    if (align === 'start') {
+      this.view.focus()
+      const found = this.view.domAtPos(this.view.state.selection.from).node
+      const element = found instanceof Element ? found : found.parentElement
+      const heading = element?.closest('h1,h2,h3,h4,h5,h6')
+      const top = heading && this.view.dom.contains(heading)
+        ? heading.getBoundingClientRect().top : this.view.coordsAtPos(this.view.state.selection.from).top
+      // Outline navigation aligns even an already-visible heading. Scroll only
+      // this pane, rather than scrollIntoView() moving surrounding UI or peers.
+      this.dom.scrollTop += top - this.dom.getBoundingClientRect().top - 24
+    }
   }
 
   typography(settings: MarkdownTypography) {
@@ -758,6 +780,7 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   format(format: MarkdownFormat): boolean {
+    if (this.options.readOnly?.() || this.composing) return false
     const marks = { bold: 'strong', italic: 'em', strike: 'strike', 'inline-code': 'code' } as const
     if (format in marks) return this.run(toggleMark(s.marks[marks[format as keyof typeof marks]]), true)
     if (format.startsWith('heading-')) return this.run(setBlockType(s.nodes.heading, { level: +format.slice(-1) }), true)
@@ -1647,26 +1670,152 @@ export class MarkdownEditorController implements LiveEditor {
     }
   }
 
-  async clipboard(operation: 'copy' | 'cut' | 'paste' | 'select-all') {
-    const state = this.view.state
-    const { from, to } = state.selection
-    if (operation === 'select-all') {
-      this.view.dispatch(state.tr.setSelection(TextSelection.create(state.doc, 0, state.doc.content.size)))
-      return
+  clipboard(operation: LiveClipboardOperation) { return this.liveClipboard.run(operation) }
+  clipboardSettings(settings: MarkdownClipboardSettings) { this.copySettings = { ...settings } }
+
+  /** Also called by the shell's capture handler before global shortcuts (Mod+0
+   * otherwise resets font size). Never handles source editors or search inputs. */
+  shortcut(event: KeyboardEvent): boolean {
+    if (event.defaultPrevented || event.isComposing || this.composing || !(event.ctrlKey || event.metaKey) || event.altKey) return false
+    if (!(event.target instanceof Element) || event.target.closest('input,textarea,.cm-editor')) return false
+    const inMenu = this.contextMenu.owns(event.target)
+    if (!inMenu && !this.view.dom.contains(event.target)) return false
+    const key = event.key.toLowerCase()
+    let action: (() => void) | undefined
+    if (event.shiftKey && key === 'c') action = () => { void this.clipboard('markdown').catch(notice) }
+    else if (event.shiftKey && key === 'v') action = () => { void this.clipboard('paste-plain').catch(notice) }
+    else if (!event.shiftKey && /^[0-6]$/.test(key)) action = () => this.heading(+key)
+    else if (!event.shiftKey && key === 't') action = () => { this.format('table') }
+    else if (event.shiftKey && key === 'k') action = () => { this.format('code-block') }
+    else if (event.shiftKey && key === 'i') action = () => { this.format('image') }
+    else if (event.shiftKey && key === 'm') action = () => this.insertBlock('$$\nx^2\n$$')
+    else if (inMenu && !event.shiftKey && ['c','x','v','a'].includes(key)) action = () => {
+      const operation = {c:'copy',x:'cut',v:'paste',a:'select-all'}[key] as LiveClipboardOperation
+      void this.clipboard(operation).catch(notice)
     }
-    if (operation === 'paste') {
-      const text = await textClipboard.readText()
-      if (this.view.state !== state) throw new Error('读取剪贴板期间选区变化，已取消粘贴')
-      this.view.dispatch(state.tr.insertText(text).setMeta('isolated', true))
-    } else {
-      await textClipboard.writeText(state.doc.textBetween(from, to, '\n'))
-      if (operation === 'cut' && this.view.state === state) {
-        this.view.dispatch(state.tr.deleteSelection().setMeta('isolated', true))
+    if (!action) return false
+    event.preventDefault(); event.stopPropagation(); this.contextMenu.close(); this.view.focus(); action(); return true
+  }
+
+  private heading(level: number) {
+    if (this.options.readOnly?.() || this.composing) return
+    this.run(level ? setBlockType(s.nodes.heading, { level }) : setBlockType(s.nodes.paragraph), true)
+  }
+
+  private insertBlock(markdown: string, where: 'selection' | 'start' | 'end' = 'selection') {
+    if (this.options.readOnly?.() || this.composing) return
+    const state = this.view.state, content = parseMarkdown(markdown).doc.content
+    const tr = where === 'selection' ? state.tr.replaceSelection(new Slice(content, 0, 0)) : state.tr.insert(where === 'start' ? 0 : state.doc.content.size, content)
+    this.view.dispatch(tr.setMeta('isolated', true).scrollIntoView())
+  }
+
+  private contextEntries(target: Element): LiveMenuEntry[] {
+    const editable = !this.options.readOnly?.() && !this.composing
+    const selected = !this.view.state.selection.empty
+    const canCopy = selected || this.copySettings.copyWholeLine
+    const label = (key: string) => shortcutLabel(key)
+    const clip = (name: string, operation: LiveClipboardOperation, icon?: string, key?: string): LiveMenuItem => ({
+      label: name, icon, shortcut: key && label(key), disabled: operation === 'paste' || operation === 'paste-plain' ? !editable : !canCopy || operation === 'cut' && !editable,
+      run: () => this.clipboard(operation),
+    })
+    const { $from, $to } = this.view.state.selection
+    const ancestors = Array.from({ length: $from.depth }, (_, index) => $from.node(index + 1))
+    const marked = (name: string) => this.view.state.selection.empty
+      ? !!s.marks[name].isInSet(this.view.state.storedMarks || $from.marks())
+      : this.view.state.doc.rangeHasMark($from.pos, $to.pos, s.marks[name])
+    const active: Partial<Record<MarkdownFormat, boolean>> = {
+      bold: marked('strong'), italic: marked('em'), 'inline-code': marked('code'), link: marked('link'),
+      quote: ancestors.some(node => node.type === s.nodes.blockquote),
+      ordered: ancestors.some(node => node.type === s.nodes.ordered_list),
+      bullet: ancestors.some(node => node.type === s.nodes.bullet_list) && !ancestors.some(node => node.type === s.nodes.list_item && node.attrs.checked !== null),
+      task: ancestors.some(node => node.type === s.nodes.list_item && node.attrs.checked !== null),
+    }
+    const format = (name: string, command: MarkdownFormat, icon?: string, key?: string): LiveMenuItem => ({ label: name, icon, pressed: icon ? active[command] : undefined, shortcut: key && label(key), disabled: !editable, run: () => { this.contextFormat(command, !!active[command]) } })
+    const insert = (name: string, source: string, where: 'selection' | 'start' | 'end' = 'selection', key?: string): LiveMenuItem => ({ label: name, shortcut: key && label(key), disabled: !editable, run: () => this.insertBlock(source, where) })
+    const heading = this.view.state.selection.$from.parent
+    const level = heading.type === s.nodes.heading ? heading.attrs.level as number : 0
+    const headingNames = ['段落', '一级标题', '二级标题', '三级标题', '四级标题', '五级标题', '六级标题']
+    const entries: LiveMenuEntry[] = [
+      { label: '使用 Google 搜索', disabled: !selected, run: () => {
+        const text = this.view.state.doc.textBetween(this.view.state.selection.from, this.view.state.selection.to, ' ').slice(0, 2000)
+        return openMarkdownLink(`https://www.google.com/search?q=${encodeURIComponent(text)}`)
+      } },
+      'separator',
+      { icons: [clip('剪切', 'cut', 'cut', 'Mod+X'), clip('复制', 'copy', 'copy', 'Mod+C'), clip('粘贴', 'paste', 'paste', 'Mod+V'),
+        { label: '删除', icon: 'delete', disabled: !editable || !selected, run: () => { this.view.dispatch(this.view.state.tr.deleteSelection().setMeta('isolated', true)) } }] },
+      { label: '复制 / 粘贴为…', children: [clip('复制为 Markdown', 'markdown', undefined, 'Mod+Shift+C'), clip('复制为 HTML 代码', 'html'), clip('复制内容并简化格式', 'simplified'), 'separator', clip('粘贴为纯文本', 'paste-plain', undefined, 'Mod+Shift+V')] },
+      'separator',
+      { icons: [format('加粗', 'bold', 'bold', 'Mod+B'), format('斜体', 'italic', 'italic', 'Mod+I'), format('行内代码', 'inline-code', 'code'), format('链接', 'link', 'link')] },
+      { icons: [format('引用', 'quote', 'quote'), format('有序列表', 'ordered', 'ordered'), format('无序列表', 'bullet', 'bullet'), format('任务列表', 'task', 'task')] },
+      'separator',
+      { label: headingNames[level] || '段落', children: [...[1, 2, 3, 4, 5, 6].map(number => ({ label: headingNames[number], checked: level === number, disabled: !editable, shortcut: label(`Mod+${number}`), run: () => this.heading(number) })), 'separator', { label: '段落', checked: level === 0, disabled: !editable, shortcut: label('Mod+0'), run: () => this.heading(0) }] },
+      { label: '插入', disabled: !editable, children: [
+        format('图像', 'image', undefined, 'Mod+Shift+I'),
+        { label: '脚注', run: () => this.insertReference(true) }, { label: '链接引用', run: () => this.insertReference(false) },
+        format('水平分割线', 'rule'), format('表格', 'table', undefined, 'Mod+T'), format('代码块', 'code-block', undefined, 'Mod+Shift+K'),
+        insert('公式块', '$$\nx^2\n$$', 'selection', 'Mod+Shift+M'), insert('内容目录', '[TOC]'),
+        { ...insert('YAML Front Matter', '---\ntitle: ""\n---', 'start'), disabled: !editable || this.bridge.blocks[0]?.node.attrs.label === 'YAML Front Matter' },
+        'separator', { label: '段落（上方）', run: () => this.insertParagraph(false) }, { label: '段落（下方）', run: () => this.insertParagraph(true) },
+      ] },
+    ]
+    const image = target.closest('.md-live-image'), link = target.closest('a')
+    if (image) entries.push('separator', { label: '图像属性…', disabled: !editable, run: () => {
+      const pos = this.view.posAtDOM(image, 0), node = this.view.state.doc.nodeAt(pos)
+      if (node?.type === s.nodes.image) { this.closeInline(); this.imageProperties(image as HTMLElement, node, pos) }
+    } })
+    if (link) entries.push({ label: '链接属性…', disabled: !editable, run: () => { this.closeInline(); this.linkProperties(link as HTMLElement, link.getAttribute('data-href') || '') } })
+    return entries
+  }
+
+  private contextFormat(format: MarkdownFormat, active: boolean) {
+    if (this.options.readOnly?.() || this.composing) return
+    if (format === 'quote' && active) { this.run(lift, true); return }
+    if ((format === 'bullet' || format === 'ordered') && active) { this.run(liftListItem(s.nodes.list_item), true); return }
+    if (format === 'bullet' || format === 'ordered' || format === 'task') {
+      const state = this.view.state, { $from } = state.selection
+      for (let depth = $from.depth; depth > 0; depth--) {
+        if (![s.nodes.bullet_list, s.nodes.ordered_list].includes($from.node(depth).type)) continue
+        const type = format === 'ordered' ? s.nodes.ordered_list : s.nodes.bullet_list
+        const tr = state.tr.setNodeMarkup($from.before(depth), type)
+        // Keep the same selected items; clear task markers when changing kind.
+        state.doc.nodesBetween(state.selection.from, state.selection.to, (node, at) => {
+          if (node.type === s.nodes.list_item) tr.setNodeMarkup(at, undefined, { ...node.attrs, checked: format === 'task' && !active ? false : null })
+        })
+        this.view.dispatch(tr.setMeta('isolated', true)); return
       }
+    }
+    this.format(format)
+  }
+
+  private insertParagraph(after: boolean) {
+    if (this.options.readOnly?.() || this.composing) return
+    const { $from } = this.view.state.selection
+    const at = $from.depth ? after ? $from.after(1) : $from.before(1) : $from.pos
+    const tr = this.view.state.tr.insert(at, s.nodes.paragraph.create())
+    this.view.dispatch(tr.setSelection(TextSelection.create(tr.doc, at + 1)).setMeta('isolated', true).scrollIntoView())
+  }
+
+  private insertReference(footnote: boolean) {
+    if (this.options.readOnly?.() || this.composing) return
+    let index = 1
+    while (this.bridge.source.includes(`[${footnote ? '^' : ''}${index}]`)) index++
+    const id = String(index), state = this.view.state, source = this.bridge.source
+    const from = this.bridge.sourcePosition(state.selection.from), to = this.bridge.sourcePosition(state.selection.to)
+    const text = state.doc.textBetween(state.selection.from, state.selection.to, ' ').replace(/[\[\]\\\r\n]/g, ' ') || '链接'
+    const reference = footnote ? `[^${id}]` : `[${text}][${id}]`
+    const definition = footnote ? `[^${id}]: 脚注内容` : `[${id}]: https://example.com`
+    // Reference spelling is meaningful source. Insert the marker and definition
+    // as a single canonical edit, rather than serializing it as escaped text.
+    const next = source.slice(0, from) + reference + source.slice(to) + '\n\n' + definition
+    const patch = textPatch(source, next)
+    if (patch && this.options.publish(source, patch, undefined, true)) {
+      this.sync(next)
+      this.reveal(from + reference.length)
     }
   }
 
   destroy() {
+    this.contextMenu.close()
     this.imagePreview.destroy()
     this.fenceAutocomplete?.destroy()
     this.disposed = true

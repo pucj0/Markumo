@@ -6,6 +6,10 @@ import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 
 const inlineMarkdown=new MarkdownIt({html:false,linkify:false})
+// A Live pane has no CodeMirror viewport to advance its incremental parser.
+// Tokenize Markdown independently so headings after the initial parse budget
+// remain available. This parser only inspects tokens; HTML is never mounted.
+const outlineMarkdown=new MarkdownIt({html:true,linkify:false})
 // Outline rows navigate the editor. Titles must not add nested links, images,
 // event handlers or remote requests inside those navigation buttons.
 inlineMarkdown.renderer.rules.link_open=inlineMarkdown.renderer.rules.link_close=()=>''
@@ -24,38 +28,47 @@ export interface OutlineItem {
   kind?: 'heading' | 'function' | 'class' | 'interface' | 'struct' | 'enum' | 'type'
 }
 const cache = new WeakMap<Text, { tree: ReturnType<typeof syntaxTree>; markdown: boolean; items: OutlineItem[] }>()
+function markdownOutline(text: Text): OutlineItem[] {
+  const tokens = outlineMarkdown.parse(text.toString(), {}), items: OutlineItem[] = []
+  for (let index = 0; index < tokens.length && items.length < 1000; index++) {
+    const token = tokens[index]
+    if (!token.map) continue
+    const line = text.line(token.map[0] + 1)
+    if (token.type === 'heading_open') {
+      const source = tokens[index + 1]?.content || ''
+      const end = text.line(Math.min(text.lines, token.map[1])).to
+      items.push({id:`h-${line.from}`, ...headingLabel(source), level:Number(token.tag.slice(1)), lineNumber:line.number, from:line.from, to:end, kind:'heading'})
+    } else if (token.type === 'html_block') {
+      const end = token.map[1] < text.lines ? text.line(token.map[1] + 1).from : text.length
+      const raw = text.sliceString(line.from, end)
+      htmlLanguage.parser.parse(raw).iterate({enter(node){
+        if(node.name !== 'Element')return
+        const open=node.node.getChild('OpenTag'), tag=open?.getChild('TagName')
+        const name=tag&&raw.slice(tag.from,tag.to).toLowerCase()
+        if(name&&/^(script|style|template|iframe|object)$/.test(name))return false
+        if(!name||!/^h[1-6]$/.test(name)||!open||items.length>=1000)return
+        const close=node.node.getChild('CloseTag'), from=line.from+node.from
+        items.push({id:`h-${from}`,name:unescapeHtml(raw.slice(open.to,close?.from??node.to).replace(/<[^>]*>/g,'')).trim(),level:Number(name[1]),lineNumber:text.lineAt(from).number,from,to:line.from+node.to,kind:'heading'})
+        return false
+      }})
+    }
+  }
+  return items
+}
 export function extractOutline(doc: EditorDocument | null, state: EditorState | undefined): OutlineItem[] {
   if (!doc || !state || doc.languageStatus !== 'ready' || state.doc.length > 1024 * 1024) return []
   const markdown = /\.(md|markdown)$/i.test(doc.name), tree = syntaxTree(state), text = state.doc
   const cached = cache.get(text)
-  if (cached?.tree === tree && cached.markdown === markdown) return cached.items
+  if (cached?.markdown === markdown && (markdown || cached.tree === tree)) return cached.items
+  if (markdown) {
+    const items=markdownOutline(text)
+    cache.set(text,{tree,markdown,items})
+    return items
+  }
   const items: OutlineItem[] = []
   tree.iterate({ enter(node) {
     if (items.length >= 1000) return false
-    if (markdown) {
-      if (/^(FencedCode|CodeBlock)$/.test(node.name)) return false
-      if(node.name==='HTMLBlock'){
-        const raw=text.sliceString(node.from,node.to)
-        htmlLanguage.parser.parse(raw).iterate({enter(htmlNode){
-          if(htmlNode.name!=='Element')return
-          const open=htmlNode.node.getChild('OpenTag'),tag=open?.getChild('TagName')
-          const tagName=tag&&raw.slice(tag.from,tag.to).toLowerCase()
-          if(tagName&&/^(script|style|template|iframe|object)$/.test(tagName))return false
-          if(!tagName||!/^h[1-6]$/.test(tagName)||!open||items.length>=1000)return
-          const close=htmlNode.node.getChild('CloseTag')
-          const name=unescapeHtml(raw.slice(open.to,close?.from??htmlNode.to).replace(/<[^>]*>/g,'')).trim()
-          const from=node.from+htmlNode.from,to=node.from+htmlNode.to
-          items.push({id:`h-${from}`,name,level:Number(tagName[1]),lineNumber:text.lineAt(from).number,from,to,kind:'heading'})
-          return false
-        }})
-        return false
-      }
-      if (/^(ATXHeading|SetextHeading)[1-6]$/.test(node.name)) {
-        const source = text.lineAt(node.from).text.replace(/^\s*#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').trim()
-        items.push({ id: `h-${node.from}`, ...headingLabel(source), level: Number(node.name.at(-1)), lineNumber: text.lineAt(node.from).number, from:node.from,to:node.to,kind: 'heading' })
-        return false
-      }
-    } else if (/^(FunctionDeclaration|FunctionDefinition|MethodDeclaration|ClassDeclaration|ClassDefinition|InterfaceDeclaration|TypeAliasDeclaration|StructItem|EnumItem|FunctionItem|FnItem|TraitItem)$/.test(node.name)) {
+    if (/^(FunctionDeclaration|FunctionDefinition|MethodDeclaration|ClassDeclaration|ClassDefinition|InterfaceDeclaration|TypeAliasDeclaration|StructItem|EnumItem|FunctionItem|FnItem|TraitItem)$/.test(node.name)) {
       const nameNode = node.node.getChild('VariableDefinition') || node.node.getChild('VariableName') || node.node.getChild('TypeName') || node.node.getChild('Identifier') || node.node.getChild('PropertyDefinition') || node.node.getChild('Name')
       if (nameNode) {
         const kind: OutlineItem['kind'] = /Class/.test(node.name) ? 'class' : /Interface|Trait/.test(node.name) ? 'interface' : /Struct/.test(node.name) ? 'struct' : /Enum/.test(node.name) ? 'enum' : /TypeAlias/.test(node.name) ? 'type' : 'function'

@@ -12,3 +12,16 @@ export const textClipboard: TextClipboard = {
     await navigator.clipboard.writeText(text)
   },
 }
+
+/** Both representations belong to one clipboard write, so rich-text targets
+ * receive semantic HTML while plain-text targets receive the user's preference. */
+export async function writeRichClipboard(text: string, html: string) {
+  if (isTauri()) {
+    await (await import('@tauri-apps/plugin-clipboard-manager')).writeHtml(html, text)
+  } else if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+    await navigator.clipboard.write([new ClipboardItem({
+      'text/plain': new Blob([text], { type: 'text/plain' }),
+      'text/html': new Blob([html], { type: 'text/html' }),
+    })])
+  } else await textClipboard.writeText(text)
+}

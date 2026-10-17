@@ -46,6 +46,11 @@
             <!-- 4. Markdown -->
             <section id="settings-markdown" class="settings-section">
               <h3>Markdown</h3>
+              <h4 class="subhead">默认复制行为（{{ shortcutLabel('Mod+C') }}）</h4>
+              <div class="settingrow"><label for="settings-md-copy">当复制纯文本时复制 Markdown 源码</label><input id="settings-md-copy" type="checkbox" :checked="markdownClipboard?.copyMarkdown ?? true" @change="updateClipboard('copyMarkdown', ($event.target as HTMLInputElement).checked)" /></div>
+              <div class="settingrow"><label for="settings-md-copy-line">无文字选中时，复制或剪切光标所在的一整行</label><input id="settings-md-copy-line" type="checkbox" :checked="markdownClipboard?.copyWholeLine ?? false" @change="updateClipboard('copyWholeLine', ($event.target as HTMLInputElement).checked)" /></div>
+              <p class="setting-hint">仅在 Markdown 富文本编辑区生效。复制为 Markdown：{{ shortcutLabel('Mod+Shift+C') }}；粘贴为纯文本：{{ shortcutLabel('Mod+Shift+V') }}。</p>
+              <h4 class="subhead">排版</h4>
               <div class="settingrow"><label for="settings-md-width">正文宽度</label><input id="settings-md-width" type="number" min="480" max="1400" :value="markdownTypography?.width || 860" @change="updateMd('width', Number(($event.target as HTMLInputElement).value))" /></div>
               <div class="settingrow"><label for="settings-md-size">正文字号</label><input id="settings-md-size" type="number" min="12" max="28" :value="markdownTypography?.fontSize || 16" @change="updateMd('fontSize', Number(($event.target as HTMLInputElement).value))" /></div>
               <div class="settingrow"><label for="settings-md-height">正文行高</label><input id="settings-md-height" type="number" min="1.2" max="2.4" step="0.1" :value="markdownTypography?.lineHeight || 1.7" @change="updateMd('lineHeight', Number(($event.target as HTMLInputElement).value))" /></div>
@@ -205,7 +210,8 @@ import ShortcutRecorder from '../common/ShortcutRecorder.vue'
 import type { ImageRules } from '../../editor/markdown/imageImport'
 import type { EditorSettings } from '../../features/shell/editorSettings'
 import type { ThemePreference, MarkdownMode } from '../../types'
-import { defaultMarkdownTypography, type MarkdownTypography } from '../../editor/markdown/wysiwyg/contracts'
+import { defaultMarkdownTypography, defaultMarkdownClipboard, type MarkdownClipboardSettings, type MarkdownTypography } from '../../editor/markdown/wysiwyg/contracts'
+import { shortcutLabel } from '../../features/shell/editorSettings'
 import {
   loadConversionSettings,
   saveConversionSettings,
@@ -223,6 +229,7 @@ import {
 } from '../../features/shell/keybindings'
 
 const props = defineProps<{
+  markdownClipboard?: MarkdownClipboardSettings
   markdownTypography?: MarkdownTypography
   theme: ThemePreference
   uiFontSize: number
@@ -245,6 +252,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  (e: 'update:markdownClipboard', value: MarkdownClipboardSettings): void
   (e: 'update:markdownTypography', value: MarkdownTypography): void
   (e: 'update:theme', val: ThemePreference): void
   (e: 'update:uiFontSize', val: number): void
@@ -265,6 +273,10 @@ const emit = defineEmits<{
 }>()
 
 const { visible, dialogRef, open, close, handleKeydown } = useModal()
+
+function updateClipboard(key: keyof MarkdownClipboardSettings, value: boolean) {
+  emit('update:markdownClipboard', { ...(props.markdownClipboard || defaultMarkdownClipboard()), [key]: value })
+}
 
 function updateMd(key: keyof MarkdownTypography, value: number | string | boolean) {
   if (

@@ -11,7 +11,7 @@ import type DiscardDialog from '../components/modals/DiscardDialog.vue'
 import type Toast from '../components/common/Toast.vue'
 import { markdownFormats } from '../editor/markdown/formatCommands'
 import { relativeMarkdownLink } from '../editor/markdown/links'
-import { defaultMarkdownTypography } from '../editor/markdown/wysiwyg/contracts'
+import { defaultMarkdownTypography, defaultMarkdownClipboard } from '../editor/markdown/wysiwyg/contracts'
 import { FileController, fileError } from '../features/files/FileController'
 import { sameFilePath } from '../features/files/pathKey'
 import { isMedia } from '../features/files/media'
@@ -52,6 +52,7 @@ export function useAppShell() {
   const treeClickMode = ref<'double' | 'single'>('double')
   const keymapPreset = ref<KeymapPresetId>('markumo')
   const markdownTypography=ref(defaultMarkdownTypography())
+  const markdownClipboard=ref(defaultMarkdownClipboard())
   const imageRules = ref(defaultImageRules()), documentImageRules = ref<Record<string, ImageRules>>({})
   const shortcuts = ref<EditorSettings['shortcuts']>({ ...defaultShortcuts }), fileModes = ref<Record<string, MarkdownMode>>({})
   const customShortcuts = ref<ShortcutAction[]>([])
@@ -683,8 +684,13 @@ export function useAppShell() {
           if(manager.activeId!==id||manager.activeEditorView!==view||view.state.doc!==before.doc||!view.state.selection.eq(before.selection))throw new Error('读取剪贴板期间文档或选区变化，已取消粘贴。')
         }
         if(manager.activeLiveEditor){
-          if(operation==='paste'&&desktop){const sources=await clipboardImages();if(sources.length){await importImages(manager.activeId!,sources);return}}
-          await manager.activeLiveEditor.clipboard(operation)
+          const live = manager.activeLiveEditor, id = manager.activeId!, selection = live.selection
+          if(operation==='paste'&&desktop){
+            const sources=await clipboardImages()
+            if(manager.activeLiveEditor!==live||manager.activeId!==id||live.selection.anchor!==selection.anchor||live.selection.head!==selection.head)throw new Error('读取剪贴板期间文档或选区变化，已取消粘贴。')
+            if(sources.length){await importImages(id,sources);return}
+          }
+          await live.clipboard(operation)
         }else if(view) await editorClipboard(view,operation,textClipboard)
       }
     }catch(error){toast(fileError(error))}
@@ -700,6 +706,7 @@ export function useAppShell() {
     if (document.querySelector('.app-menu-popup') && document.activeElement?.closest('[data-menu-popup],.app-menu') && !(event.ctrlKey||event.metaKey||event.altKey)) return
     if (document.querySelector('.workspace-operation-dialog') || event.isComposing || alreadyHandled || manager.isComposing || paletteRef.value?.visible || settingsRef.value?.visible || discardRef.value?.visible || gotoLineRef.value?.visible) return
     const binding = event.key === '+' && shortcuts.value['zoom-in'] === 'Mod+=' && (event.ctrlKey || event.metaKey) && !event.altKey ? 'Mod+=' : eventShortcut(event)
+    if (manager.activeLiveEditor?.shortcut(event)) return
     if(desktop && binding==='Mod+V' && event.target instanceof Element && event.target.closest('.cm-content,.md-prose') && manager.activeDocument?.mode){event.preventDefault();event.stopPropagation();void clipboardAction('paste');return}
     const id = (Object.keys(shortcuts.value) as ShortcutAction[]).find(key => shortcuts.value[key] === binding)
     if (!id && Object.values(defaultShortcuts).includes(binding as typeof defaultShortcuts[ShortcutAction])) {
@@ -746,12 +753,13 @@ export function useAppShell() {
   watch(wordWrap, value => manager.setWrap(value), { immediate: true })
   watch(defaultMdMode, value => manager.setDefaultMarkdownMode(value), { immediate: true })
   watch(markdownTypography,value=>manager.setMarkdownTypography(value),{immediate:true,deep:true})
+  watch(markdownClipboard,value=>manager.setMarkdownClipboard(value),{immediate:true,deep:true})
   watch(uiFontSize, value => { document.documentElement.style.setProperty('--ui-font-size', `${value}px`) }, { immediate: true })
   watch(fontSize, value => { document.documentElement.style.setProperty('--editor-size', `${value}px`); manager.refreshTypography() }, { immediate: true })
   watch(fontFamily, value => { document.documentElement.style.setProperty('--font-mono', fontFamilies[value]); manager.refreshTypography() }, { immediate: true })
   watch([indentSize,useTabs], () => manager.setIndent(indentSize.value,useTabs.value), { immediate: true })
   function settingsSnapshot(): EditorSettings {
-    return { markdownTypography:{...markdownTypography.value},theme: theme.value, uiFontSize: uiFontSize.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value, treeClickMode: treeClickMode.value, keymapPreset: keymapPreset.value,
+    return { markdownClipboard:{...markdownClipboard.value},markdownTypography:{...markdownTypography.value},theme: theme.value, uiFontSize: uiFontSize.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value, treeClickMode: treeClickMode.value, keymapPreset: keymapPreset.value,
       defaultMdMode: defaultMdMode.value, indentSize: indentSize.value, useTabs: useTabs.value, imageRules:{...imageRules.value},documentImageRules:{...documentImageRules.value}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[...customShortcuts.value], shortcuts: { ...shortcuts.value }, fileModes: { ...fileModes.value } }
   }
   function flushSettings() {
@@ -769,7 +777,7 @@ export function useAppShell() {
     shortcuts.value = value
   }
   watch([autoSave, autoSaveDelay], () => autoSaver.configure(desktop && settingsReady && autoSave.value, autoSaveDelay.value))
-  watch([markdownTypography,theme,uiFontSize,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,treeClickMode,keymapPreset,imageRules,documentImageRules], () => {
+  watch([markdownClipboard,markdownTypography,theme,uiFontSize,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,treeClickMode,keymapPreset,imageRules,documentImageRules], () => {
     if (!settingsReady) return
     if (settingsTimer) clearTimeout(settingsTimer)
     settingsTimer = setTimeout(() => void flushSettings(),250)
@@ -805,6 +813,7 @@ export function useAppShell() {
       uiFontSize.value = settings.uiFontSize; theme.value = settings.theme; fontSize.value = settings.fontSize; fontFamily.value = settings.fontFamily; wordWrap.value = settings.wordWrap
       autoSave.value = settings.autoSave; autoSaveDelay.value = settings.autoSaveDelay
       markdownTypography.value=settings.markdownTypography
+      markdownClipboard.value=settings.markdownClipboard
       imageRules.value=settings.imageRules;documentImageRules.value=settings.documentImageRules
       showOutline.value = settings.showOutline; defaultMdMode.value = settings.defaultMdMode; indentSize.value = settings.indentSize; useTabs.value = settings.useTabs
       treeClickMode.value = settings.treeClickMode || 'double'
@@ -890,7 +899,7 @@ export function useAppShell() {
     sessionWriter?.dispose()
     autoSaver.dispose(); files.dispose(); workspace.destroy(); unsubscribeWorkspace(); unsubscribe(); manager.dispose()
   })
-  return { markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
+  return { markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
     paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, mainOpenedDocuments, mainActiveId, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
     setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, selectDocById, handleSelectDoc,
     pinDocById, createNewDoc, closeDocById,closeOtherTabs,cancelPendingClose, discardPending, savePending, setLanguage, setMarkdownMode,

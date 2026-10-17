@@ -119,11 +119,7 @@ const outlineNotice = computed(() => {
 })
 
 function handleSelectOutline(item: OutlineItem) {
-  if (props.doc) {
-    const state=props.manager.getState(props.doc.id)
-    const column=state&&item.from!==undefined?item.from-state.doc.lineAt(item.from).from+1:1
-    props.manager.revealPosition(props.doc.id, item.lineNumber, column)
-  }
+  if (props.doc) props.manager.revealOutline(props.doc.id, item)
 }
 
 onUnmounted(() => {
