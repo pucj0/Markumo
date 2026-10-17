@@ -17,4 +17,4 @@ export interface MediaViewState {
   pdfAnchor?: { page: number; x: number; y: number }
   pdfSearchOpen?: boolean
 }
-export const newMediaViewState = (kind?: string): MediaViewState => ({ scale: 1, fit: kind === 'pdf' ? 'width' : 'page', rotation: 0, left: 0, top: 0, page: 1, continuous: true, query: '' })
+export const newMediaViewState = (): MediaViewState => ({ scale: 1, fit: 'page', rotation: 0, left: 0, top: 0, page: 1, continuous: true, query: '' })

@@ -34,4 +34,6 @@ Windows 所有 `pnpm tauri build` / `build.bat` / CI 入口都会把生成的安
 
 验证：`node scripts/release-regression.mjs`；浏览器环境变量同 `scripts/media-regression.mjs`。
 
+PDF 导出行号回归：`node scripts/export-code-regression.mjs`，并渲染检查生成的测试 PDF。左右大纲回归：`node scripts/outline-regression.mjs`。PDF 默认连续滚动、适应页面由媒体回归脚本覆盖。
+
 实现参考：[Tauri updater](https://v2.tauri.app/plugin/updater/)、[GitHub Actions 官方工作流文档](https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions)。

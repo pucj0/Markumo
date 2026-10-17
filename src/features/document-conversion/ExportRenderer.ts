@@ -60,7 +60,7 @@ export async function renderMarkdownForExport(
     const highlighted=options.highlight?.(token.content,token.info,'')||renderer.utils.escapeHtml(token.content)
     const count=token.content.replace(/\n$/,'').split('\n').length
     const lines=highlighted.split('\n').slice(0,count).map((line,i)=>`<span class="markumo-code-line">${codeLineNumbers?`<span class="markumo-code-number" data-line="${i+1}" aria-hidden="true"></span>`:''}<span class="markumo-code-text">${line}</span></span>`).join('\n')
-    return `<pre class="markumo-code${codeLineNumbers?' numbered':''}"><code${info?` class="language-${renderer.utils.escapeHtml(info)}"`:''}>${lines}${token.content.endsWith('\n')?'\n':''}</code></pre>\n`
+    return `<pre class="markumo-code${codeLineNumbers?` numbered code-digits-${String(count).length}`:''}"><code${info?` class="language-${renderer.utils.escapeHtml(info)}"`:''}>${lines}${token.content.endsWith('\n')?'\n':''}</code></pre>\n`
   }
   renderer.renderer.rules.image=(tokens,index)=>{
     const token=tokens[index]

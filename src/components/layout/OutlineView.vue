@@ -18,13 +18,11 @@
         @click="$emit('select-item', item)"
       >
         <span v-if="hasChildren(item)" class="outline-fold" role="button" :aria-label="collapsed.has(item.id) ? '展开标题' : '折叠标题'" tabindex="0" @click.stop="toggle(item.id)" @keydown.enter.stop.prevent="toggle(item.id)" @keydown.space.stop.prevent="toggle(item.id)">{{ collapsed.has(item.id) ? '▸' : '▾' }}</span>
-        <span v-if="item.kind === 'heading'" class="heading-prefix">
-          {{ '#'.repeat(item.level) }}
-        </span>
-        <span v-else-if="item.kind" class="kind-badge">
+        <span v-if="item.kind && item.kind !== 'heading'" class="kind-badge">
           {{ item.kind.slice(0, 2).toUpperCase() }}
         </span>
-        <span class="outline-label">{{ item.name }}</span>
+        <span v-if="item.kind==='heading' && item.labelHtml" class="outline-label" v-html="item.labelHtml" />
+        <span v-else class="outline-label">{{ item.name }}</span>
         <span class="outline-line">L{{ item.lineNumber }}</span>
       </button>
     </div>
@@ -96,12 +94,11 @@ defineEmits<{
   color: var(--bright);
 }
 
-.heading-prefix {
-  color: var(--accent);
-  font-weight: 700;
-  font-family: var(--font-mono);
-  font-size: var(--ui-small-font-size);
-}
+.outline-label :deep(strong) {font-weight:700}
+.outline-label :deep(em) {font-style:italic}
+.outline-label :deep(s) {text-decoration:line-through}
+.outline-label :deep(code) {font:90% var(--font-mono);padding:1px 3px;background:var(--soft);border-radius:3px}
+.outline-item.heading.level-1 .outline-label {font-weight:600}
 
 .kind-badge {
   font-size: var(--ui-small-font-size);

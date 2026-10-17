@@ -3,12 +3,24 @@ import type { EditorState, Text } from '@codemirror/state'
 import type { EditorDocument } from '../../types'
 import { htmlLanguage } from '@codemirror/lang-html'
 import MarkdownIt from 'markdown-it'
+import DOMPurify from 'dompurify'
 
-const unescapeHtml=new MarkdownIt().utils.unescapeAll
+const inlineMarkdown=new MarkdownIt({html:false,linkify:false})
+// Outline rows navigate the editor. Titles must not add nested links, images,
+// event handlers or remote requests inside those navigation buttons.
+inlineMarkdown.renderer.rules.link_open=inlineMarkdown.renderer.rules.link_close=()=>''
+inlineMarkdown.renderer.rules.image=(tokens,index)=>inlineMarkdown.utils.escapeHtml(tokens[index].content)
+inlineMarkdown.renderer.rules.softbreak=()=> ' '
+const unescapeHtml=inlineMarkdown.utils.unescapeAll
+function headingLabel(source:string){
+  const labelHtml=DOMPurify.sanitize(inlineMarkdown.renderInline(source),{ALLOWED_TAGS:['strong','em','s','code','br'],ALLOWED_ATTR:[]})
+  return {name:unescapeHtml(labelHtml.replace(/<[^>]*>/g,'')),labelHtml}
+}
 
 export interface OutlineItem {
   id: string; name: string; level: number; lineNumber: number
   from?:number; to?:number
+  labelHtml?:string
   kind?: 'heading' | 'function' | 'class' | 'interface' | 'struct' | 'enum' | 'type'
 }
 const cache = new WeakMap<Text, { tree: ReturnType<typeof syntaxTree>; markdown: boolean; items: OutlineItem[] }>()
@@ -39,8 +51,8 @@ export function extractOutline(doc: EditorDocument | null, state: EditorState | 
         return false
       }
       if (/^(ATXHeading|SetextHeading)[1-6]$/.test(node.name)) {
-        const name = text.lineAt(node.from).text.replace(/^\s*#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').trim()
-        items.push({ id: `h-${node.from}`, name, level: Number(node.name.at(-1)), lineNumber: text.lineAt(node.from).number, from:node.from,to:node.to,kind: 'heading' })
+        const source = text.lineAt(node.from).text.replace(/^\s*#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').trim()
+        items.push({ id: `h-${node.from}`, ...headingLabel(source), level: Number(node.name.at(-1)), lineNumber: text.lineAt(node.from).number, from:node.from,to:node.to,kind: 'heading' })
         return false
       }
     } else if (/^(FunctionDeclaration|FunctionDefinition|MethodDeclaration|ClassDeclaration|ClassDefinition|InterfaceDeclaration|TypeAliasDeclaration|StructItem|EnumItem|FunctionItem|FnItem|TraitItem)$/.test(node.name)) {

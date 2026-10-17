@@ -30,7 +30,7 @@
     <!-- 右侧大纲容器（Phase 6 真实 Lezer AST 大纲接入） -->
     <aside v-if="showOutline && doc" class="outline-sidebar">
       <div class="outline-head">
-        <span>OUTLINE</span>
+        <span>大纲</span>
         <button
           class="tinyclose"
           aria-label="关闭大纲"

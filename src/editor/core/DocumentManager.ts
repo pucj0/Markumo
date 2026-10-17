@@ -136,7 +136,7 @@ export class DocumentManager {
   mediaViewState(id: string, pane: string) {
     const record = this.mediaRecords.get(id)
     if (!record) return newMediaViewState()
-    if (!record.panes.has(pane)) record.panes.set(pane, newMediaViewState(record.meta.kind))
+    if (!record.panes.has(pane)) record.panes.set(pane, newMediaViewState())
     return record.panes.get(pane)!
   }
   updateMediaMetadata(id: string, media: MediaMetadata, version: string) {

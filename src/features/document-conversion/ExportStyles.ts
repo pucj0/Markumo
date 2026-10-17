@@ -196,8 +196,9 @@ table tr {background:var(--bg)}
 pre.markumo-code { padding:8px 12px; font:13px/1.65 var(--font-mono); }
 pre.markumo-code > code { display:block; white-space:normal; }
 .markumo-code-line { display:grid; grid-template-columns:minmax(0,1fr); min-height:1.65em; }
-.numbered .markumo-code-line { grid-template-columns:4ch minmax(0,1fr); }
-.markumo-code-number { color:var(--muted); font-size:12px; text-align:right; padding-right:12px; user-select:none; }
+.numbered .markumo-code-line { grid-template-columns:calc(3ch + 12px) minmax(0,1fr); }
+${Array.from({length:8},(_,index)=>`.numbered.code-digits-${index+1} .markumo-code-line { grid-template-columns:calc(${Math.max(2,index+1)}ch + 12px) minmax(0,1fr); }`).join('\n')}
+.markumo-code-number { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; text-align:right; padding-right:12px; white-space:nowrap; word-break:normal; overflow-wrap:normal; user-select:none; }
 .markumo-code-number::before { content:attr(data-line); }
 .markumo-code-text { min-width:0; white-space:${wrap?'pre-wrap':'pre'}; overflow-wrap:${wrap?'anywhere':'normal'}; }
 `
