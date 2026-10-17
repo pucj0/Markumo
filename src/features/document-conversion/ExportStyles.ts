@@ -1,10 +1,10 @@
 import type { PdfOptions } from './contracts'
-import { lightEditHighlight } from '../../editor/core/syntaxTheme'
+import { markumoHighlight } from '../../editor/core/syntaxTheme'
 import { exportAppearance, type ExportAppearance } from './ExportAppearance'
 
 export function getHighlightCss(): string {
   return `
-${lightEditHighlight.module?.getRules() || ''}
+${markumoHighlight.module?.getRules() || ''}
 /* Syntax highlighting */
 .tok-keyword { color: #d73a49; font-weight: 600; }
 .tok-string { color: #032f62; }

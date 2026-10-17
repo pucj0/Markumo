@@ -30,7 +30,7 @@ export const categoryLabels: Record<CommandCategory, string> = {
   view: '视图',
 }
 
-export type KeymapPresetId = 'lightedit' | 'fleet' | 'typora'
+export type KeymapPresetId = 'markumo' | 'fleet' | 'typora'
 
 export interface KeybindingCommand {
   id: string

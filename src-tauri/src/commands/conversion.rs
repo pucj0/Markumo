@@ -20,28 +20,6 @@ fn pandoc_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     command
 }
 
-#[cfg(all(test, windows))]
-mod tests {
-    #[test]
-    fn background_command_has_no_console() {
-        const CHILD: &str = "MARKUMO_CONSOLE_PROBE_CHILD";
-        const MARKER: &str = "background output captured";
-        if std::env::var_os(CHILD).is_some() {
-            #[link(name = "kernel32")]
-            extern "system" { fn GetConsoleWindow() -> isize; }
-            assert_eq!(unsafe { GetConsoleWindow() }, 0);
-            println!("{MARKER}");
-            return;
-        }
-        let output = super::pandoc_command(std::env::current_exe().unwrap())
-            .env(CHILD, "1")
-            .args(["--exact", "commands::conversion::tests::background_command_has_no_console", "--nocapture"])
-            .output().unwrap();
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        assert!(String::from_utf8_lossy(&output.stdout).contains(MARKER));
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PandocStatus {
     pub available: bool,

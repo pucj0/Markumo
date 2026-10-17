@@ -53,7 +53,7 @@ export interface EditorSettings {
 }
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
 export function defaultSettings(): EditorSettings {
-  return { markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, treeClickMode: 'double', keymapPreset: 'lightedit', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
+  return { markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, treeClickMode: 'double', keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
 }
 /** Drop the transient migration notice before writing preferences to disk. */
 export function persistedSettings(settings: EditorSettings) {
@@ -133,8 +133,10 @@ export function settingsFrom(raw: unknown): EditorSettings {
   if (Number.isInteger(s.indentSize) && s.indentSize! >= 1 && s.indentSize! <= 8) defaults.indentSize = s.indentSize!
   if (['live','source','split'].includes(s.defaultMdMode || '')) defaults.defaultMdMode = s.defaultMdMode!
   if (s.treeClickMode === 'single' || s.treeClickMode === 'double') defaults.treeClickMode = s.treeClickMode
-  if (['lightedit', 'fleet', 'typora'].includes(s.keymapPreset || '')) {
-    defaults.keymapPreset = s.keymapPreset as KeymapPresetId
+  const preset = String(s.keymapPreset || '')
+  if (preset === 'lightedit') defaults.keymapPreset = 'markumo'
+  else if (['markumo', 'fleet', 'typora'].includes(preset)) {
+    defaults.keymapPreset = preset as KeymapPresetId
   }
   const shortcuts = { ...defaults.shortcuts, ...s.shortcuts }
   for (const id of Object.keys(defaultShortcuts) as ShortcutAction[]) {
@@ -177,12 +179,29 @@ export function eventShortcut(event: KeyboardEvent, platform?: string) {
   return [mod ? 'Mod' : '', extra, event.altKey ? 'Alt' : '', event.shiftKey ? 'Shift' : '', key].filter(Boolean).join('+')
 }
 export async function loadEditorSettings(): Promise<EditorSettings> {
-  return settingsFrom(isTauri() ? await invoke('load_editor_settings') : JSON.parse(localStorage.getItem('lightedit.settings.v1') || 'null'))
+  if (isTauri()) return settingsFrom(await invoke('load_editor_settings'))
+  const current = localStorage.getItem('markumo.settings.v1')
+  if (current !== null) return settingsFrom(JSON.parse(current))
+  const legacy = localStorage.getItem('lightedit.settings.v1')
+  const settings = settingsFrom(JSON.parse(legacy || 'null'))
+  if (legacy !== null) {
+    try {
+      localStorage.setItem('markumo.settings.v1', JSON.stringify(persistedSettings(settings)))
+      localStorage.removeItem('lightedit.settings.v1')
+    } catch (error) {
+      // Keep both the loaded preferences and the old key if storage is full.
+      console.warn('Markumo 偏好迁移暂未写入，原设置仍保留。', error)
+    }
+  }
+  return settings
 }
 export async function saveEditorSettings(settings: EditorSettings) {
   const payload = persistedSettings(settings)
   if (isTauri()) await invoke('save_editor_settings', { settings: payload })
-  else localStorage.setItem('lightedit.settings.v1', JSON.stringify(payload))
+  else {
+    localStorage.setItem('markumo.settings.v1', JSON.stringify(payload))
+    localStorage.removeItem('lightedit.settings.v1')
+  }
 }
 export function relativeFilePath(path: string, root: string | null) {
   if (!root) return path

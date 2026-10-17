@@ -6,7 +6,7 @@ export async function renderDiagram(host:HTMLElement,source:string,current:()=>b
   const request=serial.then(async()=>{
     const [{default:mermaid},{default:purify}]=await Promise.all([import('mermaid'),import('dompurify')])
     mermaid.initialize({startOnLoad:false,securityLevel:'strict',maxTextSize:8000,maxEdges:200,htmlLabels:false,flowchart:{htmlLabels:false},theme:document.body.classList.contains('light')?'default':'dark'})
-    const id=`lightedit-diagram-${++identity}`
+    const id=`markumo-diagram-${++identity}`
     try{
       const {svg}=await mermaid.render(id,source)
       if(!host.isConnected||!current())return

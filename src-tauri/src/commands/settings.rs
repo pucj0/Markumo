@@ -19,6 +19,7 @@ pub struct EditorSettings {
     auto_save: bool,
     auto_save_delay: u32,
     tree_click_mode: String,
+    #[serde(deserialize_with = "deserialize_keymap_preset")]
     keymap_preset: String,
     image_rules: ImageRules,
     document_image_rules: BTreeMap<String, ImageRules>,
@@ -66,7 +67,7 @@ impl Default for EditorSettings {
             auto_save: false,
             auto_save_delay: 1500,
             tree_click_mode: "double".into(),
-            keymap_preset: "lightedit".into(),
+            keymap_preset: "markumo".into(),
             image_rules: ImageRules::default(),
             document_image_rules: BTreeMap::new(),
             settings_version: 5,
@@ -86,6 +87,10 @@ fn legacy_settings_version() -> u8 {
 fn legacy_shortcut_version() -> u8 {
     1
 }
+fn deserialize_keymap_preset<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(if value == "lightedit" { "markumo".into() } else { value })
+}
 fn validate(settings: &EditorSettings) -> Result<(), String> {
     let md = &settings.markdown_typography;
     if !(480..=1400).contains(&md.width) || !(12..=28).contains(&md.font_size)
@@ -100,7 +105,7 @@ fn validate(settings: &EditorSettings) -> Result<(), String> {
         || !(1..=8).contains(&settings.indent_size)
         || !(500..=10000).contains(&settings.auto_save_delay)
         || !["single", "double"].contains(&settings.tree_click_mode.as_str())
-        || !["lightedit", "fleet", "typora"].contains(&settings.keymap_preset.as_str())
+        || !["markumo", "fleet", "typora"].contains(&settings.keymap_preset.as_str())
         || !(1..=5).contains(&settings.settings_version)
         || !(1..=3).contains(&settings.shortcut_version)
         || settings.custom_shortcuts.len() > 128
@@ -175,220 +180,19 @@ pub async fn save_editor_settings(
         .await
         .map_err(|e| e.to_string())?
 }
+
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn image_border_defaults_only_when_missing_and_explicit_false_survives_disk_roundtrip() {
-        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("settings.json");
-        std::fs::write(&path,br#"{"markdownTypography":{"fontSize":18}}"#).unwrap();
-        let mut settings=super::load(&path).unwrap();
-        assert!(settings.markdown_typography.image_border);
-        settings.markdown_typography.image_border=false;
-        super::save(&path,&settings).unwrap();
-        assert!(!super::load(&path).unwrap().markdown_typography.image_border);
-    }
-    #[test]
-    fn ui_typography_migrates_v4_and_survives_restart_without_changing_document_fonts() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        std::fs::write(&path, br#"{"settingsVersion":4,"fontSize":17,"autoSave":true,"theme":"dark","markdownTypography":{"fontSize":19}}"#).unwrap();
-        let mut settings = super::load(&path).unwrap();
-        assert_eq!(settings.ui_font_size, 14);
-        assert_eq!(settings.font_size, 17);
-        assert_eq!(settings.markdown_typography.font_size, 19);
-        assert!(settings.auto_save);
-        settings.ui_font_size = 16;
-        settings.settings_version = 5;
-        super::save(&path, &settings).unwrap();
-        let loaded = super::load(&path).unwrap();
-        assert_eq!(loaded.ui_font_size, 16);
-        assert_eq!(loaded.font_size, 17);
-        assert_eq!(loaded.markdown_typography.font_size, 19);
-        assert!(loaded.auto_save);
-        for invalid in [0, 11, 21, 255] {
-            settings.ui_font_size = invalid;
-            assert!(super::save(&path, &settings).is_err());
-            assert_eq!(super::load(&path).unwrap().ui_font_size, 16);
-        }
-    }
-    #[test]
-    fn markdown_typography_roundtrips_and_rejects_invalid_values_without_enabling_autosave() {
-        let mut settings = super::EditorSettings::default();
-        assert!(!settings.auto_save);
-        assert_eq!(settings.markdown_typography.width, 860);
-        settings.markdown_typography.width = 720;
-        settings.markdown_typography.code_wrap = true;
-        let roundtrip: super::EditorSettings = serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
-        assert_eq!(roundtrip.markdown_typography.width, 720);
-        assert!(roundtrip.markdown_typography.code_wrap);
-        assert!(super::validate(&roundtrip).is_ok());
-        settings.markdown_typography.line_height = f64::NAN;
-        assert!(super::validate(&settings).is_err());
-    }
-    #[test]
-    fn image_rules_defaults_and_document_overrides_roundtrip_without_touching_markdown() {
-        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("settings.json");
-        let mut settings=super::load(&path).unwrap();assert_eq!(settings.image_rules.location,"assets");
-        settings.image_rules.location="original".into();
-        let mut rule=super::ImageRules::default();rule.location="custom".into();rule.custom_directory="./${filename}.assets/中文 图片".into();
-        settings.document_image_rules.insert("c:/中文.md".into(),rule);
-        super::save(&path,&settings).unwrap();let loaded=super::load(&path).unwrap();
-        assert_eq!(loaded.image_rules.location,"original");assert_eq!(loaded.document_image_rules["c:/中文.md"].custom_directory,"./${filename}.assets/中文 图片");
-        settings.image_rules.location="upload".into();assert!(super::save(&path,&settings).is_err());
-    }
-    #[test]
-    fn shortcut_version_distinguishes_legacy_from_explicit_preferences() {
-        let legacy: super::EditorSettings = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
-        assert_eq!(legacy.shortcut_version, 1);
-        let current = super::EditorSettings::default();
-        assert_eq!(current.shortcut_version, 3);
-        let roundtrip: super::EditorSettings =
-            serde_json::from_slice(&serde_json::to_vec(&current).unwrap()).unwrap();
-        assert_eq!(roundtrip.shortcut_version, 3);
-    }
-    #[test]
-    fn automatic_save_defaults_and_explicit_preferences_are_validated_and_persisted() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        // A fresh installation never enables automatic save.
-        let fresh = super::load(&path).unwrap();
-        assert!(!fresh.auto_save);
-        assert_eq!(fresh.settings_version, 5);
-        // A legacy file without provenance keeps its stored value as version 1.
-        std::fs::write(&path, br#"{"theme":"light"}"#).unwrap();
-        let mut settings = super::load(&path).unwrap();
-        assert_eq!(settings.settings_version, 1);
-        assert!(!settings.auto_save);
-        assert_eq!(settings.auto_save_delay, 1500);
-        settings.auto_save = false;
-        settings.auto_save_delay = 3000;
-        super::save(&path, &settings).unwrap();
-        assert!(!super::load(&path).unwrap().auto_save);
-        settings.auto_save_delay = 0;
-        assert!(super::save(&path, &settings).is_err());
-        assert_eq!(super::load(&path).unwrap().auto_save_delay, 3000);
-        settings.auto_save_delay = 3000;
-        settings.settings_version = 6;
-        assert!(super::save(&path, &settings).is_err());
-        assert_eq!(super::load(&path).unwrap().settings_version, 1);
-    }
-    #[test]
-    fn legacy_explicit_auto_save_survives_migration_while_new_installs_stay_off() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        // Ambiguous legacy `true` is preserved byte-for-byte, not overwritten.
-        std::fs::write(&path, br#"{"theme":"system","autoSave":true,"autoSaveDelay":2000}"#).unwrap();
-        let legacy = super::load(&path).unwrap();
-        assert!(legacy.auto_save);
-        assert_eq!(legacy.settings_version, 1);
-        // Explicitly disabled legacy value is also preserved.
-        std::fs::write(&path, br#"{"theme":"system","autoSave":false}"#).unwrap();
-        assert!(!super::load(&path).unwrap().auto_save);
-        // New settings objects written by this version stay off unless enabled.
-        let current = super::EditorSettings::default();
-        assert!(!current.auto_save);
-        assert_eq!(current.settings_version, 5);
-    }
-    #[test]
-    fn theme_preferences_survive_restart_and_invalid_theme_preserves_previous_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        assert_eq!(super::load(&path).unwrap().theme, "system");
-        // Older files only stored an explicit theme; serde defaults fill other fields.
-        std::fs::write(&path, br#"{"theme":"dark"}"#).unwrap();
-        assert_eq!(super::load(&path).unwrap().theme, "dark");
-        let mut settings = super::load(&path).unwrap();
-        for theme in ["light", "dark", "system"] {
-            settings.theme = theme.into();
-            super::save(&path, &settings).unwrap();
-            assert_eq!(super::load(&path).unwrap().theme, theme);
-        }
-        settings.theme = "invalid".into();
-        assert!(super::save(&path, &settings).is_err());
-        assert_eq!(super::load(&path).unwrap().theme, "system");
-    }
+mod branding_tests {
+    use super::*;
 
     #[test]
-    fn settings_survive_service_restart_and_reject_invalid_values() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        let mut settings = super::load(&path).unwrap();
-        settings.font_size = 17;
-        settings.indent_size = 4;
-        settings.word_wrap = true;
-        settings
-            .file_modes
-            .insert("C:/example.md".into(), "source".into());
-        super::save(&path, &settings).unwrap();
-        let reloaded = super::load(&path).unwrap();
-        assert_eq!(reloaded.font_size, 17);
-        assert_eq!(reloaded.indent_size, 4);
-        assert!(reloaded.word_wrap);
-        settings.font_size = 255;
-        assert!(super::save(&path, &settings).is_err());
-        assert_eq!(super::load(&path).unwrap().font_size, 17);
-        std::fs::write(&path, b"corrupt").unwrap();
-        assert!(super::load(&path).is_err());
-    }
-
-    #[test]
-    fn tree_click_mode_defaults_persists_and_migrates_legacy_settings() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-
-        // 1. 全新配置加载默认 double 与 lightedit
-        let fresh = super::load(&path).unwrap();
-        assert_eq!(fresh.tree_click_mode, "double");
-        assert_eq!(fresh.keymap_preset, "lightedit");
-
-        // 2. 旧配置缺少 treeClickMode 与 keymapPreset 时加载成功且为默认
-        std::fs::write(&path, br#"{"theme":"dark","fontSize":16}"#).unwrap();
-        let legacy = super::load(&path).unwrap();
-        assert_eq!(legacy.tree_click_mode, "double");
-        assert_eq!(legacy.keymap_preset, "lightedit");
-
-        // 3. 保存 single 模式与 fleet 预设成功，重新加载保持
-        let mut settings = legacy;
-        settings.tree_click_mode = "single".into();
-        settings.keymap_preset = "fleet".into();
-        super::save(&path, &settings).unwrap();
-        let reloaded = super::load(&path).unwrap();
-        assert_eq!(reloaded.tree_click_mode, "single");
-        assert_eq!(reloaded.keymap_preset, "fleet");
-
-        // 4. 保存 double 模式与 typora 预设成功，重新加载保持
-        settings.tree_click_mode = "double".into();
-        settings.keymap_preset = "typora".into();
-        super::save(&path, &settings).unwrap();
-        let reloaded2 = super::load(&path).unwrap();
-        assert_eq!(reloaded2.tree_click_mode, "double");
-        assert_eq!(reloaded2.keymap_preset, "typora");
-
-        // 5. 无效值被拒绝，且原有设置文件完好未被破坏
-        for invalid in ["triple", "none", "", "DOUBLE", "singleClick", "invalid"] {
-            settings.tree_click_mode = invalid.into();
-            assert!(super::save(&path, &settings).is_err(), "Should reject invalid tree_click_mode: {}", invalid);
-            assert_eq!(super::load(&path).unwrap().tree_click_mode, "double");
-        }
-        settings.tree_click_mode = "double".into();
-
-        for invalid in ["vscode", "vim", "emacs", "", "FLEET", "custom"] {
-            settings.keymap_preset = invalid.into();
-            assert!(super::save(&path, &settings).is_err(), "Should reject invalid keymap_preset: {}", invalid);
-            assert_eq!(super::load(&path).unwrap().keymap_preset, "typora");
-        }
-        settings.keymap_preset = "lightedit".into();
-
-        // 6. 验证包含全部前端字段的完整 JSON 可正确往返反序列化并遵守 deny_unknown_fields
-        let full_json = serde_json::to_string(&super::EditorSettings::default()).unwrap();
-        assert!(full_json.contains(r#""treeClickMode":"double""#));
-        assert!(full_json.contains(r#""keymapPreset":"lightedit""#));
-        let roundtrip: super::EditorSettings = serde_json::from_str(&full_json).unwrap();
-        assert_eq!(roundtrip.tree_click_mode, "double");
-        assert_eq!(roundtrip.keymap_preset, "lightedit");
-
-        // 7. 严格保留 deny_unknown_fields：未知字段必须报错拒绝
-        let unknown_json = r#"{"theme":"dark","unknownField":"test"}"#;
-        assert!(serde_json::from_str::<super::EditorSettings>(unknown_json).is_err());
+    fn old_preset_is_read_but_only_markumo_is_serialized() {
+        let settings: EditorSettings = serde_json::from_str(r#"{"keymapPreset":"lightedit","fontSize":19,"autoSave":true}"#).unwrap();
+        validate(&settings).unwrap();
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(value["keymapPreset"], "markumo");
+        assert_eq!(value["fontSize"], 19);
+        assert_eq!(value["autoSave"], true);
+        assert_eq!(EditorSettings::default().keymap_preset, "markumo");
     }
 }

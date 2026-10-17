@@ -1,4 +1,0 @@
-LIBRARY MarkumoShell
-EXPORTS
-    DllGetClassObject PRIVATE
-    DllCanUnloadNow PRIVATE

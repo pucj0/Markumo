@@ -173,7 +173,10 @@ export class DocumentManager {
         EditorView.contentAttributes.of({ 'aria-label': '文本编辑器', spellcheck: 'false' }),
         EditorView.updateListener.of(update => {
           if (this.applying) return
-          if (update.focusChanged && update.view.hasFocus) this.focusPane(update.view === this.secondaryView ? 'secondary' : 'main', false)
+          if (update.focusChanged && update.view.hasFocus) {
+            const pane = [...this.views].find(([, view]) => view === update.view)?.[0]
+            if (pane) this.focusPane(pane, false)
+          }
         }),
       ],
     })
@@ -416,11 +419,11 @@ export class DocumentManager {
     const live=this.liveViews.get(resolved)
     if(record&&live&&live.id===id){
       const selection=live.editor.selection,root=this.hosts.get(resolved)?.querySelector('.markdown-live')
-      record.panes[resolved]={selection:EditorSelection.single(selection.anchor,selection.head),top:root?.scrollTop||0,left:root?.scrollLeft||0}
+      record.panes[resolved]={...record.panes[resolved],selection:EditorSelection.single(selection.anchor,selection.head),top:root?.scrollTop||0,left:root?.scrollLeft||0}
       return
     }
     if (record && view) {
-      record.panes[resolved] = { selection: view.state.selection, top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
+      record.panes[resolved] = { ...record.panes[resolved], selection: view.state.selection, top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
       if (resolved === 'main') record.scroll = { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
     }
   }
@@ -512,12 +515,14 @@ export class DocumentManager {
     return true
   }
 
-  splitPane(direction: SplitDirection, targetPane: Pane = this.activePane, docId?: string): string {
+  splitPane(direction: SplitDirection, targetPane: Pane = this.activePane, docId?: string, sourcePane: Pane = targetPane): string {
     if (this.disposed || this.isComposing) return targetPane
     const resolvedTarget = this.resolvePaneId(targetPane)
     const targetGroup = this.paneGroup(resolvedTarget)
     const openDocId = docId || targetGroup.activeId || undefined
     this.captureScroll(resolvedTarget)
+    const resolvedSource = this.resolvePaneId(sourcePane)
+    if (resolvedSource !== resolvedTarget) this.captureScroll(resolvedSource)
     const newPaneId = this.layout.splitPane(resolvedTarget, direction, openDocId)
     if (openDocId) {
       let record = this.records.get(openDocId)
@@ -526,8 +531,8 @@ export class DocumentManager {
         if (seed) record = this.create(seed)
       }
       if (record) {
-        const sourcePaneState = record.panes[resolvedTarget]
-        const sourceMode = this.getMarkdownMode(openDocId, resolvedTarget)
+        const sourcePaneState = record.panes[resolvedSource]
+        const sourceMode = this.getMarkdownMode(openDocId, resolvedSource)
         record.panes[newPaneId] = sourcePaneState
           ? { ...sourcePaneState, mode: sourceMode }
           : { selection: record.state.selection, top: 0, left: 0, mode: sourceMode }
@@ -599,16 +604,55 @@ export class DocumentManager {
   moveTab(id: string, from: Pane, to: Pane, targetIndex?: number) {
     const resolvedFrom = this.resolvePaneId(from)
     const resolvedTo = this.resolvePaneId(to)
-    if (this.isComposing || !this.paneGroup(resolvedFrom).tabs.some(t => t.documentId === id)) return false
+    if (this.disposed || this.isComposing || !this.layout.getPane(resolvedFrom)?.group.tabs.some(t => t.documentId === id) || !this.layout.getPane(resolvedTo)) return false
     this.captureScroll(resolvedFrom)
+    if (resolvedFrom !== resolvedTo) this.captureScroll(resolvedTo)
     const record = this.records.get(id)
     if (record && !record.panes[resolvedTo] && record.panes[resolvedFrom]) {
       record.panes[resolvedTo] = { ...record.panes[resolvedFrom] }
     }
-    this.layout.moveTab(id, resolvedFrom, resolvedTo, targetIndex)
-    this.showActive(resolvedFrom)
+    if (!this.layout.moveTab(id, resolvedFrom, resolvedTo, targetIndex)) return false
+    if (this.layout.getPane(resolvedFrom)) {
+      this.showActive(resolvedFrom)
+    } else {
+      this.destroyView(resolvedFrom)
+      this.hosts.delete(resolvedFrom)
+    }
     this.showActive(resolvedTo)
     this.notify()
+    return true
+  }
+
+  /** Drop targets use insertion slots from the list before the dragged tab is removed. */
+  transferTab(id: string, from: Pane, to: Pane, options: { copy?: boolean; direction?: SplitDirection; targetIndex?: number } = {}): boolean {
+    const source = this.layout.getPane(from), target = this.layout.getPane(to)
+    if (this.disposed || this.isComposing || !source || !target || !source.group.tabs.some(tab => tab.documentId === id)) return false
+    if (options.direction) {
+      // With a single tab, splitting opens a second view of the same document.
+      const keepSource = options.copy || (from === to && source.group.tabs.length === 1)
+      const created = this.splitPane(options.direction, to, id, from)
+      if (created === to) return false
+      this.layout.getPane(created)?.group.pin(id)
+      if (!keepSource) this.close(id, false, from)
+      else source.group.pin(id)
+      this.focusPane(created, false)
+      this.notify()
+      return true
+    }
+    if (from === to && options.targetIndex === undefined) {
+      source.group.pin(id)
+      return this.select(id, to)
+    }
+    if (!options.copy || from === to) return this.moveTab(id, from, to, options.targetIndex)
+
+    this.captureScroll(from)
+    const record = this.records.get(id)
+    if (record && !record.panes[to] && record.panes[from]) record.panes[to] = { ...record.panes[from] }
+    const existing = target.group.tabs.findIndex(tab => tab.documentId === id)
+    let slot = options.targetIndex ?? target.group.tabs.length
+    if (existing >= 0 && existing < slot) slot--
+    if (!this.open(id, false, to)) return false
+    this.reorderTab(to, id, slot)
     return true
   }
 
@@ -650,18 +694,18 @@ export class DocumentManager {
     } finally { this.applying = false }
   }
 
-  unmount(pane: Pane = 'main') {
-    const resolved = this.resolvePaneId(pane)
-    this.captureScroll(resolved)
-    this.destroyView(resolved)
-    this.hosts.delete(resolved)
+  unmount(pane: Pane = 'main', expectedHost?: HTMLElement | null) {
+    if (expectedHost && this.hosts.get(pane) !== expectedHost) return
+    if (this.layout.getPane(pane)) this.captureScroll(pane)
+    this.destroyView(pane)
+    this.hosts.delete(pane)
   }
 
   private destroyView(pane: Pane) {
-    const resolved = this.resolvePaneId(pane)
-    this.views.get(resolved)?.destroy()
-    this.views.delete(resolved)
-    this.liveViews.get(resolved)?.editor.destroy();this.liveViews.delete(resolved);this.liveLoads.delete(resolved)
+    // View ownership is exact, even after the layout removes a legacy pane ID.
+    this.views.get(pane)?.destroy()
+    this.views.delete(pane)
+    this.liveViews.get(pane)?.editor.destroy();this.liveViews.delete(pane);this.liveLoads.delete(pane)
   }
 
   setIndent(size: number, tabs: boolean) {

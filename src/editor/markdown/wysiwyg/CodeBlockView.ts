@@ -1,7 +1,7 @@
 import { EditorState as CMState, Compartment, Prec, StateEffect, StateField } from '@codemirror/state'
 import { EditorView as CMView, keymap, lineNumbers, Decoration, WidgetType, type DecorationSet } from '@codemirror/view'
 import { defaultKeymap, indentWithTab, indentLess } from '@codemirror/commands'
-import { lightEditSyntax } from '../../core/syntaxTheme'
+import { markumoSyntax } from '../../core/syntaxTheme'
 import { LanguageSelector } from './LanguageSelector'
 import { copyStatusIcon } from '../../../components/common/iconPaths'
 import type { Node } from 'prosemirror-model'
@@ -151,7 +151,7 @@ export class CodeBlockView implements NodeView {
           this.language.of([]),
           this.numbers.of(settings.codeLineNumbers ? lineNumbers() : []),
           this.wrap.of(settings.codeWrap ? CMView.lineWrapping : []),
-          lightEditSyntax,
+          markumoSyntax,
           codeSearchDecorations,
           CMView.contentAttributes.of({ 'aria-label': '代码块编辑器' }),
           Prec.highest(

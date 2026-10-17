@@ -14,17 +14,18 @@ export type DropZone = 'left' | 'right' | 'top' | 'bottom' | 'center'
 const props = defineProps<{
   active: boolean
   zone: DropZone | null
+  copy?: boolean
 }>()
 
 const currentZone = computed(() => props.zone || 'center')
 
 const zoneLabel = computed(() => {
   switch (props.zone) {
-    case 'left': return '向左拆分'
-    case 'right': return '向右拆分'
-    case 'top': return '向上拆分'
-    case 'bottom': return '向下拆分'
-    default: return '放入当前窗口'
+    case 'left': return '在左侧分栏'
+    case 'right': return '在右侧分栏'
+    case 'top': return '在上方分栏'
+    case 'bottom': return '在下方分栏'
+    default: return props.copy ? '在此分栏打开视图' : '移入此分栏'
   }
 })
 </script>
@@ -42,13 +43,12 @@ const zoneLabel = computed(() => {
 .drop-highlight {
   position: absolute;
   background: var(--accentbg);
-  border: 2px dashed var(--accent);
-  border-radius: 8px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.12s ease-out;
-  box-shadow: 0 0 16px rgba(0, 0, 0, 0.15);
+  transition: background-color 0.1s ease-out;
 }
 
 .drop-text {

@@ -31,7 +31,7 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
     })
     return result + md.utils.escapeHtml(code.slice(position))
   }
-  md.core.ruler.after('inline','lightedit-semantics', state => {
+  md.core.ruler.after('inline','markumo-semantics', state => {
     const images:{source:string;from:number}[]=[]
     if(state.src.length<=1024*1024)imageParser.parse(state.src).iterate({enter(node){
       if(['FencedCode','CodeBlock','Table'].includes(node.name))return false
@@ -51,7 +51,7 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
       if (token.type!=='inline') continue
       const first=token.children?.[0]
       if (listDepth>0 && first?.type==='text' && /^\[[ xX]\]\s/.test(first.content)) {
-        const check = new state.Token('lightedit_task','input',0)
+        const check = new state.Token('markumo_task','input',0)
         check.meta={checked:/^\[[xX]\]/.test(first.content)}
         first.content=first.content.slice(4);token.children!.unshift(check)
       }
@@ -63,7 +63,7 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
       }
     }
   })
-  md.renderer.rules.lightedit_task=(tokens,index)=>`<input class="md-preview-task" type="checkbox" disabled aria-label="${tokens[index].meta?.checked?'已完成任务':'待办任务'}"${tokens[index].meta?.checked?' checked':''}>`
+  md.renderer.rules.markumo_task=(tokens,index)=>`<input class="md-preview-task" type="checkbox" disabled aria-label="${tokens[index].meta?.checked?'已完成任务':'待办任务'}"${tokens[index].meta?.checked?' checked':''}>`
   md.renderer.rules.image=(tokens,index)=> {
     const token=tokens[index],source=String(token.attrGet('src')||''),alt=token.content
     if(token.meta?.inTable||typeof token.meta?.from!=='number')return md.utils.escapeHtml(`![${alt}](${source})`)

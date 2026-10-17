@@ -9,7 +9,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import SplitPreview from '../../editor/markdown/splitPreview.vue'
 import type { DocumentManager, Pane } from '../../editor/core/DocumentManager'
 import type { EditorDocument } from '../../types'
@@ -112,7 +112,7 @@ onMounted(() => { if (host.value) props.manager.mountPane(host.value, props.pane
 watch(() => !!props.doc, (present, previous) => {
   if (present && !previous && props.manager.activePane === props.pane) props.manager.focusPane(props.pane)
 }, { flush: 'post' })
-onUnmounted(() => props.manager.unmount(props.pane))
+onBeforeUnmount(() => props.manager.unmount(props.pane, host.value))
 </script>
 <style scoped>
 .pane-body { flex: 1; display: flex; min-width: 0; min-height: 0; position: relative; overflow: hidden }

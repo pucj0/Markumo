@@ -2,6 +2,7 @@ mod commands;
 mod files;
 mod workspace;
 mod session;
+mod profile_migration;
 
 use std::{path::PathBuf, sync::{Arc, Mutex}};
 use tauri::{Emitter, Manager};
@@ -119,6 +120,7 @@ pub fn run() {
             let store = app.state::<FileStore>();
             let mut service = store.lock().map_err(|_| std::io::Error::other("文件服务状态损坏"))?;
             let app_data = app.path().app_data_dir()?;
+            profile_migration::migrate(&app_data)?;
             service.configure(app_data.join("files.json"));
             drop(service);
             app.state::<session::SessionStore>().lock().map_err(|_|std::io::Error::other("会话状态损坏"))?.configure(app_data.join("last-session.json"));

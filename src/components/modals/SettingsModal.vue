@@ -123,7 +123,7 @@
                   <label for="settings-keymap-preset">键位方案</label>
                   <select
                     id="settings-keymap-preset"
-                    :value="keymapPreset || 'lightedit'"
+                    :value="keymapPreset || 'markumo'"
                     class="preset-select"
                     @change="onPresetChange(($event.target as HTMLSelectElement).value as KeymapPresetId)"
                   >
@@ -362,7 +362,7 @@ watch(() => props.shortcuts, next => {
   localShortcuts.value = { ...next }
 }, { deep: true })
 
-const currentPresetId = computed<KeymapPresetId>(() => props.keymapPreset || 'lightedit')
+const currentPresetId = computed<KeymapPresetId>(() => props.keymapPreset || 'markumo')
 const defaultBindings = computed(() => getPresetBindings(currentPresetId.value))
 
 function onPresetChange(newPreset: KeymapPresetId) {

@@ -19,7 +19,6 @@
   position: relative;
   scrollbar-gutter: stable;
 }
-.markdown-live::-webkit-scrollbar { width: 14px; }
 body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line: #dfe2e5; --md-heading-color: #333; --md-link-color: #4183c4; --md-code-bg: #f8f8f8; --md-table-border: #dfe2e5; --side: #f8f8f8; }
 .markdown-live .md-extension-preview.ProseMirror-selectednode { outline: none; }
 .markdown-live .md-extension-preview .md-protected summary { display: none; }

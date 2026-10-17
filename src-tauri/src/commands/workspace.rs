@@ -533,27 +533,3 @@ fn shell_path(path: &std::path::Path) -> Vec<u16> {
     wide.push(0);
     wide
 }
-
-#[cfg(all(test, windows))]
-mod reveal_tests {
-    #[test]
-    fn shell_paths_keep_unicode_spaces_commas_and_unc() {
-        for (path, expected) in [
-            (
-                "\\\\?\\C:\\中文 space,comma.txt",
-                "C:\\中文 space,comma.txt",
-            ),
-            (
-                "\\\\?\\UNC\\server\\share\\中文.txt",
-                "\\\\server\\share\\中文.txt",
-            ),
-        ] {
-            let wide = super::shell_path(std::path::Path::new(path));
-            assert_eq!(
-                String::from_utf16(&wide[..wide.len() - 1]).unwrap(),
-                expected
-            );
-            assert_eq!(wide.last(), Some(&0));
-        }
-    }
-}

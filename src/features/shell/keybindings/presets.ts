@@ -9,7 +9,7 @@ export interface KeymapPreset {
 }
 
 // 1. Markumo 默认方案（融合当前用户已明确习惯）
-const lightEditBindings: Record<string, string> = Object.fromEntries(
+const markumoBindings: Record<string, string> = Object.fromEntries(
   allCommands
     .filter(cmd => cmd.defaultBinding)
     .map(cmd => [cmd.id, cmd.defaultBinding!])
@@ -17,7 +17,7 @@ const lightEditBindings: Record<string, string> = Object.fromEntries(
 
 // 2. Fleet 风格方案（参考 JetBrains Fleet Windows/Linux Keymap）
 const fleetBindings: Record<string, string> = {
-  ...lightEditBindings,
+  ...markumoBindings,
   new: 'Mod+N',
   open: 'Mod+O',
   'quick-open': 'Mod+Shift+N',
@@ -48,7 +48,7 @@ const fleetBindings: Record<string, string> = {
 
 // 3. Typora 风格方案（参考 Typora 官方 Markdown 快捷键）
 const typoraBindings: Record<string, string> = {
-  ...lightEditBindings,
+  ...markumoBindings,
   new: 'Mod+N',
   open: 'Mod+O',
   'quick-open': 'Mod+P',
@@ -80,11 +80,11 @@ const typoraBindings: Record<string, string> = {
 }
 
 export const keymapPresets: Record<KeymapPresetId, KeymapPreset> = {
-  lightedit: {
-    id: 'lightedit',
+  markumo: {
+    id: 'markumo',
     name: 'Markumo 默认 (推荐)',
     description: '融合通用代码编辑与 Markdown 所见即所得排版的平衡方案',
-    bindings: lightEditBindings,
+    bindings: markumoBindings,
   },
   fleet: {
     id: 'fleet',
@@ -101,5 +101,5 @@ export const keymapPresets: Record<KeymapPresetId, KeymapPreset> = {
 }
 
 export function getPresetBindings(presetId: KeymapPresetId): Record<string, string> {
-  return { ...(keymapPresets[presetId] || keymapPresets.lightedit).bindings }
+  return { ...(keymapPresets[presetId] || keymapPresets.markumo).bindings }
 }

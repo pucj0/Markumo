@@ -3,7 +3,7 @@ import { imageDestination, type MarkdownResources } from '../../editor/markdown/
 import { sanitizeHtml } from '../../editor/markdown/html/SafeHtmlRenderer'
 import { LanguageSupport } from '@codemirror/language'
 import { highlightTree } from '@lezer/highlight'
-import { lightEditHighlight } from '../../editor/core/syntaxTheme'
+import { markumoHighlight } from '../../editor/core/syntaxTheme'
 import { fenceLanguage, loadLanguage } from '../../editor/languages'
 
 export interface RenderResult {
@@ -48,7 +48,7 @@ export async function renderMarkdownForExport(
     const support=supports.get(fenceLanguage(info))
     if(!support)return renderer.utils.escapeHtml(code)
     let result='',position=0
-    highlightTree(support.language.parser.parse(code),lightEditHighlight,(from,to,classes)=>{
+    highlightTree(support.language.parser.parse(code),markumoHighlight,(from,to,classes)=>{
       result+=renderer.utils.escapeHtml(code.slice(position,from))+`<span class="${classes}">${renderer.utils.escapeHtml(code.slice(from,to)).split('\n').join(`</span>\n<span class="${classes}">`)}</span>`;position=to
     })
     return result+renderer.utils.escapeHtml(code.slice(position))

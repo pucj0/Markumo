@@ -1,7 +1,7 @@
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 
-export const lightEditHighlight = HighlightStyle.define([
+export const markumoHighlight = HighlightStyle.define([
   { tag: [tags.keyword, tags.modifier, tags.controlKeyword, tags.operatorKeyword], color: 'var(--pink)' },
   { tag: [tags.string, tags.special(tags.string), tags.inserted], color: 'var(--green)' },
   { tag: [tags.comment, tags.docComment], color: 'var(--syntax-comment, var(--muted))', fontStyle: 'italic' },
@@ -16,4 +16,4 @@ export const lightEditHighlight = HighlightStyle.define([
   { tag: tags.emphasis, fontStyle: 'italic' },
   { tag: tags.strikethrough, textDecoration: 'line-through' },
 ])
-export const lightEditSyntax = syntaxHighlighting(lightEditHighlight)
+export const markumoSyntax = syntaxHighlighting(markumoHighlight)

@@ -1,164 +1,114 @@
 # Markumo
 
-原名 LightEdit，现更名为 **Markumo**。GitHub 仓库使用 `pucj0/Markumo`；已有本地目录 `E:\code\lightEdit` 可继续使用。为保留既有配置，应用标识 `com.lightedit.app`、默认开发数据目录及持久化键保持兼容。更名范围与验证见 [更名记录](docs/Markumo更名记录_2026-10-16.md)。
+轻量的桌面文本与 Markdown 编辑器。支持直接打开单个文件，也可以用文件夹工作区管理多个文档。
 
-面向 Windows 首发的轻量通用文本编辑器，使用 Rust + Tauri 2 + Vue 3 + TypeScript + Vite + CodeMirror 6。
+主要面向 Windows；macOS 和 Linux 可在对应系统准备开发环境后构建。
 
-**阶段状态以 [进度台账](docs/阶段进度与验收台账.md) 为准，完整桌面人工验收尚未完成。** 已接入真实 Rust/Tauri 文件服务与工作区：打开、保存、另存为、最近文件、按需目录树、文件管理、快速打开和全文搜索。单文件与工作区共用 CodeMirror 文档状态。2026-10-14 Phase 4 复审及修复结果见 [验收报告](docs/第四阶段复审与验收.md)；其他并行阶段的实现不等同于本轮已验收。
+## 功能
 
-## 界面字号与搜索
+- **文本与代码编辑**：多语言语法高亮、行号、缩进、折叠、查找替换和正则表达式。
+- **Markdown 编辑**：即时排版、源码和双栏模式，支持表格、任务列表、图片、KaTeX 公式与 Mermaid 图表。
+- **多文档与分栏**：多标签、标签拖动、左右分栏，同一文档在多个窗格间同步编辑。
+- **文件与工作区**：最近文件、目录树、快速打开、工作区搜索，以及文件管理。
+- **文档转换**：导入 HTML、Word，导出 HTML、PDF、Word 和 PNG 长图。Word 转换需要另外安装 [Pandoc](https://pandoc.org/installing.html)。
+- **个性设置**：浅色、深色与跟随系统主题，独立调整界面、编辑器与 Markdown 字体，并支持快捷键配置。
+- **本地文件保护**：未保存提示、自动保存设置、编码与换行处理，以及外部修改冲突检查。
 
-界面字号可在 **设置 → 外观 → 界面字号** 调整（默认 14px，12–20px，支持恢复默认）。它与编辑器字号、Markdown 正文字号独立，并在重启后保留。查找/替换使用统一搜索栏：Ctrl+F、Ctrl+R；正则开关启用时按 JavaScript 正则匹配，捕获组替换支持 `$1`、`$2`、`$&`、`$$`。实现、验收与截图见[专项报告](docs/正则搜索与界面字号整改_2026-10-16.md)；针对性验证命令为 `pnpm test:ui:search`、`pnpm test:native:search`。
+## 安装与使用
 
-## 打包安装程序
+从仓库的 [Releases](https://github.com/pucj0/Markumo/releases) 获取已发布版本；没有可用版本时，可按下文自行构建。
 
-Windows 双击根目录 `build.bat` 生成 EXE 安装包；macOS/Linux 在对应系统运行 `sh build.sh`，分别生成 APP/DMG、DEB/AppImage。可先运行 `build.bat --check` 或 `sh build.sh --check` 检查基本环境。输出位置、平台依赖和签名说明见 [打包说明](docs/本地打包说明.md)。
+Windows 构建产物为 `Markumo_*_x64-setup.exe`。安装后可通过菜单打开文件或文件夹，也可使用系统“打开方式”选择 Markumo。
 
-## 先在浏览器启动
+Windows 11 可在文件右键菜单的“显示更多选项”中选择“以 Markumo 打开”。此入口使用经典文件关联，不需要安装原生扩展或导入额外证书。
 
-在浏览器编辑草稿时，不需要 Rust 或 Visual Studio；磁盘打开/保存按钮禁用，内容只在内存中。显式样例演示入口为 `http://localhost:1420/?demo=1`。
+## 本地开发
 
-1. 安装 [Node.js LTS](https://nodejs.org/) 和 [pnpm](https://pnpm.io/installation)。已经安装时，可用 `node --version`、`pnpm --version` 检查。
-2. 打开 PowerShell，进入项目目录并安装依赖：
+### 环境
 
-```powershell
-Set-Location E:\code\lightEdit
-pnpm install --frozen-lockfile
-pnpm dev
-```
+- Node.js 20 或以上、pnpm。
+- 桌面开发还需要 Rust 工具链与系统依赖。
+- Windows 需要 MSVC、Visual Studio C++ 桌面开发工具、Windows SDK 和 WebView2 Runtime。
+- macOS 需要 Xcode Command Line Tools；Linux 需要 WebKitGTK 等开发依赖。
 
-浏览器访问 **http://localhost:1420**。终端需保持运行，按 Ctrl+C 停止；保存前端源码后页面会自动更新。
+各平台的详细环境要求见 [Tauri 官方文档](https://v2.tauri.app/start/prerequisites/)。
 
-依赖安装完成后，也可用 `npm run dev` 启动。安装依赖仍沿用项目的 pnpm 锁文件。
+### 获取源码
 
-从远程仓库新下载项目时：
-
-```powershell
+```sh
 git clone https://github.com/pucj0/Markumo.git
-Set-Location Markumo
+cd Markumo
 pnpm install --frozen-lockfile
+```
+
+### 启动桌面版
+
+```sh
+pnpm tauri dev
+```
+
+开发模式默认支持热更新。需要关闭自动重启时，运行 `pnpm tauri dev --no-watch`。开发数据保存在项目的 `.markumo-dev/` 中，不影响正式版配置。
+
+### 浏览器预览
+
+```sh
 pnpm dev
 ```
 
-不要在已经有项目的目录中重复 clone；已有 `E:\code\lightEdit` 时使用第一组命令即可。
+访问 `http://localhost:1420`。浏览器模式适合界面开发和内存草稿编辑，桌面文件操作需要 Tauri。启动桌面开发前，请先停止已有的 Vite 服务，避免端口冲突。
 
-## 在 Windows 启动桌面窗口
+### 检查与构建
 
-Tauri 开发需要 Rust MSVC 工具链、Microsoft C++ Build Tools、Windows SDK 和 WebView2。按 [Tauri 官方 Windows 环境说明](https://v2.tauri.app/start/prerequisites/#windows) 准备：
-
-1. 安装 Microsoft C++ Build Tools，在安装器中选择“使用 C++ 的桌面开发”（Desktop development with C++），保留 MSVC 和 Windows SDK 组件。
-2. 通过 [Rust 官方安装器](https://www.rust-lang.org/tools/install) 安装 rustup，使用 Windows MSVC 工具链。也可在 PowerShell 中执行 `winget install --id Rustlang.Rustup`。
-3. 需要 WebView2 Runtime。本轮环境已检测到 WebView2；其他机器请按官方说明检查或安装。
-4. 安装后重新打开终端，检查工具链：
-
-```powershell
-rustup default stable-msvc
-rustc --version
-cargo --version
-```
-
-随后在项目根目录运行：
-
-```powershell
-Set-Location E:\code\lightEdit
-pnpm install --frozen-lockfile
-pnpm tauri info
-pnpm tauri dev
-```
-
-`pnpm tauri dev` 会自动启动 Vite 并编译 Rust；第一次需要下载 Rust 依赖，耗时取决于网络和机器。**运行桌面命令前先停止此前的 `pnpm dev`**，避免 1420 端口占用。Tauri CLI 已在项目开发依赖中，无需另外安装 `cargo-tauri`。
-
-开发启动器使用项目内 `.lightedit-dev/` 存放 WebView2、临时文件和开发偏好，避免受限终端无法写入系统 AppData/Temp 时启动失败。它已被 Git 忽略；不放入 Git，不当作源码清理。正式版仍使用平台默认应用数据目录。`pnpm tauri info` 等其他命令不重定向数据目录。
-
-`pnpm tauri dev` 默认开启热更新：前端源码由 Vite HMR 更新，`src-tauri` 下的文件变化会触发 Rust 重新编译并重启窗口。因此，用编辑器保存位于 `src-tauri` 中的测试文件也可能触发重启。`pnpm tauri:watch` 保留为相同模式的别名；浏览器 `pnpm dev` 也支持 HMR。需要稳定的文件功能测试时，可选 `pnpm tauri dev --no-watch`，同时关闭 Rust 自动重启和前端 HMR。
-
-本机需要代理才能连接 crates.io。若遇到 TLS 握手失败，可设置实际代理端口；以下为本机 CMD 示例（只影响当前窗口）：
-
-```cmd
-set "CARGO_HTTP_PROXY=http://127.0.0.1:7897"
-pnpm tauri dev
-```
-
-PowerShell 对应写法是 `$env:CARGO_HTTP_PROXY = "http://127.0.0.1:7897"`。Rust 安装后若旧终端找不到 cargo，应重开终端，或临时将 `%USERPROFILE%\.cargo\bin` 加入 PATH。
-
-## 验证与生产预览
-
-```powershell
+```sh
 pnpm typecheck
-pnpm test
 pnpm build
-pnpm preview --host 127.0.0.1 --port 1421 --strictPort
-```
-
-生产预览地址为 http://127.0.0.1:1421。`pnpm build` 生成的是前端资源，正式安装包属于后续 Phase 8，目前打包配置关闭。
-
-工具链就绪后还应运行：
-
-```powershell
 cargo check --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-受限终端若不能写入系统 Temp，可为本次 Rust fixture 指定项目内临时目录（PowerShell）：
+`pnpm build` 仅生成前端资源到 `dist/`。仓库不包含独立的前端测试脚本；`cargo test` 验证配置迁移与旧预设名称转换。
+
+## 生成安装包
+
+Windows：
 
 ```powershell
-New-Item -ItemType Directory -Force test-results/native-temp | Out-Null
-$env:TEMP = (Resolve-Path test-results/native-temp).Path
-$env:TMP = $env:TEMP
-cargo test --manifest-path src-tauri/Cargo.toml --locked
+.\build.bat
 ```
 
-`pnpm test` 运行 Vitest 单元测试。`pnpm test:ui` 运行既有编辑器回归（显式 demo 模式），`pnpm test:ui:files` 运行文件 UI 与显式 IPC 服务替身的契约测试；两者均需要 Node >=20、Playwright 与浏览器。命令和验收范围见 [Phase 3 实施报告](docs/第三阶段实施与验收记录.md)。当前没有独立 lint runner；TypeScript strict 检查不等价于 lint。
+macOS / Linux：
 
-`pnpm test:native:save` 是 Windows/WebView2 的真实保存回归：需要 Playwright，运行前关闭已有 Markumo 窗口和 1420 服务。它会以显式 `--no-watch` 启动隔离的桌面实例和 CDP 调试端口 9225，操作专用临时文件，检查保存前后进程/页面不变、另一份 dirty 草稿保留以及实际 BOM/CRLF 字节。结果写入 `test-results/native-save-stability/`，不会更改开发偏好或用户文件。
-
-`pnpm test:native:workspace` 验证 Phase 4，使用独立工作区/历史和真实 Tauri IPC，创建 10,000 个临时文件，检查快速打开、搜索、重命名/移动后保存、删除确认及窄窗口。需 Windows、Node >=20、Playwright；运行前保存并关闭已有 Markumo 和 1420 服务。测试数据/日志保留在 `test-results/phase4-native/`，不接触用户工作区。Playwright 不在项目依赖中，可通过 `LIGHTEDIT_PLAYWRIGHT_PACKAGE` 指定现有 Playwright 的 package.json 绝对路径。
-
-## 桌面文件操作（待实机验收）
-
-- `Ctrl+N` 新建、`Ctrl+O` 打开、`Ctrl+S` 保存、`Ctrl+Shift+S` 另存为；顶部也提供打开和保存按钮。
-- `Ctrl+Shift+P` 可选择按编码打开/重开、另存为 UTF-8。默认严格识别 UTF-8 或 UTF-8/UTF-16 BOM；不猜测旧编码，不用替换字符读取。
-- 只读或磁盘冲突时保留编辑内容，可另存为。关闭 dirty 标签或窗口支持继续编辑、放弃、保存并关闭。
-- 最近文件及独立布局存储到应用数据目录 `com.lightedit.app/files.json`；开发模式为 `.lightedit-dev/files.json`，不持久化正文。单文件打开不创建工作区。
-- 本阶段保守限制：原始文件及解码文本各不超过 16 MiB、最多 200,001 行；批量最多 20 个文件、文本总量不超过 64 MiB。拒绝二进制/NUL、文件符号链接和硬链接，避免不明确的覆盖语义。
-
-## Phase 5 / 6 功能与复跑
-
-Markdown 默认在同一 CodeMirror 编辑区即时排版，工具栏可切换 Source / Split。复杂表格、图片、数学与 Mermaid 保留源文；只读预览不会自动下载远程图片。
-
-`Ctrl+\` 开关左右窗格；可将标签拖到另一组，`Ctrl+Alt+Right` 切换活动窗格。同一文件共享内容与撤销历史，每侧保留选区/滚动；关闭分栏会把副窗格独有标签合并回来。`Ctrl+G` 跳转行:列，`Ctrl+F/H` 查找/替换，`F3/Shift+F3` 下一/上一。命令面板可转换选区大小写、复制路径和 Reveal。
-
-设置现在自动保存到本机 `editor-settings.json`，开发默认在 `.lightedit-dev/`。包含主题、字号、等宽字体、换行、缩进、大纲、Markdown 默认模式/最近 100 个文件的视图模式、快捷键；不存正文。快捷键配置中 Mod 表示 Ctrl / Command，支持字母/单字符键、F1–F12 与 ArrowRight，重复和编辑器保留按键会被拒绝。字体未安装时使用等宽 fallback。预览和大纲在超过 1,048,576 个 CM 字符（UTF-16 计数）时暂停，大纲最多 1000 项。
-
-设置按外观、编辑、保存、Markdown、快捷键分类；字号可直接输入10–24整数。文件自动保存默认开启，在停止输入1.5秒后保存已有保存位置的可写文件，可在“保存”分类关闭或更改延迟。未命名草稿仍需先选择保存位置；外部版本冲突/写入失败保留编辑内容并暂停自动重试，可手动另存为处理。浏览器没有磁盘自动保存能力。实现与验证见 [设置与自动保存记录](docs/设置与自动保存更新.md)。
-
-新增回归命令：
-
-```powershell
-# 另一个终端先运行浏览器测试服务
-pnpm dev --host 127.0.0.1 --port 1422
-# 再在测试终端运行；默认使用现有 Playwright 与 Edge
-pnpm test:ui:editor
-pnpm test:ui:phase6
-# 真实桌面 / Rust / 文件字节 / 设置重启：先保存并关闭已有 Markumo 和 1420 服务
-pnpm test:native:editor
+```sh
+sh build.sh
 ```
 
-Playwright 不在项目依赖中，需要已有可用安装；可通过 `LIGHTEDIT_PLAYWRIGHT_PACKAGE` 指向其 package.json。DOM 脚本使用独立 fixture，原生脚本使用隔离 profile、`--no-watch` 和 CDP 9227，结果保留在 `test-results/`。普通 `pnpm tauri dev` 继续保持热更新。
+脚本默认安装锁定依赖并构建当前系统的安装包。可使用 `--check` 检查环境，或使用 `--skip-install` 跳过依赖安装。
 
-本轮实际结果与人工缺项见 [Phase 5 复审](docs/第五阶段复审与修复.md) 和 [Phase 6 复审](docs/第六阶段复审与修复.md)。两阶段保持 REVIEW；没有开始 Phase 7。
+Windows 打包脚本会将生成的程序和安装包恢复为正常的 Medium 完整性标记，避免构建目录继承的 Low 标记影响启动。
 
-## 常见启动问题
+| 平台 | 默认产物目录 | 格式 |
+| --- | --- | --- |
+| Windows | `src-tauri/target/release/bundle/nsis/` | EXE 安装包 |
+| macOS | `src-tauri/target/release/bundle/macos/`、`dmg/` | APP、DMG |
+| Linux | `src-tauri/target/release/bundle/deb/`、`appimage/` | DEB、AppImage |
 
-若保存桌面文件提示 `os error 5`，文件/目录 ACL 正常却仍失败，请检查本地生成的 `src-tauri/target/debug/markumo.exe` 是否被标记为 `Low Mandatory Level`：Low 程序不能写普通用户数据，单纯管理员运行也不能解除 exe 的 Low 标签。本机生成目录现已修复为普通 Medium。若彻底重建 target 后复发，普通 PowerShell 可对本项目生成目录执行 `icacls 'E:\code\lightEdit\src-tauri\target' /setintegritylevel '(OI)(CI)M' /T /Q`，再重启程序；不需要更改桌面目录权限。完整证据、测试与保存保护见 [保存权限专项修复](docs/第三阶段保存权限修复.md)。旧窗口有未保存内容时先另存到可写位置，再关闭重启。
+各平台需在对应系统上构建。使用自定义 Cargo target 或输出目录时，以构建日志中的实际路径为准。
 
-| 提示 | 处理 |
-|---|---|
-| 找不到 pnpm | 安装 pnpm 并重新打开终端；安装方法见上方 pnpm 官方文档 |
-| PowerShell 禁止运行 pnpm.ps1 | 可改用 `pnpm.cmd dev` 或 `pnpm.cmd tauri dev` |
-| 找不到 cargo / cargo metadata | 安装 Rust MSVC 工具链并重新打开终端，先确认 `cargo --version` 可运行 |
-| 找不到 link.exe、MSVC 或 Windows SDK | 在 Visual Studio Installer 中补齐 C++ 桌面开发组件，重新打开终端 |
-| 1420 端口被占用 | 停止之前运行的项目开发服务；不要随意更改端口，Tauri devUrl 已与 1420 配套 |
-| 浏览器 Ctrl+S 提示需要桌面版 | 浏览器只编辑内存草稿；磁盘操作需启动 Tauri，关闭或刷新前请保留需要的文本 |
+## 技术结构
 
-产品需求见 [产品需求文档](docs/产品需求文档.md)，阶段状态见 [阶段进度与验收台账](docs/阶段进度与验收台账.md)，审查结果与遗留风险见 [第一阶段复审记录](docs/第一阶段复审记录.md)。`docs/界面交互原型.html` 仅为交互/视觉参考。
+- **界面**：Vue 3、TypeScript、Vite。
+- **桌面服务**：Rust、Tauri 2，处理文件读写、工作区和系统集成。
+- **编辑内核**：普通文本、代码及 Markdown 源码使用 CodeMirror 6；Markdown 即时排版使用 ProseMirror，代码块嵌入 CodeMirror 6。
+- **渲染**：Markdown-it、KaTeX、Mermaid。
+
+```text
+src/                 界面、编辑器与应用功能
+src-tauri/           Rust 桌面服务、图标和 Windows 集成
+scripts/             开发与打包脚本
+public/              静态资源
+design/              图标设计源文件
+```
+
+应用标识统一为 `com.markumo.app`，开发配置目录为 `.markumo-dev/`，浏览器偏好使用 `markumo.settings.v1`，Windows 文件关联及右键菜单注册项统一使用 `Markumo`。
+
+首次启动会从旧版标准目录导入编辑器设置、最近文件、工作区及上次会话；已有的新配置不会被覆盖，旧目录保留为备份。自定义开发目录仅通过 `MARKUMO_DEV_DATA_DIR` 指定。更新后的注册项在重新构建并安装后生效；Windows 的默认应用选择由系统管理，必要时在“打开方式”或“默认应用”中重新选择 Markumo。

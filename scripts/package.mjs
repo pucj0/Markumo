@@ -22,7 +22,7 @@ export function packageOptions(args, host = process.platform) {
     } else throw Error(`Unknown argument: ${args[i]}. Use --help.`)
   }
   if (!platforms[platform]) throw Error(`Unsupported host platform: ${platform}`)
-  if (!help && platform !== host) throw Error(`Build ${platforms[platform].name} packages on ${platforms[platform].name}. This script does not cross-compile. See docs/本地打包说明.md.`)
+  if (!help && platform !== host) throw Error(`Build ${platforms[platform].name} packages on ${platforms[platform].name}. This script does not cross-compile. See README.md.`)
   return { platform, check, skipInstall, help, ...platforms[platform] }
 }
 
@@ -33,8 +33,6 @@ export function buildEnvironment(environment, home = homedir()) {
   // A build invoked from a dev/test terminal must not embed its data-directory
   // override in the distributed application. Signing/proxy variables stay intact.
   delete env.TAURI_CONFIG
-  delete env.LIGHTEDIT_DEV_DATA_DIR
-  delete env.LIGHTEDIT_DESKTOP_NO_RELOAD
   delete env.MARKUMO_DEV_DATA_DIR
   delete env.MARKUMO_DESKTOP_NO_RELOAD
   return env
@@ -83,7 +81,7 @@ No installation, Git operations, signing-key generation or publishing is perform
   if (options.platform === 'linux') run('pkg-config', ['--exists', 'webkit2gtk-4.1'])
   if (options.check) {
     console.log('[OK] Node, pnpm, Rust/Cargo and basic platform checks passed. No package was built.')
-    console.log('The linker/SDK and installer tooling are verified by the actual build. See docs/本地打包说明.md.')
+    console.log('The linker/SDK and installer tooling are verified by the actual build. See README.md.')
     return
   }
   if (!options.skipInstall) pnpm('install --frozen-lockfile')
@@ -101,6 +99,18 @@ No installation, Git operations, signing-key generation or publishing is perform
   run(process.execPath, buildArgs)
   const output = bundleDirectory(metadata.target_directory, env.CARGO_BUILD_TARGET)
   if (!existsSync(output)) throw Error(`Build exited successfully but no bundle directory was found at ${output}. Check any Cargo build.target configuration.`)
+  if (options.platform === 'win32') {
+    // Generated executables can inherit a Low label from a restricted build
+    // directory, preventing NSIS from extracting into the user's normal Temp.
+    // Normalize only our output directory and executables, never user folders.
+    const installers = join(output, 'nsis')
+    run('icacls', [installers, '/setintegritylevel', '(OI)(CI)M'], true)
+    for (const file of readdirSync(installers).filter(file => file.endsWith('.exe'))) {
+      run('icacls', [join(installers, file), '/setintegritylevel', 'M'], true)
+    }
+    const config = JSON.parse(readFileSync(join(project, 'src-tauri/tauri.conf.json'), 'utf8'))
+    run('icacls', [join(dirname(output), `${config.mainBinaryName || 'markumo'}.exe`), '/setintegritylevel', 'M'], true)
+  }
   console.log(`\n[OK] Packaging completed. Output directory:\n${output}`)
   for (const directory of options.platform === 'darwin' ? ['macos','dmg'] : options.platform === 'win32' ? ['nsis'] : ['deb','appimage']) {
     const path = join(output, directory)
@@ -111,5 +121,5 @@ No installation, Git operations, signing-key generation or publishing is perform
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  try { main() } catch (error) { console.error(`\n[ERROR] ${error.message}\nSee docs/本地打包说明.md for prerequisites and troubleshooting.`); process.exitCode = 1 }
+  try { main() } catch (error) { console.error(`\n[ERROR] ${error.message}\nSee README.md for prerequisites and troubleshooting.`); process.exitCode = 1 }
 }

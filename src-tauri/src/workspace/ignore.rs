@@ -33,7 +33,8 @@ impl IgnoreRuleSet {
                 "node_modules",
                 "target",
                 "dist",
-                ".lightedit-dev",
+                ".markumo-dev",
+                ".lightedit-dev", // Retired profile backup, not workspace content.
                 ".tmp",
                 ".idea",
                 ".vscode",

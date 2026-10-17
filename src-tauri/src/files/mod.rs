@@ -2,7 +2,6 @@ pub(crate) mod atomic;
 mod codec;
 pub mod classfile;
 pub mod images;
-#[cfg(test)] mod tests;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

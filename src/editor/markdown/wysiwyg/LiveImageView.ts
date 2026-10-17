@@ -1,7 +1,6 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import { NodeSelection } from 'prosemirror-state'
 import type { EditorView, NodeView } from 'prosemirror-view'
-import { isTauri } from '@tauri-apps/api/core'
 import { imageDestination, type MarkdownResources } from '../images'
 
 export class LiveImageView implements NodeView {
@@ -122,23 +121,7 @@ export class LiveImageView implements NodeView {
         }
         src = destination.path
       } else {
-        let bytes: Uint8Array
-        try {
-          bytes = await this.resources.loadLocal(destination.path)
-        } catch (localErr) {
-          if (!isTauri()) {
-            const rel = destination.path.replace(/^\.\//, '')
-            const resp = await fetch(`/tests/fixtures/${rel}`)
-            if (resp.ok) {
-              const buf = await resp.arrayBuffer()
-              bytes = new Uint8Array(buf)
-            } else {
-              throw localErr
-            }
-          } else {
-            throw localErr
-          }
-        }
+        const bytes = await this.resources.loadLocal(destination.path)
         if (this.disposed || current !== this.generation) return
         const type =
           bytes[0] === 0x89

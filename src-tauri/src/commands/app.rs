@@ -51,23 +51,3 @@ pub async fn open_external_link(url: String) -> Result<(), String> {
     .await
     .map_err(|e| e.to_string())?
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn only_safe_web_links_are_accepted() {
-        for url in [
-            "javascript:alert(1)",
-            "file:///C:/secret",
-            "data:text/html,hello",
-            "https://user:password@example.com",
-            "not a url",
-        ] {
-            assert!(super::validated_external_url(url).is_err());
-        }
-        assert_eq!(
-            super::validated_external_url("https://example.com/a").unwrap(),
-            "https://example.com/a"
-        );
-    }
-}

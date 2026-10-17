@@ -95,6 +95,7 @@ export class EditorLayoutManager {
     }
 
     this.replaceNodeInTree(targetPaneId, splitNode)
+    this.maximizedPaneId = null
     this.activePaneId = newPaneId
     this.notify()
     return newPaneId
@@ -219,10 +220,12 @@ export class EditorLayoutManager {
     if (fromTabIdx < 0) return false
 
     if (fromPaneId === toPaneId) {
-      if (targetIndex !== undefined) {
-        return this.reorderTab(fromPaneId, documentId, targetIndex)
-      }
-      return false
+      // targetIndex is an insertion slot in the original list, before removal.
+      const slot = targetIndex ?? fromPane.group.tabs.length
+      fromPane.group.pin(documentId)
+      fromPane.group.activeId = documentId
+      this.activePaneId = toPaneId
+      return this.reorderTab(fromPaneId, documentId, slot > fromTabIdx ? slot - 1 : slot)
     }
 
     const [tab] = fromPane.group.tabs.splice(fromTabIdx, 1)
@@ -230,16 +233,15 @@ export class EditorLayoutManager {
       fromPane.group.activeId = fromPane.group.tabs[Math.min(fromTabIdx, fromPane.group.tabs.length - 1)]?.documentId || null
     }
 
+    let slot = targetIndex ?? toPane.group.tabs.length
     const existingInTo = toPane.group.tabs.findIndex(t => t.documentId === documentId)
     if (existingInTo >= 0) {
       toPane.group.tabs.splice(existingInTo, 1)
+      if (existingInTo < slot) slot--
     }
 
-    if (targetIndex !== undefined && targetIndex >= 0 && targetIndex <= toPane.group.tabs.length) {
-      toPane.group.tabs.splice(targetIndex, 0, tab)
-    } else {
-      toPane.group.tabs.push(tab)
-    }
+    tab.pinned = true
+    toPane.group.tabs.splice(Math.max(0, Math.min(toPane.group.tabs.length, slot)), 0, tab)
     toPane.group.activeId = documentId
     this.activePaneId = toPaneId
 

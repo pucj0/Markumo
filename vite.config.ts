@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'path'
 
-const noDesktopReload = () => (process.env.MARKUMO_DESKTOP_NO_RELOAD ?? process.env.LIGHTEDIT_DESKTOP_NO_RELOAD) === '1'
+const noDesktopReload = () => process.env.MARKUMO_DESKTOP_NO_RELOAD === '1'
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -28,7 +28,7 @@ export default defineConfig({
     strictPort: true,
     hmr: noDesktopReload() ? false : undefined,
     watch: noDesktopReload() ? null : {
-      ignored: ['**/src-tauri/**', '**/.lightedit-dev/**', '**/test-results/**'],
+      ignored: ['**/src-tauri/**', '**/.markumo-dev/**', '**/.lightedit-dev/**'],
     },
   },
 })

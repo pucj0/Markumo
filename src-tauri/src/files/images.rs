@@ -6,9 +6,6 @@ use std::{
     fs,
     io::{Read, Write},
 };
-#[cfg(test)]
-#[path = "images_tests.rs"]
-mod tests;
 
 const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 

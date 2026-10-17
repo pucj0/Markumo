@@ -20,14 +20,27 @@ export interface PaneDropTarget {
   zone: DropZone
 }
 
+export interface TabDragResult {
+  payload: TabDragPayload
+  paneDrop: PaneDropTarget | null
+  tabInsert: TabInsertTarget | null
+}
+
+// Use the closest proportional edge at corners, so left/right do not mask top/bottom.
+export function resolvePaneDropZone(rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>, x: number, y: number): DropZone {
+  if (rect.width <= 0 || rect.height <= 0) return 'center'
+  const rx = (x - rect.left) / rect.width
+  const ry = (y - rect.top) / rect.height
+  const edges: [DropZone, number][] = [['top', ry], ['bottom', 1 - ry], ['left', rx], ['right', 1 - rx]]
+  const closest = edges.reduce((a, b) => b[1] < a[1] ? b : a)
+  return closest[1] < 0.28 ? closest[0] : 'center'
+}
+
 export class TabDragService {
   private static instance: TabDragService
 
   static getInstance(): TabDragService {
-    if (!TabDragService.instance) {
-      TabDragService.instance = new TabDragService()
-    }
-    return TabDragService.instance
+    return TabDragService.instance ||= new TabDragService()
   }
 
   readonly isDragging = ref(false)
@@ -38,224 +51,200 @@ export class TabDragService {
   private ghostEl: HTMLElement | null = null
   private startX = 0
   private startY = 0
+  private lastX = 0
+  private lastY = 0
+  private pointerId: number | null = null
+  private captureEl: HTMLElement | null = null
   private pendingPayload: TabDragPayload | null = null
-  private dragThreshold = 5 // 鼠标移动超过 5px 视为拖拽，保证单击/双击/右键完全不受影响
-  private onCommitCallback?: (result: {
-    payload: TabDragPayload
-    paneDrop: PaneDropTarget | null
-    tabInsert: TabInsertTarget | null
-  }) => void
+  private scrollFrame = 0
+  private clickTimer: ReturnType<typeof setTimeout> | undefined
+  private onCommitCallback?: (result: TabDragResult) => void
 
-  private handlePointerMove = (e: PointerEvent) => {
-    if (!this.pendingPayload) return
-
-    // 检查是否达到拖动阈值
+  private handlePointerMove = (event: PointerEvent) => {
+    if (!this.pendingPayload || event.pointerId !== this.pointerId) return
+    if (!(event.buttons & 1)) { this.cancelDrag(); return }
     if (!this.isDragging.value) {
-      const dist = Math.hypot(e.clientX - this.startX, e.clientY - this.startY)
-      if (dist >= this.dragThreshold) {
-        this.startDrag(this.pendingPayload, e)
-      } else {
-        return
-      }
+      if (Math.hypot(event.clientX - this.startX, event.clientY - this.startY) < 5) return
+      this.startDrag(event)
     }
-
-    // 更新 Ctrl 复制标志
-    if (this.dragPayload.value) {
-      this.dragPayload.value.isCopy = e.ctrlKey || e.altKey
-    }
-
-    // 更新幽灵卡片位置
-    this.updateGhostPosition(e.clientX, e.clientY)
-
-    // 检测落点目标
-    this.detectDropTarget(e.clientX, e.clientY)
+    event.preventDefault()
+    this.lastX = event.clientX
+    this.lastY = event.clientY
+    this.updateCopy(event)
+    this.updateGhostPosition()
+    this.detectDropTarget()
   }
 
-  private handlePointerUp = (e: PointerEvent) => {
+  private handlePointerUp = (event: PointerEvent) => {
+    if (event.pointerId !== this.pointerId) return
+    let result: TabDragResult | undefined
+    const commit = this.onCommitCallback
     if (this.isDragging.value && this.dragPayload.value) {
-      // 最终确认是否是按住 Ctrl
-      this.dragPayload.value.isCopy = e.ctrlKey || e.altKey
-
-      if (this.onCommitCallback) {
-        this.onCommitCallback({
-          payload: { ...this.dragPayload.value },
-          paneDrop: this.activePaneDrop.value,
-          tabInsert: this.activeTabInsert.value,
-        })
+      this.lastX = event.clientX
+      this.lastY = event.clientY
+      this.updateCopy(event)
+      // Pointerup can arrive at a different position from the last move event.
+      this.detectDropTarget()
+      result = {
+        payload: { ...this.dragPayload.value },
+        paneDrop: this.activePaneDrop.value,
+        tabInsert: this.activeTabInsert.value,
       }
+      event.preventDefault()
     }
+    // Layout changes may unmount the source tab; clean up before committing.
     this.cancelDrag()
+    if (result) commit?.(result)
   }
 
-  private handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
+  private updateCopy(event: Pick<KeyboardEvent, 'ctrlKey' | 'altKey'>) {
+    if (!this.dragPayload.value) return
+    const isCopy = event.ctrlKey || event.altKey
+    this.dragPayload.value.isCopy = isCopy
+    const badge = this.ghostEl?.querySelector<HTMLElement>('.tab-ghost-badge')
+    if (badge) badge.hidden = !isCopy
+  }
+
+  private handleKey = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopImmediatePropagation()
       this.cancelDrag()
-    } else if (e.key === 'Control' || e.key === 'Alt') {
-      if (this.dragPayload.value) {
-        this.dragPayload.value.isCopy = true
-        this.updateGhostCopyBadge(true)
-      }
+    } else {
+      this.updateCopy(event)
     }
   }
 
-  private handleKeyUp = (e: KeyboardEvent) => {
-    if (e.key === 'Control' || e.key === 'Alt') {
-      if (this.dragPayload.value) {
-        this.dragPayload.value.isCopy = false
-        this.updateGhostCopyBadge(false)
-      }
-    }
+  private handleCancel = () => this.cancelDrag()
+  private handleVisibility = () => { if (document.hidden) this.cancelDrag() }
+  private suppressClick = (event: MouseEvent) => {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    window.removeEventListener('click', this.suppressClick, true)
   }
 
-  /**
-   * 在 Tab 上 pointerdown 时注册潜在拖动
-   */
-  startWatching(
-    e: PointerEvent,
-    payload: Omit<TabDragPayload, 'isCopy'>,
-    onCommit: (result: {
-      payload: TabDragPayload
-      paneDrop: PaneDropTarget | null
-      tabInsert: TabInsertTarget | null
-    }) => void
-  ) {
-    // 仅允许鼠标左键拖拽
-    if (e.button !== 0) return
-
-    this.startX = e.clientX
-    this.startY = e.clientY
-    this.pendingPayload = {
-      ...payload,
-      isCopy: e.ctrlKey || e.altKey,
-    }
+  startWatching(event: PointerEvent, payload: Omit<TabDragPayload, 'isCopy'>, onCommit: (result: TabDragResult) => void) {
+    if (event.button !== 0 || !event.isPrimary) return
+    this.cancelDrag()
+    clearTimeout(this.clickTimer)
+    window.removeEventListener('click', this.suppressClick, true)
+    this.startX = this.lastX = event.clientX
+    this.startY = this.lastY = event.clientY
+    this.pointerId = event.pointerId
+    this.captureEl = event.currentTarget as HTMLElement
+    this.pendingPayload = { ...payload, isCopy: event.ctrlKey || event.altKey }
     this.onCommitCallback = onCommit
-
-    window.addEventListener('pointermove', this.handlePointerMove, { passive: true })
-    window.addEventListener('pointerup', this.handlePointerUp, { once: true })
-    window.addEventListener('keydown', this.handleKeyDown)
-    window.addEventListener('keyup', this.handleKeyUp)
+    window.addEventListener('pointermove', this.handlePointerMove, { passive: false, capture: true })
+    window.addEventListener('pointerup', this.handlePointerUp, true)
+    window.addEventListener('pointercancel', this.handleCancel, true)
+    window.addEventListener('blur', this.handleCancel)
+    window.addEventListener('keydown', this.handleKey, true)
+    window.addEventListener('keyup', this.handleKey, true)
+    document.addEventListener('visibilitychange', this.handleVisibility)
   }
 
-  private startDrag(payload: TabDragPayload, e: PointerEvent) {
+  private startDrag(event: PointerEvent) {
     this.isDragging.value = true
-    this.dragPayload.value = payload
-
+    this.dragPayload.value = this.pendingPayload
+    this.updateCopy(event)
+    this.captureEl?.setPointerCapture(event.pointerId)
     document.body.classList.add('is-tab-dragging')
-    this.createGhost(payload.documentName, payload.isCopy, e.clientX, e.clientY)
+    window.addEventListener('click', this.suppressClick, true)
+    this.createGhost()
+    this.scrollFrame = requestAnimationFrame(this.autoScroll)
   }
 
-  private detectDropTarget(x: number, y: number) {
-    // 1. 先检测是否落在某个 TabBar 或 Tab 上
-    const elUnderCursor = document.elementFromPoint(x, y)
-    if (!elUnderCursor) {
-      this.activePaneDrop.value = null
-      this.activeTabInsert.value = null
-      return
-    }
-
-    const tabEl = elUnderCursor.closest<HTMLElement>('.tab')
-    const tabBarEl = elUnderCursor.closest<HTMLElement>('.tabs')
-
-    if (tabBarEl) {
-      this.activePaneDrop.value = null
-      const paneEl = tabBarEl.closest<HTMLElement>('.pane')
-      const paneId = paneEl?.dataset.paneId || 'main'
-
-      if (tabEl && tabEl.dataset.document) {
-        const rect = tabEl.getBoundingClientRect()
-        const isAfter = x > rect.left + rect.width / 2
-        this.activeTabInsert.value = {
-          paneId,
-          targetDocId: tabEl.dataset.document,
-          position: isAfter ? 'after' : 'before',
-        }
-      } else {
-        // 落在标签栏空白处
-        this.activeTabInsert.value = {
-          paneId,
-          targetDocId: '',
-          position: 'after',
-        }
-      }
-      return
-    }
-
-    // 2. 如果没有落在标签栏，检测是否落在某个编辑 Pane 内部
-    this.activeTabInsert.value = null
-    const paneEl = elUnderCursor.closest<HTMLElement>('.pane')
-    if (paneEl) {
-      const paneId = paneEl.dataset.paneId || 'main'
-      const rect = paneEl.getBoundingClientRect()
-      if (rect.width > 0 && rect.height > 0) {
-        const relX = (x - rect.left) / rect.width
-        const relY = (y - rect.top) / rect.height
-        const margin = 0.22
-
-        let zone: DropZone = 'center'
-        if (relX < margin) zone = 'left'
-        else if (relX > 1 - margin) zone = 'right'
-        else if (relY < margin) zone = 'top'
-        else if (relY > 1 - margin) zone = 'bottom'
-        else zone = 'center'
-
-        this.activePaneDrop.value = { paneId, zone }
-        return
-      }
-    }
-
+  private detectDropTarget() {
+    const x = this.lastX, y = this.lastY
+    const underCursor = document.elementFromPoint(x, y)
     this.activePaneDrop.value = null
+    this.activeTabInsert.value = null
+    const pane = underCursor?.closest<HTMLElement>('.pane[data-pane-id]')
+    if (!pane?.dataset.paneId) return
+    const paneId = pane.dataset.paneId
+    const tabBar = underCursor?.closest<HTMLElement>('.tabs')
+    if (tabBar) {
+      const tabs = [...tabBar.querySelectorAll<HTMLElement>('.tab[data-document]')]
+      const before = tabs.find(tab => {
+        const rect = tab.getBoundingClientRect()
+        return x < rect.left + rect.width / 2
+      })
+      this.activeTabInsert.value = {
+        paneId,
+        targetDocId: (before || tabs[tabs.length - 1])?.dataset.document || '',
+        position: before ? 'before' : 'after',
+      }
+      return
+    }
+    const body = pane.querySelector<HTMLElement>('.pane-body') || pane
+    this.activePaneDrop.value = { paneId, zone: resolvePaneDropZone(body.getBoundingClientRect(), x, y) }
   }
 
-  private createGhost(name: string, isCopy: boolean, x: number, y: number) {
-    this.destroyGhost()
+  private autoScroll = () => {
+    if (!this.isDragging.value) return
+    const tabBar = document.elementFromPoint(this.lastX, this.lastY)?.closest<HTMLElement>('.tabs')
+    if (tabBar && tabBar.scrollWidth > tabBar.clientWidth) {
+      const rect = tabBar.getBoundingClientRect()
+      const edge = Math.min(40, rect.width / 4)
+      const left = this.lastX - rect.left, right = rect.right - this.lastX
+      const speed = left < edge ? -12 * (1 - left / edge) : right < edge ? 12 * (1 - right / edge) : 0
+      if (speed) {
+        tabBar.scrollLeft += speed
+        this.detectDropTarget()
+      }
+    }
+    this.scrollFrame = requestAnimationFrame(this.autoScroll)
+  }
+
+  private createGhost() {
     const ghost = document.createElement('div')
     ghost.className = 'tab-drag-ghost'
-    ghost.innerHTML = `
-      <span class="tab-ghost-icon">📄</span>
-      <span class="tab-ghost-name">${name}</span>
-      <span class="tab-ghost-badge" ${isCopy ? '' : 'style="display:none;"'}>+ 副本</span>
-    `
+    ghost.setAttribute('aria-hidden', 'true')
+    const name = document.createElement('span')
+    name.className = 'tab-ghost-name'
+    name.textContent = this.dragPayload.value?.documentName || ''
+    const badge = document.createElement('span')
+    badge.className = 'tab-ghost-badge'
+    badge.textContent = '+ 视图'
+    badge.hidden = !this.dragPayload.value?.isCopy
+    ghost.append(name, badge)
     document.body.append(ghost)
     this.ghostEl = ghost
-    this.updateGhostPosition(x, y)
+    this.updateGhostPosition()
   }
 
-  private updateGhostPosition(x: number, y: number) {
-    if (this.ghostEl) {
-      this.ghostEl.style.transform = `translate3d(${x + 12}px, ${y + 12}px, 0)`
-    }
-  }
-
-  private updateGhostCopyBadge(isCopy: boolean) {
-    if (this.ghostEl) {
-      const badge = this.ghostEl.querySelector<HTMLElement>('.tab-ghost-badge')
-      if (badge) {
-        badge.style.display = isCopy ? 'inline-block' : 'none'
-      }
-    }
-  }
-
-  private destroyGhost() {
-    if (this.ghostEl) {
-      this.ghostEl.remove()
-      this.ghostEl = null
-    }
+  private updateGhostPosition() {
+    if (!this.ghostEl) return
+    const x = Math.max(0, Math.min(this.lastX + 14, window.innerWidth - this.ghostEl.offsetWidth - 8))
+    const y = Math.max(0, Math.min(this.lastY + 16, window.innerHeight - this.ghostEl.offsetHeight - 8))
+    this.ghostEl.style.transform = `translate3d(${x}px, ${y}px, 0)`
   }
 
   cancelDrag() {
+    const wasDragging = this.isDragging.value
+    if (this.pointerId !== null && this.captureEl?.hasPointerCapture(this.pointerId)) {
+      this.captureEl.releasePointerCapture(this.pointerId)
+    }
     this.isDragging.value = false
     this.dragPayload.value = null
     this.pendingPayload = null
+    this.pointerId = null
+    this.captureEl = null
     this.activePaneDrop.value = null
     this.activeTabInsert.value = null
     this.onCommitCallback = undefined
-
     document.body.classList.remove('is-tab-dragging')
-    this.destroyGhost()
-
-    window.removeEventListener('pointermove', this.handlePointerMove)
-    window.removeEventListener('keydown', this.handleKeyDown)
-    window.removeEventListener('keyup', this.handleKeyUp)
+    this.ghostEl?.remove()
+    this.ghostEl = null
+    cancelAnimationFrame(this.scrollFrame)
+    window.removeEventListener('pointermove', this.handlePointerMove, true)
+    window.removeEventListener('pointerup', this.handlePointerUp, true)
+    window.removeEventListener('pointercancel', this.handleCancel, true)
+    window.removeEventListener('blur', this.handleCancel)
+    window.removeEventListener('keydown', this.handleKey, true)
+    window.removeEventListener('keyup', this.handleKey, true)
+    document.removeEventListener('visibilitychange', this.handleVisibility)
+    if (wasDragging) this.clickTimer = setTimeout(() => window.removeEventListener('click', this.suppressClick, true), 0)
   }
 }
 

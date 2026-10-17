@@ -49,7 +49,7 @@ export function useAppShell() {
   const fontFamily = ref<EditorSettings['fontFamily']>('system'), indentSize = ref(2), useTabs = ref(false)
   const autoSave = ref(false), autoSaveDelay = ref(1500)
   const treeClickMode = ref<'double' | 'single'>('double')
-  const keymapPreset = ref<KeymapPresetId>('lightedit')
+  const keymapPreset = ref<KeymapPresetId>('markumo')
   const markdownTypography=ref(defaultMarkdownTypography())
   const imageRules = ref(defaultImageRules()), documentImageRules = ref<Record<string, ImageRules>>({})
   const shortcuts = ref<EditorSettings['shortcuts']>({ ...defaultShortcuts }), fileModes = ref<Record<string, MarkdownMode>>({})
@@ -784,7 +784,7 @@ export function useAppShell() {
       imageRules.value=settings.imageRules;documentImageRules.value=settings.documentImageRules
       showOutline.value = settings.showOutline; defaultMdMode.value = settings.defaultMdMode; indentSize.value = settings.indentSize; useTabs.value = settings.useTabs
       treeClickMode.value = settings.treeClickMode || 'double'
-      keymapPreset.value = settings.keymapPreset || 'lightedit'
+      keymapPreset.value = settings.keymapPreset || 'markumo'
       shortcuts.value = settings.shortcuts; fileModes.value = settings.fileModes; manager.setFileModes(settings.fileModes)
       customShortcuts.value=settings.customShortcuts
       // An older version could not record who enabled automatic save. Preserve

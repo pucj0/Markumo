@@ -116,7 +116,7 @@ const isNodeActive = computed(() => {
 
 function handleDragStart(event: DragEvent) {
   if (props.node.isDirectory) return
-  event.dataTransfer?.setData('application/x-lightedit-file', JSON.stringify({ path: props.node.path, name: props.node.name }))
+  event.dataTransfer?.setData('application/x-markumo-file', JSON.stringify({ path: props.node.path, name: props.node.name }))
   if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove'
 }
 

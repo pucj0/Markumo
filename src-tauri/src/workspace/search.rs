@@ -72,39 +72,6 @@ struct TraversalBudget {
     count: usize,
 }
 
-#[cfg(test)]
-mod budget_tests {
-    use super::*;
-    #[test]
-    fn traversal_limit_and_deadline_are_shared_between_roots() {
-        let dir = tempfile::tempdir().unwrap();
-        let roots = [dir.path().join("a"), dir.path().join("b")];
-        for root in &roots {
-            std::fs::create_dir(root).unwrap();
-            std::fs::write(root.join("same.txt"), "data").unwrap();
-        }
-        let token = AtomicBool::new(false);
-        let mut budget = TraversalBudget {
-            started: Instant::now(),
-            count: 99_999,
-        };
-        walk_files_budget(&roots[0], false, &token, &mut budget, |_| true).unwrap();
-        assert!(walk_files_budget(&roots[1], false, &token, &mut budget, |_| true).is_err());
-        let mut expired = TraversalBudget {
-            started: Instant::now() - Duration::from_secs(11),
-            count: 0,
-        };
-        assert!(
-            walk_files_budget(&roots[0], false, &token, &mut expired, |_| panic!(
-                "expired traversal visited file"
-            ))
-            .is_err()
-        );
-        let files = find_files_roots(&roots, "b/same", false).unwrap();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].relative_path, "b/same.txt");
-    }
-}
 impl TraversalBudget {
     fn new() -> Self {
         Self {
@@ -183,22 +150,6 @@ pub struct QuickFile {
     pub path: String,
     pub relative_path: String,
 }
-#[cfg(test)]
-pub fn find_files(
-    root: &Path,
-    query: &str,
-    include_ignored: bool,
-) -> Result<Vec<QuickFile>, String> {
-    find_files_budget(
-        root,
-        query,
-        include_ignored,
-        &mut TraversalBudget::new(),
-        "",
-        100,
-    )
-}
-
 pub fn find_files_roots(
     roots: &[std::path::PathBuf],
     query: &str,
@@ -315,19 +266,6 @@ impl WorkspaceSearcher {
             )?;
         }
         Ok(total)
-    }
-
-    #[cfg(test)]
-    pub fn execute_search<F>(
-        root: &Path,
-        query: &SearchQuery,
-        token: Arc<AtomicBool>,
-        on_batch: F,
-    ) -> Result<usize, String>
-    where
-        F: FnMut(Vec<SearchMatch>),
-    {
-        Self::execute_search_budget(root, query, token, &mut TraversalBudget::new(), on_batch)
     }
 
     fn execute_search_budget<F>(

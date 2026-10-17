@@ -102,12 +102,12 @@ watch(panels, () => { void align() })
 watch(() => props.anchor, () => { path.value=[]; void align() })
 watch(() => props.focus, async focus => { if(focus){await nextTick();focusFirst(0)} })
 onMounted(async () => {
-  window.dispatchEvent(new CustomEvent('lightedit-menu-open',{detail:instance})); window.addEventListener('lightedit-menu-open',anotherMenu)
+  window.dispatchEvent(new CustomEvent('markumo-menu-open',{detail:instance})); window.addEventListener('markumo-menu-open',anotherMenu)
   window.addEventListener('pointerdown',outside,true); window.addEventListener('keydown',globalKey,true); window.addEventListener('resize',align)
   observer=new ResizeObserver(() => { void align() }); await align(); for (const element of elements) if (element) observer.observe(element)
   if (props.focus) focusFirst(0)
 })
-onUnmounted(() => { alive=false;cancelHover();observer?.disconnect();window.removeEventListener('lightedit-menu-open',anotherMenu);window.removeEventListener('pointerdown',outside,true);window.removeEventListener('keydown',globalKey,true);window.removeEventListener('resize',align) })
+onUnmounted(() => { alive=false;cancelHover();observer?.disconnect();window.removeEventListener('markumo-menu-open',anotherMenu);window.removeEventListener('pointerdown',outside,true);window.removeEventListener('keydown',globalKey,true);window.removeEventListener('resize',align) })
 </script>
 <style>
 .app-menu-popup { position:fixed;z-index:1200;display:flex;flex-direction:column;width:max-content;min-width:232px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow-y:auto;overflow-x:hidden;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:4px;box-shadow:0 6px 20px rgba(0,0,0,.18);font: var(--ui-font-size)/var(--ui-line-height) var(--font-sans);color:var(--ink) }

@@ -29,7 +29,6 @@
       @close-right="closeRight($event)"
       @close-all="closeAll"
       @new-doc="newDocument"
-      @move-tab="handleMoveTab"
       @split-tab="handleSplitTab"
       @move-other="handleMoveOther"
       @move-pane="handleMoveToPane"
@@ -49,16 +48,20 @@
       @open-workspace="$emit('open-workspace')"
     />
 
-    <EditorPane
-      v-else
-      :manager="manager"
-      :pane="paneId"
-      :doc="activeDoc"
-      :files="files"
-      @quick-open="$emit('open-palette', 'file')"
-    />
+    <div v-else class="pane-document">
+      <EditorPane
+        :manager="manager"
+        :pane="paneId"
+        :doc="activeDoc"
+        :files="files"
+        @quick-open="$emit('open-palette', 'file')"
+      />
+      <div v-if="markdownMode" class="pane-mode-control">
+        <MarkdownModeSwitcher :mode="markdownMode" @change="changeMarkdownMode" />
+      </div>
+    </div>
 
-    <DropZoneOverlay :active="isDropActive" :zone="currentDropZone" />
+    <DropZoneOverlay :active="isDropActive" :zone="currentDropZone" :copy="tabDragService.dragPayload.value?.isCopy" />
   </div>
 </template>
 
@@ -68,11 +71,13 @@ import TabBar from './TabBar.vue'
 import Breadcrumb from './Breadcrumb.vue'
 import EditorPane from './EditorPane.vue'
 import WelcomePage from './WelcomePage.vue'
+import MarkdownModeSwitcher from './MarkdownModeSwitcher.vue'
 import DropZoneOverlay, { type DropZone } from './DropZoneOverlay.vue'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { FileController } from '../../features/files/FileController'
 import type { SplitDirection } from '../../editor/layout/types'
-import { tabDragService } from '../../editor/layout/TabDragService'
+import { tabDragService, resolvePaneDropZone } from '../../editor/layout/TabDragService'
+import type { MarkdownMode } from '../../types'
 
 const props = defineProps<{
   paneId: string
@@ -125,6 +130,14 @@ const activeDoc = computed(() => {
   return paneActiveId.value ? props.manager.metadata(paneActiveId.value) : null
 })
 const isActivePane = computed(() => { props.revision; return props.manager.layout.activePaneId === props.paneId })
+const markdownMode = computed(() => {
+  props.revision
+  return props.manager.getMarkdownMode(paneActiveId.value, props.paneId)
+})
+
+function changeMarkdownMode(mode: MarkdownMode) {
+  if (paneActiveId.value) props.manager.setMarkdownMode(paneActiveId.value, mode, props.paneId)
+}
 
 function newDocument() {
   props.manager.focusPane(props.paneId, false)
@@ -167,15 +180,8 @@ function closeAll() {
   }
 }
 
-function handleMoveTab(payload: { id: string; from: string; targetIndex?: number }) {
-  props.manager.moveTab(payload.id, payload.from, props.paneId, payload.targetIndex)
-}
-
 function handleSplitTab(payload: { id: string; direction: SplitDirection; duplicate?: boolean }) {
-  props.manager.splitPane(payload.direction, props.paneId, payload.id)
-  if (!payload.duplicate) {
-    props.manager.close(payload.id, false, props.paneId)
-  }
+  props.manager.transferTab(payload.id, props.paneId, props.paneId, { direction: payload.direction, copy: payload.duplicate })
 }
 
 function handleMoveOther(id: string) {
@@ -199,24 +205,17 @@ function handleClosePane() {
 // 4-direction Drop Targets: left, right, top, bottom, center
 function handleDragOver(event: DragEvent) {
   const types = event.dataTransfer?.types || []
-  if (!types.includes('application/x-lightedit-tab') && !types.includes('application/x-lightedit-file')) {
+  if (!types.includes('application/x-markumo-tab') && !types.includes('application/x-markumo-file')) {
     return
   }
   event.preventDefault()
   if (!paneContainer.value) return
-  const rect = paneContainer.value.getBoundingClientRect()
+  const body = paneContainer.value.querySelector<HTMLElement>('.pane-body') || paneContainer.value
+  const rect = body.getBoundingClientRect()
   if (!rect.width || !rect.height) return
 
-  const x = (event.clientX - rect.left) / rect.width
-  const y = (event.clientY - rect.top) / rect.height
-  const margin = 0.22
-
-  let zone: DropZone = 'center'
-  if (x < margin) zone = 'left'
-  else if (x > 1 - margin) zone = 'right'
-  else if (y < margin) zone = 'top'
-  else if (y > 1 - margin) zone = 'bottom'
-  else zone = 'center'
+  const onTabBar = (event.target as Element).closest('.tabs')
+  const zone = onTabBar ? 'center' : resolvePaneDropZone(rect, event.clientX, event.clientY)
 
   dragZone.value = zone
   isDraggingOver.value = true
@@ -231,36 +230,27 @@ function handleDragLeave(event: DragEvent) {
 }
 
 function handleDrop(event: DragEvent) {
-  const zone = dragZone.value || 'center'
+  const body = paneContainer.value?.querySelector<HTMLElement>('.pane-body') || paneContainer.value
+  const zone = (event.target as Element).closest('.tabs') || !body
+    ? 'center' : resolvePaneDropZone(body.getBoundingClientRect(), event.clientX, event.clientY)
   isDraggingOver.value = false
   dragZone.value = null
   const isCopy = event.ctrlKey || event.altKey
 
   // 1. Internal Tab Drag
-  const rawTab = event.dataTransfer?.getData('application/x-lightedit-tab')
+  const rawTab = event.dataTransfer?.getData('application/x-markumo-tab')
   if (rawTab) {
     try {
       const tab = JSON.parse(rawTab)
       if (typeof tab.id === 'string' && typeof tab.from === 'string') {
-        if (zone === 'center') {
-          if (isCopy) {
-            props.manager.open(tab.id, false, props.paneId)
-          } else {
-            props.manager.moveTab(tab.id, tab.from, props.paneId)
-          }
-        } else {
-          props.manager.splitPane(zone as SplitDirection, props.paneId, tab.id)
-          if (!isCopy) {
-            props.manager.close(tab.id, false, tab.from)
-          }
-        }
+        props.manager.transferTab(tab.id, tab.from, props.paneId, { copy: isCopy, direction: zone === 'center' ? undefined : zone })
         return
       }
     } catch {}
   }
 
   // 2. Workspace File Tree Drag
-  const rawFile = event.dataTransfer?.getData('application/x-lightedit-file')
+  const rawFile = event.dataTransfer?.getData('application/x-markumo-file')
   if (rawFile) {
     try {
       const fileData = JSON.parse(rawFile)
@@ -281,5 +271,20 @@ function handleDrop(event: DragEvent) {
   display: flex;
   position: relative;
   flex-direction: column;
+}
+
+.pane-document {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  position: relative;
+}
+
+.pane-mode-control {
+  position: absolute;
+  right: 22px;
+  top: 8px;
+  z-index: 6;
 }
 </style>

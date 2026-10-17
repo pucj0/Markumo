@@ -12,14 +12,13 @@ export function devOptions(input, project, environment = process.env) {
   if (watchIndex >= 0) args.splice(watchIndex, 1)
   const insertion = args.indexOf('--')
   const additions = []
-  // Keep the existing default profile and accept old automation variables.
-  const data = resolve(project, env.MARKUMO_DEV_DATA_DIR || env.LIGHTEDIT_DEV_DATA_DIR || '.lightedit-dev')
+  // Profile data from the retired default is imported once by the Rust startup.
+  const data = resolve(project, env.MARKUMO_DEV_DATA_DIR || '.markumo-dev')
   const temp = join(data, 'temp'), webview = join(data, 'webview')
   env.TEMP = temp
   env.TMP = temp
   env.WEBVIEW2_USER_DATA_FOLDER = webview
-  env.LIGHTEDIT_DESKTOP_NO_RELOAD = watch ? '0' : '1'
-  env.MARKUMO_DESKTOP_NO_RELOAD = env.LIGHTEDIT_DESKTOP_NO_RELOAD
+  env.MARKUMO_DESKTOP_NO_RELOAD = watch ? '0' : '1'
   additions.push('--config', JSON.stringify({ app: { appDirectoriesOverride: data } }))
   args.splice(insertion < 0 ? args.length : insertion, 0, ...additions)
   return { args, env, directories: [data, temp, webview], watch }

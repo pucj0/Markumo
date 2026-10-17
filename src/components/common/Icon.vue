@@ -57,6 +57,9 @@
     <template v-else-if="name === 'font'">
       <path d="M4 20 10 4h4l6 16M7 13h10" />
     </template>
+    <template v-else-if="name === 'code'">
+      <path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18" />
+    </template>
     <template v-else-if="name === 'keyboard'">
       <rect x="2" y="5" width="20" height="14" rx="3" />
       <path d="M6 9h1m4 0h1m4 0h1M6 12h1m4 0h1m4 0h1M7 16h10" />

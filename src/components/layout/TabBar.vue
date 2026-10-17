@@ -1,17 +1,14 @@
 <template>
-  <div ref="tabs" class="tabs" @wheel="scrollTabs" @dragover.prevent @drop.prevent.stop="dropEmptySpace">
+  <div ref="tabs" class="tabs" @wheel="scrollTabs">
     <div class="tablist">
       <div
         v-for="doc in docs"
         :key="doc.id"
         :data-document="doc.id"
         class="tab"
-        draggable="true"
+        draggable="false"
         @pointerdown="onTabPointerDown($event, doc)"
-        @dragstart="dragTab($event, doc.id)"
-        @dragover="tabDragOver($event, doc.id)"
-        @dragleave="tabDragLeave"
-        @drop.stop.prevent="tabDrop($event, doc.id)"
+        @dragstart.prevent
         role="tab" tabindex="0" :aria-label="doc.name" :aria-selected="doc.id === activeId"
         @keydown.enter.prevent="$emit('select-tab', doc.id)"
         @keydown.space.prevent="$emit('select-tab', doc.id)"
@@ -22,7 +19,7 @@
           pinned: doc.pinned,
           'drop-before': isDragInsertingBefore(doc.id),
           'drop-after': isDragInsertingAfter(doc.id),
-          'is-dragging': tabDragService.isDragging.value && tabDragService.dragPayload.value?.documentId === doc.id
+          'is-dragging': tabDragService.isDragging.value && tabDragService.dragPayload.value?.fromPaneId === pane && tabDragService.dragPayload.value?.documentId === doc.id
         }"
         :title="readablePath(doc.path)"
         @click="$emit('select-tab', doc.id)"
@@ -32,7 +29,7 @@
       >
         <FileIcon :name="doc.name" />
         <span class="filename">{{ doc.name }}</span>
-        <span v-if="doc.dirty" class="unsaved" title="未保存修改"></span>
+        <span v-if="doc.dirty || !doc.path" class="unsaved" :title="doc.dirty ? '未保存修改' : '尚未保存'"></span>
         <button
           class="tinyclose"
           :title="`关闭 ${doc.name}`"
@@ -52,40 +49,6 @@
       <Icon name="plus" size="small" />
     </button>
 
-    <!-- Markdown 快速模式切换器（Segmented Control） -->
-    <div v-if="activeIsMarkdown" class="md-mode-switcher" role="group" aria-label="Markdown 显示模式">
-      <button
-        type="button"
-        class="md-mode-btn"
-        :class="{ active: currentMarkdownMode === 'live' }"
-        title="实时排版"
-        aria-label="实时排版模式"
-        @click="changeMarkdownMode('live')"
-      >
-        实时排版
-      </button>
-      <button
-        type="button"
-        class="md-mode-btn"
-        :class="{ active: currentMarkdownMode === 'source' }"
-        title="源码"
-        aria-label="源码模式"
-        @click="changeMarkdownMode('source')"
-      >
-        源码
-      </button>
-      <button
-        type="button"
-        class="md-mode-btn"
-        :class="{ active: currentMarkdownMode === 'split' }"
-        title="双栏"
-        aria-label="双栏模式"
-        @click="changeMarkdownMode('split')"
-      >
-        双栏
-      </button>
-    </div>
-
     <ContextMenu ref="contextMenu" />
   </div>
 </template>
@@ -95,13 +58,12 @@ import Icon from '../common/Icon.vue'
 import FileIcon from '../common/FileIcon.vue'
 import type { EditorDocument } from '../../types'
 import { readablePath } from '../../features/shell/pathDisplay'
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import ContextMenu from '../common/ContextMenu.vue'
 import { CommandRegistry, menuCommand as cmd, separator, type MenuNode } from '../../features/shell/menuModel'
 import { textClipboard } from '../../features/shell/clipboard'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import { tabDragService } from '../../editor/layout/TabDragService'
-import type { SplitDirection } from '../../editor/layout/types'
 
 const props = withDefaults(defineProps<{
   docs: EditorDocument[]
@@ -122,7 +84,6 @@ const emit = defineEmits<{
   (e: 'close-right', id: string): void
   (e: 'close-all'): void
   (e: 'new-doc'): void
-  (e: 'move-tab', payload: { id: string; from: string; targetIndex?: number }): void
   (e: 'split-tab', payload: { id: string; direction: 'left' | 'right' | 'top' | 'bottom'; duplicate?: boolean }): void
   (e: 'move-other', id: string): void
   (e: 'move-pane', payload: { id: string; toPane: string }): void
@@ -134,32 +95,14 @@ const emit = defineEmits<{
 
 const contextMenu = ref<InstanceType<typeof ContextMenu> | null>(null)
 const tabs = ref<HTMLElement | null>(null)
-const dragOverId = ref<string | null>(null)
-const dragPosition = ref<'before' | 'after' | null>(null)
 let observer: ResizeObserver | undefined
 
-const activeDoc = computed(() => props.docs.find(d => d.id === props.activeId))
-const activeIsMarkdown = computed(() => {
-  return !!activeDoc.value && activeDoc.value.kind !== 'javaClass' && /\.(md|markdown)$/i.test(activeDoc.value.name)
-})
-const currentMarkdownMode = computed(() => {
-  return props.manager?.getMarkdownMode(props.activeId, props.pane) || 'live'
-})
-
-function changeMarkdownMode(mode: 'live' | 'source' | 'split') {
-  if (props.activeId && props.manager) {
-    props.manager.setMarkdownMode(props.activeId, mode, props.pane)
-  }
-}
-
 const isDragInsertingBefore = (docId: string) => {
-  if (dragOverId.value === docId && dragPosition.value === 'before') return true
   const insert = tabDragService.activeTabInsert.value
   return !!(insert && insert.paneId === props.pane && insert.targetDocId === docId && insert.position === 'before')
 }
 
 const isDragInsertingAfter = (docId: string) => {
-  if (dragOverId.value === docId && dragPosition.value === 'after') return true
   const insert = tabDragService.activeTabInsert.value
   return !!(insert && insert.paneId === props.pane && insert.targetDocId === docId && insert.position === 'after')
 }
@@ -174,32 +117,27 @@ function onTabPointerDown(event: PointerEvent, doc: EditorDocument) {
       documentName: doc.name,
     },
     result => {
+      const manager = props.manager
+      if (!manager) return
+      const { documentId, fromPaneId, isCopy } = result.payload
+      let transferred = false
       if (result.paneDrop) {
         const { paneId, zone } = result.paneDrop
-        if (zone === 'center') {
-          if (result.payload.isCopy) {
-            props.manager?.open(result.payload.documentId, false, paneId)
-          } else {
-            props.manager?.moveTab(result.payload.documentId, result.payload.fromPaneId, paneId)
-          }
-        } else {
-          emit('split-tab', {
-            id: result.payload.documentId,
-            direction: zone as SplitDirection,
-            duplicate: result.payload.isCopy,
-          })
-        }
+        transferred = manager.transferTab(documentId, fromPaneId, paneId, {
+          copy: isCopy,
+          direction: zone === 'center' ? undefined : zone,
+        })
       } else if (result.tabInsert) {
         const { paneId, targetDocId, position } = result.tabInsert
-        const targetGroup = props.manager?.layout.getPane(paneId)?.group
+        const targetGroup = manager.layout.getPane(paneId)?.group
         let targetIdx = targetGroup ? targetGroup.tabs.findIndex(t => t.documentId === targetDocId) : -1
         if (targetIdx >= 0 && position === 'after') targetIdx += 1
-        emit('move-tab', {
-          id: result.payload.documentId,
-          from: result.payload.fromPaneId,
-          targetIndex: targetIdx >= 0 ? targetIdx : undefined,
+        transferred = manager.transferTab(documentId, fromPaneId, paneId, {
+          copy: isCopy,
+          targetIndex: targetIdx >= 0 ? targetIdx : targetGroup?.tabs.length,
         })
       }
+      if (transferred) void nextTick(() => manager.focusPane(manager.activePaneId))
     }
   )
 }
@@ -222,7 +160,9 @@ function scrollTabs(event: WheelEvent) {
   event.preventDefault()
 }
 
-watch(() => [props.activeId, props.docs.map(doc => doc.id).join('\n')], () => { void revealActiveTab() }, { immediate: true })
+// Focus and cursor updates also refresh document metadata. Compare the values
+// separately so those updates cannot scroll the old active tab under a click.
+watch([() => props.activeId, () => props.docs.map(doc => doc.id).join('\n')], () => { void revealActiveTab() }, { immediate: true })
 
 onMounted(() => {
   observer = new ResizeObserver(() => { void revealActiveTab() })
@@ -318,58 +258,6 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
   contextMenu.value?.open(event, menuNodes, registry, '标签操作')
 }
 
-// 保持对原生 HTML5 Drag & Drop 的向下兼容
-function dragTab(event: DragEvent, id: string) {
-  event.dataTransfer?.setData('application/x-lightedit-tab', JSON.stringify({ id, from: props.pane }))
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'copyMove'
-  }
-}
-
-function tabDragOver(event: DragEvent, targetDocId: string) {
-  event.preventDefault()
-  if (!event.currentTarget) return
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  const isAfter = event.clientX > rect.left + rect.width / 2
-  dragOverId.value = targetDocId
-  dragPosition.value = isAfter ? 'after' : 'before'
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-}
-
-function tabDragLeave() {
-  dragOverId.value = null
-  dragPosition.value = null
-}
-
-function tabDrop(event: DragEvent, targetDocId: string) {
-  const currentPos = dragPosition.value
-  dragOverId.value = null
-  dragPosition.value = null
-  try {
-    const raw = event.dataTransfer?.getData('application/x-lightedit-tab')
-    if (!raw) return
-    const tab = JSON.parse(raw)
-    if (typeof tab.id === 'string' && typeof tab.from === 'string') {
-      const targetIdx = props.docs.findIndex(d => d.id === targetDocId)
-      if (targetIdx >= 0) {
-        const finalIdx = currentPos === 'after' ? targetIdx + 1 : targetIdx
-        emit('move-tab', { id: tab.id, from: tab.from, targetIndex: finalIdx })
-      }
-    }
-  } catch {}
-}
-
-function dropEmptySpace(event: DragEvent) {
-  try {
-    const raw = event.dataTransfer?.getData('application/x-lightedit-tab')
-    if (raw) {
-      const tab = JSON.parse(raw)
-      if (typeof tab.id === 'string' && typeof tab.from === 'string') {
-        emit('move-tab', { id: tab.id, from: tab.from })
-      }
-    }
-  } catch {}
-}
 </script>
 
 <style scoped>
@@ -400,6 +288,8 @@ function dropEmptySpace(event: DragEvent) {
 }
 
 .tab {
+  flex: none;
+  touch-action: none;
   height: var(--ui-control-height);
   border-radius: 6px;
   display: flex;
@@ -513,42 +403,4 @@ function dropEmptySpace(event: DragEvent) {
   color: var(--bright);
 }
 
-/* Markdown 模式快速切换器 Segmented Control */
-.md-mode-switcher {
-  margin-left: auto;
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  background: var(--editor);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 2px;
-  gap: 2px;
-  z-index: 2;
-}
-
-.md-mode-btn {
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-  font-family: var(--font-sans);
-  line-height: 18px;
-  padding: 0 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.15s ease;
-}
-
-.md-mode-btn:hover {
-  color: var(--bright);
-}
-
-.md-mode-btn.active {
-  background: var(--bar);
-  color: var(--accent);
-  font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
 </style>

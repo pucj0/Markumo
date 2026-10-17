@@ -5,7 +5,7 @@ import { html, htmlLanguage } from '@codemirror/lang-html'
 import { Selection } from 'prosemirror-state'
 import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorView, NodeView } from 'prosemirror-view'
-import { lightEditSyntax } from '../../core/syntaxTheme'
+import { markumoSyntax } from '../../core/syntaxTheme'
 import { renderSafeHtml, hasUnsupportedHtml, mountHtmlImages, type MountedImageHandle } from '../html/SafeHtmlRenderer'
 import type { MarkdownResources } from '../images'
 
@@ -91,7 +91,7 @@ export class HtmlSourceView implements NodeView {
     this.preview.hidden=true;this.editButton.hidden=true;this.editorHost.hidden=false;this.doneButton.hidden=false
     this.dom.classList.add('md-html-editing')
     this.cm=new CMView({parent:this.editorHost,state:CMState.create({doc:source,selection:EditorSelection.cursor(Math.max(0,Math.min(source.length,offset??source.length))),extensions:[
-      html(),lightEditSyntax,CMView.lineWrapping,
+      html(),markumoSyntax,CMView.lineWrapping,
       CMView.editorAttributes.of({style:'height:auto;min-height:0;width:100%'}),
       CMView.contentAttributes.of({'aria-label':'HTML 局部源码'}),
       keymap.of([

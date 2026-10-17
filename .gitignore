@@ -6,6 +6,8 @@ src-tauri/target/
 coverage/
 playwright-report/
 test-results/
+.markumo-dev/
+# Retired profile is kept only as a migration backup; never track its data.
 .lightedit-dev/
 *.log
 *.tsbuildinfo

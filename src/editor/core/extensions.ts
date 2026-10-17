@@ -4,7 +4,7 @@ import { history, historyKeymap, defaultKeymap, indentWithTab } from '@codemirro
 import { bracketMatching, foldGutter, foldKeymap, indentOnInput } from '@codemirror/language'
 import { search, searchKeymap } from '@codemirror/search'
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete'
-import { lightEditSyntax } from './syntaxTheme'
+import { markumoSyntax } from './syntaxTheme'
 import type { Theme } from '../../types'
 import { createEditorSearchPanel, showEditorSearch } from './searchPanel'
 import { changeGutter } from './changeGutter'
@@ -17,7 +17,7 @@ export const coreExtensions: Extension = [
   indentOnInput(), bracketMatching(), foldGutter({ markerDOM(open) {
     const element = document.createElement('span'); element.className = 'cm-fold-chevron' + (open ? ' open' : '')
     element.setAttribute('aria-label', open ? '折叠代码' : '展开代码'); return element
-  } }), lightEditSyntax,
+  } }), markumoSyntax,
   closeBrackets(), autocompletion(), search({ literal: true, top: true, createPanel: createEditorSearchPanel }),
   keymap.of([{ key: 'Mod-f', run: view => showEditorSearch(view, false) }, { key: 'Mod-r', run: view => showEditorSearch(view, true) },
     ...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap.filter(binding => binding.key !== 'Mod-h'), ...foldKeymap, ...completionKeymap, indentWithTab]),

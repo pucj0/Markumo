@@ -18,7 +18,7 @@ const tokens = { ...defaultMarkdownParser.tokens,
   bullet_list:{...defaultMarkdownParser.tokens.bullet_list,getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({bullet:tok.markup,tight:true})},
   list_item:{block:'list_item',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({checked:tok.meta?.checked ?? null})},
 }
-tokenizer.inline.ruler.before('escape','lightedit_math_footnotes',(state,silent)=>{
+tokenizer.inline.ruler.before('escape','markumo_math_footnotes',(state,silent)=>{
   const rest=state.src.slice(state.pos),note=/^\[\^([^\]\n]+)\]/.exec(rest)
   if(note){if(!silent){const token=state.push('footnote_reference','sup',0);token.content=note[1]}state.pos+=note[0].length;return true}
   if(rest[0]!=='$'||rest[1]==='$')return false
@@ -27,7 +27,7 @@ tokenizer.inline.ruler.before('escape','lightedit_math_footnotes',(state,silent)
   if(!silent){const token=state.push('math_inline','span',0);token.content=rest.slice(1,end)}state.pos+=end+1;return true
 })
 // Task syntax becomes a real list-item attribute. No checkbox state lives only in DOM.
-tokenizer.core.ruler.after('inline','lightedit_tasks', state => {
+tokenizer.core.ruler.after('inline','markumo_tasks', state => {
   const stack: typeof state.tokens = []
   for (const token of state.tokens) {
     if(token.type==='list_item_open') stack.push(token)
@@ -40,7 +40,7 @@ tokenizer.core.ruler.after('inline','lightedit_tasks', state => {
 // Consume paired HTML directly from source before Markdown strips delimiters.
 // Cache ranges per inline parser state, never search rendered text.
 const htmlRanges = new WeakMap<object, ReturnType<typeof inlineHtmlRanges>>()
-tokenizer.inline.ruler.before('html_inline','lightedit_html_source', (state,silent)=>{
+tokenizer.inline.ruler.before('html_inline','markumo_html_source', (state,silent)=>{
   if(state.src[state.pos]!=='<')return false
   let ranges=htmlRanges.get(state)
   if(!ranges){ranges=inlineHtmlRanges(state.src);htmlRanges.set(state,ranges)}
@@ -49,7 +49,7 @@ tokenizer.inline.ruler.before('html_inline','lightedit_html_source', (state,sile
   if(!silent){const token=state.push('html_inline','',0);token.content=state.src.slice(range.from,range.to)}
   state.pos=range.to;return true
 })
-tokenizer.core.ruler.after('lightedit_tasks','lightedit_cells', state=>{
+tokenizer.core.ruler.after('markumo_tasks','markumo_cells', state=>{
   const result:typeof state.tokens=[]
   for(const token of state.tokens){
     if(token.type==='th_close'||token.type==='td_close')result.push(new state.Token('paragraph_close','p',-1))

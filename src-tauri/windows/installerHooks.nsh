@@ -4,7 +4,7 @@
 ; This script hooks into Tauri 2's NSIS installer to register Markumo with
 ; the Windows Shell (Open With, Default Apps, Context Menu) safely without
 ; hijacking user's existing default applications.
-; Registry ProgIDs and shell verb IDs retain LightEdit for upgrade compatibility.
+; All newly registered ProgIDs, capabilities and shell verb IDs use Markumo.
 ; ==============================================================================
 
 ; Override Tauri's default APP_ASSOCIATE to prevent overwriting default application handlers
@@ -16,7 +16,8 @@
 !macro APP_ASSOCIATE EXT FILECLASS DESCRIPTION ICON COMMANDTEXT COMMAND
   ; 1. Register independent application ProgID
   WriteRegStr SHCTX "Software\Classes\${FILECLASS}" "" `${DESCRIPTION}`
-  WriteRegStr SHCTX "Software\Classes\${FILECLASS}\DefaultIcon" "" `${ICON}`
+  ; Documents use a paper icon; application shortcuts and Open With keep the M logo.
+  WriteRegStr SHCTX "Software\Classes\${FILECLASS}\DefaultIcon" "" '"$INSTDIR\icons\document.ico",0'
   WriteRegStr SHCTX "Software\Classes\${FILECLASS}\shell" "" "open"
   WriteRegStr SHCTX "Software\Classes\${FILECLASS}\shell\open" "" `${COMMANDTEXT}`
   WriteRegStr SHCTX "Software\Classes\${FILECLASS}\shell\open\command" "" `${COMMAND}`
@@ -34,43 +35,44 @@
 !macroend
 
 ; Editing a Windows executable script must not change its double-click execution.
-!macro LightEdit_RegisterEditVerb EXT
+!macro Markumo_RegisterEditVerb EXT
   ; Windows Context Menu: "使用 Markumo 打开" (Windows 10 standard & Windows 11 Show More Options)
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit" "" "使用 Markumo 打开"
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit" "Icon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
+  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\Markumo" "" "使用 Markumo 打开"
+  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\Markumo" "Icon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
+  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\Markumo\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
   ; One global file verb below avoids duplicate entries for known extensions.
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit" "LegacyDisable" ""
+  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\Markumo" "LegacyDisable" ""
 !macroend
 
 ; Macro to register a document extension with Open With, Capabilities, and Context Menu
-!macro LightEdit_RegisterExt EXT
+!macro Markumo_RegisterExt EXT
   WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\SupportedTypes" ".${EXT}" ""
-  WriteRegStr SHCTX "Software\LightEdit\Capabilities\FileAssociations" ".${EXT}" "LightEdit.Document"
-  !insertmacro LightEdit_RegisterEditVerb "${EXT}"
+  WriteRegStr SHCTX "Software\Markumo\Capabilities\FileAssociations" ".${EXT}" "Markumo.Document"
+  !insertmacro Markumo_RegisterEditVerb "${EXT}"
 !macroend
 
 ; Remove only our legacy candidates, then let the machine's batfile/cmdfile
 ; association take effect. Never write a default or remove another app's values.
-!macro LightEdit_RegisterExecutableScript EXT
+!macro Markumo_RegisterExecutableScript EXT
   ReadRegStr $R0 SHCTX "Software\Classes\Source Code File" ""
   ${If} $R0 == "源代码文件 (LightEdit)"
   ${OrIf} $R0 == "源代码文件 (Markumo)"
     DeleteRegValue SHCTX "Software\Classes\.${EXT}\OpenWithProgids" "Source Code File"
   ${EndIf}
+  DeleteRegValue SHCTX "Software\Classes\.${EXT}\OpenWithProgids" "Markumo.Document"
   DeleteRegValue SHCTX "Software\Classes\.${EXT}\OpenWithProgids" "LightEdit.Document"
   DeleteRegKey /ifempty SHCTX "Software\Classes\.${EXT}\OpenWithProgids"
   DeleteRegKey /ifempty SHCTX "Software\Classes\.${EXT}"
   DeleteRegValue SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\SupportedTypes" ".${EXT}"
-  DeleteRegValue SHCTX "Software\LightEdit\Capabilities\FileAssociations" ".${EXT}"
-  !insertmacro LightEdit_RegisterEditVerb "${EXT}"
+  DeleteRegValue SHCTX "Software\Markumo\Capabilities\FileAssociations" ".${EXT}"
+  !insertmacro Markumo_RegisterEditVerb "${EXT}"
 !macroend
 
 ; Macro to unregister one file extension
-!macro LightEdit_UnregisterExt EXT
+!macro Markumo_UnregisterExt EXT
   DeleteRegValue SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\SupportedTypes" ".${EXT}"
-  DeleteRegValue SHCTX "Software\LightEdit\Capabilities\FileAssociations" ".${EXT}"
-  DeleteRegKey SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\LightEdit"
+  DeleteRegValue SHCTX "Software\Markumo\Capabilities\FileAssociations" ".${EXT}"
+  DeleteRegKey SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\Markumo"
   DeleteRegKey /ifempty SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell"
   DeleteRegKey /ifempty SHCTX "Software\Classes\SystemFileAssociations\.${EXT}"
 !macroend
@@ -78,19 +80,6 @@
 ; ------------------------------------------------------------------------------
 ; Post-Install Hook: Runs after files and basic shortcuts are created
 ; ------------------------------------------------------------------------------
-!macro NSIS_HOOK_PREINSTALL
-  ; Release the previous package's COM surrogate before replacing its DLL.
-  IfFileExists "$INSTDIR\shell\Registration.json" 0 markumo_shell_preinstall_done
-    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\shell\Register.ps1" -Mode Uninstall -AppDirectory "$INSTDIR"'
-    Pop $0
-    Pop $1
-    ${If} $0 != 0
-      MessageBox MB_OK|MB_ICONEXCLAMATION "更新新版右键菜单前移除旧注册失败：$1" /SD IDOK
-      Abort
-    ${EndIf}
-  markumo_shell_preinstall_done:
-!macroend
-
 !macro NSIS_HOOK_POSTINSTALL
   ; Replace only our old RegisteredApplications display entry.
   ReadRegStr $R0 SHCTX "Software\RegisteredApplications" "LightEdit"
@@ -103,24 +92,24 @@
   WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\shell\open" "" "使用 Markumo 打开"
   WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\shell\open\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
 
-  ; 2. Generic LightEdit.Document ProgID definition for Default Apps
-  WriteRegStr SHCTX "Software\Classes\LightEdit.Document" "" "Markumo 文本文档"
-  WriteRegStr SHCTX "Software\Classes\LightEdit.Document\DefaultIcon" "" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
-  WriteRegStr SHCTX "Software\Classes\LightEdit.Document\shell" "" "open"
-  WriteRegStr SHCTX "Software\Classes\LightEdit.Document\shell\open" "" "使用 Markumo 打开"
-  WriteRegStr SHCTX "Software\Classes\LightEdit.Document\shell\open\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
+  ; 2. Generic Markumo.Document ProgID definition for Default Apps
+  WriteRegStr SHCTX "Software\Classes\Markumo.Document" "" "Markumo 文本文档"
+  WriteRegStr SHCTX "Software\Classes\Markumo.Document\DefaultIcon" "" '"$INSTDIR\icons\document.ico",0'
+  WriteRegStr SHCTX "Software\Classes\Markumo.Document\shell" "" "open"
+  WriteRegStr SHCTX "Software\Classes\Markumo.Document\shell\open" "" "使用 Markumo 打开"
+  WriteRegStr SHCTX "Software\Classes\Markumo.Document\shell\open\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
 
   ; 3. Windows RegisteredApplications capabilities (Windows 10/11 Default Apps settings)
-  WriteRegStr SHCTX "Software\LightEdit\Capabilities" "ApplicationName" "${PRODUCTNAME}"
-  WriteRegStr SHCTX "Software\LightEdit\Capabilities" "ApplicationDescription" "Markumo 轻量文本与 Markdown 编辑器"
-  WriteRegStr SHCTX "Software\LightEdit\Capabilities" "ApplicationIcon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
-  WriteRegStr SHCTX "Software\RegisteredApplications" "${PRODUCTNAME}" "Software\LightEdit\Capabilities"
+  WriteRegStr SHCTX "Software\Markumo\Capabilities" "ApplicationName" "${PRODUCTNAME}"
+  WriteRegStr SHCTX "Software\Markumo\Capabilities" "ApplicationDescription" "Markumo 轻量文本与 Markdown 编辑器"
+  WriteRegStr SHCTX "Software\Markumo\Capabilities" "ApplicationIcon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
+  WriteRegStr SHCTX "Software\RegisteredApplications" "${PRODUCTNAME}" "Software\Markumo\Capabilities"
 
   ; 4. SystemFileAssociations for generic text
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit" "" "使用 Markumo 打开"
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit" "Icon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit" "LegacyDisable" ""
+  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\Markumo" "" "使用 Markumo 打开"
+  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\Markumo" "Icon" '"$INSTDIR\${MAINBINARYNAME}.exe",0'
+  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\Markumo\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
+  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\text\shell\Markumo" "LegacyDisable" ""
 
   ; Any file, including extensions without PerceivedType=text. This is the
   ; classic menu (Windows 11: Show more options), not a modern Shell extension.
@@ -130,47 +119,35 @@
   WriteRegStr SHCTX "Software\Classes\*\shell\Markumo\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
 
   ; 5. Register 27 document extensions; executable scripts get an edit verb only
-  !insertmacro LightEdit_RegisterExt "txt"
-  !insertmacro LightEdit_RegisterExt "md"
-  !insertmacro LightEdit_RegisterExt "markdown"
-  !insertmacro LightEdit_RegisterExt "json"
-  !insertmacro LightEdit_RegisterExt "jsonc"
-  !insertmacro LightEdit_RegisterExt "xml"
-  !insertmacro LightEdit_RegisterExt "yaml"
-  !insertmacro LightEdit_RegisterExt "yml"
-  !insertmacro LightEdit_RegisterExt "js"
-  !insertmacro LightEdit_RegisterExt "jsx"
-  !insertmacro LightEdit_RegisterExt "ts"
-  !insertmacro LightEdit_RegisterExt "tsx"
-  !insertmacro LightEdit_RegisterExt "vue"
-  !insertmacro LightEdit_RegisterExt "html"
-  !insertmacro LightEdit_RegisterExt "css"
-  !insertmacro LightEdit_RegisterExt "scss"
-  !insertmacro LightEdit_RegisterExt "java"
-  !insertmacro LightEdit_RegisterExt "py"
-  !insertmacro LightEdit_RegisterExt "go"
-  !insertmacro LightEdit_RegisterExt "rs"
-  !insertmacro LightEdit_RegisterExt "sql"
-  !insertmacro LightEdit_RegisterExt "log"
-  !insertmacro LightEdit_RegisterExt "ini"
-  !insertmacro LightEdit_RegisterExt "cfg"
-  !insertmacro LightEdit_RegisterExt "conf"
-  !insertmacro LightEdit_RegisterExt "properties"
-  !insertmacro LightEdit_RegisterExt "sh"
-  !insertmacro LightEdit_RegisterExecutableScript "bat"
-  !insertmacro LightEdit_RegisterExecutableScript "cmd"
-
-  ; Per-user sparse package supplies Windows 11 package identity and COM verb.
-  ; Never import certificates or change Developer Mode from the installer.
-  IfFileExists "$INSTDIR\shell\Register.ps1" 0 markumo_shell_done
-    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\shell\Register.ps1" -Mode Install -AppDirectory "$INSTDIR"'
-    Pop $0
-    Pop $1
-    ${If} $0 != 0
-      ; Optional integration: keep diagnostics without interrupting installation.
-      DetailPrint "Markumo Windows 11 context menu registration failed: $1"
-    ${EndIf}
-  markumo_shell_done:
+  !insertmacro Markumo_RegisterExt "txt"
+  !insertmacro Markumo_RegisterExt "md"
+  !insertmacro Markumo_RegisterExt "markdown"
+  !insertmacro Markumo_RegisterExt "json"
+  !insertmacro Markumo_RegisterExt "jsonc"
+  !insertmacro Markumo_RegisterExt "xml"
+  !insertmacro Markumo_RegisterExt "yaml"
+  !insertmacro Markumo_RegisterExt "yml"
+  !insertmacro Markumo_RegisterExt "js"
+  !insertmacro Markumo_RegisterExt "jsx"
+  !insertmacro Markumo_RegisterExt "ts"
+  !insertmacro Markumo_RegisterExt "tsx"
+  !insertmacro Markumo_RegisterExt "vue"
+  !insertmacro Markumo_RegisterExt "html"
+  !insertmacro Markumo_RegisterExt "css"
+  !insertmacro Markumo_RegisterExt "scss"
+  !insertmacro Markumo_RegisterExt "java"
+  !insertmacro Markumo_RegisterExt "py"
+  !insertmacro Markumo_RegisterExt "go"
+  !insertmacro Markumo_RegisterExt "rs"
+  !insertmacro Markumo_RegisterExt "sql"
+  !insertmacro Markumo_RegisterExt "log"
+  !insertmacro Markumo_RegisterExt "ini"
+  !insertmacro Markumo_RegisterExt "cfg"
+  !insertmacro Markumo_RegisterExt "conf"
+  !insertmacro Markumo_RegisterExt "properties"
+  !insertmacro Markumo_RegisterExt "sh"
+  !insertmacro Markumo_RegisterExecutableScript "bat"
+  !insertmacro Markumo_RegisterExecutableScript "cmd"
 
   ; 6. Notify Windows Shell of association updates
   System::Call 'Shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
@@ -180,64 +157,55 @@
 ; Pre-Uninstall Hook: Runs before removing files and directories
 ; ------------------------------------------------------------------------------
 !macro NSIS_HOOK_PREUNINSTALL
-  IfFileExists "$INSTDIR\shell\Register.ps1" 0 markumo_shell_uninstall_done
-    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\shell\Register.ps1" -Mode Uninstall -AppDirectory "$INSTDIR"'
-    Pop $0
-    Pop $1
-    ${If} $0 != 0
-      MessageBox MB_OK|MB_ICONEXCLAMATION "移除新版右键菜单失败：$1。请关闭使用此扩展的窗口后重试。" /SD IDOK
-      Abort
-    ${EndIf}
-  markumo_shell_uninstall_done:
   DeleteRegKey SHCTX "Software\Classes\*\shell\Markumo"
   ; 1. Remove Windows RegisteredApplications reference
   DeleteRegValue SHCTX "Software\RegisteredApplications" "${PRODUCTNAME}"
 
   ; 2. Remove Capabilities
-  DeleteRegKey SHCTX "Software\LightEdit\Capabilities"
-  DeleteRegKey /ifempty SHCTX "Software\LightEdit"
+  DeleteRegKey SHCTX "Software\Markumo\Capabilities"
+  DeleteRegKey /ifempty SHCTX "Software\Markumo"
 
-  ; 3. Remove Applications\lightedit.exe
+  ; 3. Remove Applications\markumo.exe
   DeleteRegKey SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe"
 
   ; 4. Remove Generic ProgID
-  DeleteRegKey SHCTX "Software\Classes\LightEdit.Document"
+  DeleteRegKey SHCTX "Software\Classes\Markumo.Document"
 
   ; 5. Remove SystemFileAssociations for generic text
-  DeleteRegKey SHCTX "Software\Classes\SystemFileAssociations\text\shell\LightEdit"
+  DeleteRegKey SHCTX "Software\Classes\SystemFileAssociations\text\shell\Markumo"
   DeleteRegKey /ifempty SHCTX "Software\Classes\SystemFileAssociations\text\shell"
   DeleteRegKey /ifempty SHCTX "Software\Classes\SystemFileAssociations\text"
 
   ; 6. Unregister all 29 supported extensions
-  !insertmacro LightEdit_UnregisterExt "txt"
-  !insertmacro LightEdit_UnregisterExt "md"
-  !insertmacro LightEdit_UnregisterExt "markdown"
-  !insertmacro LightEdit_UnregisterExt "json"
-  !insertmacro LightEdit_UnregisterExt "jsonc"
-  !insertmacro LightEdit_UnregisterExt "xml"
-  !insertmacro LightEdit_UnregisterExt "yaml"
-  !insertmacro LightEdit_UnregisterExt "yml"
-  !insertmacro LightEdit_UnregisterExt "js"
-  !insertmacro LightEdit_UnregisterExt "jsx"
-  !insertmacro LightEdit_UnregisterExt "ts"
-  !insertmacro LightEdit_UnregisterExt "tsx"
-  !insertmacro LightEdit_UnregisterExt "vue"
-  !insertmacro LightEdit_UnregisterExt "html"
-  !insertmacro LightEdit_UnregisterExt "css"
-  !insertmacro LightEdit_UnregisterExt "scss"
-  !insertmacro LightEdit_UnregisterExt "java"
-  !insertmacro LightEdit_UnregisterExt "py"
-  !insertmacro LightEdit_UnregisterExt "go"
-  !insertmacro LightEdit_UnregisterExt "rs"
-  !insertmacro LightEdit_UnregisterExt "sql"
-  !insertmacro LightEdit_UnregisterExt "log"
-  !insertmacro LightEdit_UnregisterExt "ini"
-  !insertmacro LightEdit_UnregisterExt "cfg"
-  !insertmacro LightEdit_UnregisterExt "conf"
-  !insertmacro LightEdit_UnregisterExt "properties"
-  !insertmacro LightEdit_UnregisterExt "sh"
-  !insertmacro LightEdit_UnregisterExt "bat"
-  !insertmacro LightEdit_UnregisterExt "cmd"
+  !insertmacro Markumo_UnregisterExt "txt"
+  !insertmacro Markumo_UnregisterExt "md"
+  !insertmacro Markumo_UnregisterExt "markdown"
+  !insertmacro Markumo_UnregisterExt "json"
+  !insertmacro Markumo_UnregisterExt "jsonc"
+  !insertmacro Markumo_UnregisterExt "xml"
+  !insertmacro Markumo_UnregisterExt "yaml"
+  !insertmacro Markumo_UnregisterExt "yml"
+  !insertmacro Markumo_UnregisterExt "js"
+  !insertmacro Markumo_UnregisterExt "jsx"
+  !insertmacro Markumo_UnregisterExt "ts"
+  !insertmacro Markumo_UnregisterExt "tsx"
+  !insertmacro Markumo_UnregisterExt "vue"
+  !insertmacro Markumo_UnregisterExt "html"
+  !insertmacro Markumo_UnregisterExt "css"
+  !insertmacro Markumo_UnregisterExt "scss"
+  !insertmacro Markumo_UnregisterExt "java"
+  !insertmacro Markumo_UnregisterExt "py"
+  !insertmacro Markumo_UnregisterExt "go"
+  !insertmacro Markumo_UnregisterExt "rs"
+  !insertmacro Markumo_UnregisterExt "sql"
+  !insertmacro Markumo_UnregisterExt "log"
+  !insertmacro Markumo_UnregisterExt "ini"
+  !insertmacro Markumo_UnregisterExt "cfg"
+  !insertmacro Markumo_UnregisterExt "conf"
+  !insertmacro Markumo_UnregisterExt "properties"
+  !insertmacro Markumo_UnregisterExt "sh"
+  !insertmacro Markumo_UnregisterExt "bat"
+  !insertmacro Markumo_UnregisterExt "cmd"
 
   ; 7. Notify Windows Shell of association removal
   System::Call 'Shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
