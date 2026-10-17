@@ -2,7 +2,7 @@ import { EditorSelection, type EditorState, type TransactionSpec } from '@codemi
 import { isolateHistory } from '@codemirror/commands'
 
 export const markdownFormats = [
-  ['heading-1', '一级标题'], ['heading-2', '二级标题'], ['heading-3', '三级标题'], ['heading-4', '四级标题'], ['heading-5', '五级标题'], ['heading-6', '六级标题'],
+  ['heading-0', '普通段落'], ['heading-1', '一级标题'], ['heading-2', '二级标题'], ['heading-3', '三级标题'], ['heading-4', '四级标题'], ['heading-5', '五级标题'], ['heading-6', '六级标题'],
   ['bold', '加粗'], ['italic', '斜体'], ['strike', '删除线'], ['inline-code', '行内代码'], ['code-block', '代码块'],
   ['quote', '引用'], ['bullet', '无序列表'], ['ordered', '有序列表'], ['task', '任务列表'], ['link', '链接'], ['image', '图片语法'], ['rule', '分隔线'], ['table','表格'],
 ] as const
@@ -48,7 +48,7 @@ export function markdownFormatTransaction(state: EditorState, format: MarkdownFo
     let index = 0
     const changes = [...lines].sort((a,b) => a-b).map(number => {
       const line = state.doc.line(number)
-      const prefix = format.startsWith('heading-') ? '#'.repeat(Number(format.slice(-1))) + ' ' : format === 'quote' ? '> ' : format === 'bullet' ? '- ' : format === 'ordered' ? `${++index}. ` : '- [ ] '
+      const prefix = format.startsWith('heading-') ? (format === 'heading-0' ? '' : '#'.repeat(Number(format.slice(-1))) + ' ') : format === 'quote' ? '> ' : format === 'bullet' ? '- ' : format === 'ordered' ? `${++index}. ` : '- [ ] '
       const indent = /^[ \t]*/.exec(line.text)![0].length
       const old = /^(?:#{1,6}\s+|>\s+|[-+*]\s+(?:\[[ xX]\]\s+)?|\d+\.\s+)/.exec(line.text.slice(indent))?.[0] || ''
       return { from: line.from + indent, to: line.from + indent + old.length, insert: old === prefix ? '' : prefix }

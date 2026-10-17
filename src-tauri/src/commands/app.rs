@@ -28,17 +28,16 @@ pub async fn open_external_link(url: String) -> Result<(), String> {
     let url = validated_external_url(&url)?;
     tauri::async_runtime::spawn_blocking(move || {
         #[cfg(windows)]
-        let mut command = {
-            use std::os::windows::process::CommandExt;
-            let system = std::env::var_os("SystemRoot").ok_or("找不到 Windows 系统目录")?;
-            let mut command = std::process::Command::new(
-                std::path::PathBuf::from(system).join("System32/rundll32.exe"),
-            );
-            command
-                .args(["url.dll,FileProtocolHandler", &url])
-                .creation_flags(0x08000000);
-            command
-        };
+        {
+            use windows_sys::Win32::UI::Shell::ShellExecuteW;
+            let wide:Vec<u16>=url.encode_utf16().chain(Some(0)).collect();
+            // Dispatch directly through the registered URL association. Waiting
+            // for rundll32 can otherwise leave a click pending without feedback.
+            let result=unsafe{ShellExecuteW(std::ptr::null_mut(),std::ptr::null(),wide.as_ptr(),std::ptr::null(),std::ptr::null(),1)} as isize;
+            return if result>32 {Ok(())}else{Err(format!("系统浏览器未能打开链接（错误 {result}），请检查 HTTP/HTTPS 默认浏览器。"))};
+        }
+        #[cfg(not(windows))]
+        {
         #[cfg(target_os = "macos")]
         let mut command = {
             let mut command = std::process::Command::new("open");
@@ -56,7 +55,19 @@ pub async fn open_external_link(url: String) -> Result<(), String> {
             return Err("系统浏览器未能打开链接".into());
         }
         Ok(())
+        }
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+    #[test] fn browser_links_reject_executable_schemes_and_embedded_credentials(){
+        assert!(validated_external_url("https://github.com/pucj0/Markumo/releases/latest").is_ok());
+        assert!(validated_external_url("javascript:alert(1)").is_err());
+        assert!(validated_external_url("file:///C:/Windows/system32/cmd.exe").is_err());
+        assert!(validated_external_url("https://user:password@github.com/").is_err());
+    }
 }

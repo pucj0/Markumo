@@ -6,56 +6,26 @@ export function isMacPlatform(platform = globalThis.navigator?.platform || ''): 
  * 规范化按键格式（内部存储统一使用 Mod+Alt+Shift+Key 顺序）
  */
 export function normalizeKeybinding(raw: string): string | null {
-  if (!raw || typeof raw !== 'string') return null
-  const parts = raw.trim().split('+')
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  const parts = raw.trim().split('+').map(part => part.trim())
   const key = parts.pop() || ''
-  if (!key) return null
-
-  const mods = ['Mod', 'Alt', 'Shift'].filter(mod =>
-    parts.some(p => p.toLowerCase() === mod.toLowerCase())
-  )
-
-  // 校验修饰键合法性
-  if (parts.length !== mods.length || parts.some(p => !['mod', 'alt', 'shift', 'ctrl', 'meta', 'cmd'].includes(p.toLowerCase()))) {
-    return null
-  }
-
-  // 规范化 Key 名称
-  let normalizedKey = key
-  if (key.length === 1) {
-    normalizedKey = key.toUpperCase()
-  } else if (/^f([1-9]|1[0-2])$/i.test(key)) {
-    normalizedKey = key.toUpperCase()
-  } else if (/^arrow(up|down|left|right)$/i.test(key)) {
-    normalizedKey = 'Arrow' + key.slice(5).charAt(0).toUpperCase() + key.slice(6).toLowerCase()
-  } else if (/^(enter|escape|tab|space|backspace|delete|home|end|pageup|pagedown|insert)$/i.test(key)) {
-    normalizedKey = key.charAt(0).toUpperCase() + key.slice(1).toLowerCase()
-  } else if (key === '=' || key === '+') {
-    normalizedKey = '='
-  } else if (key === '-' || key === '_') {
-    normalizedKey = '-'
-  } else if (key === '`' || key === '~') {
-    normalizedKey = '`'
-  } else if (key === '\\' || key === '|') {
-    normalizedKey = '\\'
-  } else if (key === '/' || key === '?') {
-    normalizedKey = '/'
-  } else if (key === '[' || key === '{') {
-    normalizedKey = '['
-  } else if (key === ']' || key === '}') {
-    normalizedKey = ']'
-  } else {
-    normalizedKey = key.toUpperCase()
-  }
-
-  if (!normalizedKey) return null
-  return [...mods, normalizedKey].join('+')
+  const aliases: Record<string,string> = { mod:'Mod', ctrl:'Mod', meta:'Mod', cmd:'Mod', alt:'Alt', shift:'Shift' }
+  const mods = parts.map(part => aliases[part.toLowerCase()])
+  if (mods.some(mod => !mod) || new Set(mods).size !== mods.length) return null
+  const special = ['Enter','Escape','Tab','Space','Backspace','Delete','Home','End','PageUp','PageDown','Insert','ArrowUp','ArrowDown','ArrowLeft','ArrowRight']
+  const normalizedKey = key.length === 1 && /^[a-z0-9=\-\x60\\/\[\];',.]$/i.test(key) ? key.toUpperCase()
+    : /^f([1-9]|1[0-2])$/i.test(key) ? key.toUpperCase()
+    : special.find(name => name.toLowerCase() === key.toLowerCase())
+  if (!normalizedKey || (!mods.includes('Mod') && !mods.includes('Alt') && !/^F\d+$/.test(normalizedKey))) return null
+  return [...['Mod','Alt','Shift'].filter(mod => mods.includes(mod)), normalizedKey].join('+')
 }
 
 /**
  * 从键盘事件解析并生成规范化快捷键字符串
  */
 export function eventToKeybinding(event: KeyboardEvent, platform?: string): string | null {
+  if (event.isComposing || event.getModifierState?.('AltGraph')) return null
+  if (isMacPlatform(platform) ? event.ctrlKey : event.metaKey) return null
   // 如果是纯修饰键按下，不构成有效快捷键
   if (['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) {
     return null
@@ -67,10 +37,11 @@ export function eventToKeybinding(event: KeyboardEvent, platform?: string): stri
   const isShift = event.shiftKey
 
   // 获取主要按键
-  let key = event.key
+  let key = event.key === ' ' ? 'Space' : event.key
+  if (isAlt && /^Key[A-Z]$/.test(event.code)) key = event.code.slice(3)
 
   // 针对特定数字键与符号键对齐
-  if (event.altKey && /^Digit[0-9]$/.test(event.code)) {
+  if ((isMod || event.altKey) && /^Digit[0-9]$/.test(event.code)) {
     key = event.code.slice(-1)
   } else if (key === '+' || (event.code === 'Equal' && isShift)) {
     key = '='
@@ -88,6 +59,10 @@ export function eventToKeybinding(event: KeyboardEvent, platform?: string): stri
     key = ']'
   }
 
+  if (isMod || event.altKey) {
+    const physical: Record<string,string> = {Equal:'=',Minus:'-',Backslash:'\\',Slash:'/',Backquote:String.fromCharCode(96),BracketLeft:'[',BracketRight:']',Semicolon:';',Quote:String.fromCharCode(39),Comma:',',Period:'.'}
+    key = physical[event.code] || key
+  }
   const normalized = normalizeKeybinding(
     [isMod ? 'Mod' : '', isAlt ? 'Alt' : '', isShift ? 'Shift' : '', key].filter(Boolean).join('+')
   )

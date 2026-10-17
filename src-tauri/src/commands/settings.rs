@@ -11,6 +11,7 @@ pub struct EditorSettings {
     font_size: u8,
     font_family: String,
     word_wrap: bool,
+    caret_animation: String,
     show_outline: bool,
     outline_width: u16,
     indent_size: u8,
@@ -19,6 +20,8 @@ pub struct EditorSettings {
     markdown_typography: MarkdownTypography,
     markdown_clipboard: MarkdownClipboard,
     auto_save: bool,
+    auto_check_updates: bool,
+    auto_download_updates: bool,
     auto_save_delay: u32,
     tree_click_mode: String,
     #[serde(deserialize_with = "deserialize_keymap_preset")]
@@ -67,6 +70,7 @@ impl Default for EditorSettings {
             font_size: 14,
             font_family: "system".into(),
             word_wrap: false,
+            caret_animation: "smooth".into(),
             show_outline: false,
             outline_width: 240,
             indent_size: 2,
@@ -75,13 +79,15 @@ impl Default for EditorSettings {
             markdown_typography: MarkdownTypography::default(),
             markdown_clipboard: MarkdownClipboard::default(),
             auto_save: false,
+            auto_check_updates: true,
+            auto_download_updates: false,
             auto_save_delay: 1500,
             tree_click_mode: "double".into(),
             keymap_preset: "markumo".into(),
             image_rules: ImageRules::default(),
             document_image_rules: BTreeMap::new(),
             settings_version: 5,
-            shortcut_version: 3,
+            shortcut_version: 4,
             custom_shortcuts: Vec::new(),
             shortcuts: BTreeMap::new(),
             file_modes: BTreeMap::new(),
@@ -113,12 +119,13 @@ fn validate(settings: &EditorSettings) -> Result<(), String> {
         || !(160..=520).contains(&settings.outline_width)
         || !(10..=24).contains(&settings.font_size)
         || !["system", "consolas", "cascadia"].contains(&settings.font_family.as_str())
+        || !["off", "quick", "smooth"].contains(&settings.caret_animation.as_str())
         || !(1..=8).contains(&settings.indent_size)
         || !(500..=10000).contains(&settings.auto_save_delay)
         || !["single", "double"].contains(&settings.tree_click_mode.as_str())
         || !["markumo", "fleet", "typora"].contains(&settings.keymap_preset.as_str())
         || !(1..=5).contains(&settings.settings_version)
-        || !(1..=3).contains(&settings.shortcut_version)
+        || !(1..=4).contains(&settings.shortcut_version)
         || settings.custom_shortcuts.len() > 128
         || settings.custom_shortcuts.iter().any(|id| id.len()>64)
         || !["live", "source", "split"].contains(&settings.default_md_mode.as_str())
@@ -195,6 +202,59 @@ pub async fn save_editor_settings(
 #[cfg(test)]
 mod branding_tests {
     use super::*;
+    #[test]
+    fn background_update_preferences_default_and_disk_round_trip(){
+        let old:EditorSettings=serde_json::from_str(r#"{"theme":"dark","fontSize":18}"#).unwrap();
+        assert!(old.auto_check_updates);assert!(!old.auto_download_updates);
+        let temp=tempfile::tempdir().unwrap();let path=temp.path().join("settings.json");
+        let mut settings=old;settings.auto_check_updates=false;settings.auto_download_updates=true;
+        save(&path,&settings).unwrap();let loaded=load(&path).unwrap();
+        assert!(!loaded.auto_check_updates);assert!(loaded.auto_download_updates);assert_eq!(loaded.theme,"dark");assert_eq!(loaded.font_size,18);
+    }
+
+    #[test]
+    fn caret_animation_defaults_and_desktop_settings_round_trip() {
+        let old: EditorSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.caret_animation, "smooth");
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("editor-settings.json");
+        for mode in ["off", "quick", "smooth"] {
+            // Includes the mode preference saved after clicking rich text.
+            let input = serde_json::json!({"caretAnimation": mode, "fileModes": {"C:/README.md": "live"}});
+            let settings: EditorSettings = serde_json::from_value(input).unwrap();
+            save(&path, &settings).unwrap();
+            let loaded = load(&path).unwrap();
+            assert_eq!(loaded.caret_animation, mode);
+            assert_eq!(loaded.file_modes["C:/README.md"], "live");
+            assert_eq!(serde_json::to_value(loaded).unwrap()["caretAnimation"], mode);
+        }
+        let invalid: EditorSettings = serde_json::from_str(r#"{"caretAnimation":"invalid"}"#).unwrap();
+        assert!(validate(&invalid).is_err());
+        assert!(serde_json::from_str::<EditorSettings>(r#"{"caretAnimation":null}"#).is_err());
+    }
+
+    #[test]
+    fn full_shortcut_catalog_and_explicit_unbinding_survive_disk_round_trip() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("editor-settings.json");
+        for preset in ["markumo", "fleet", "typora"] {
+            let input = serde_json::json!({
+                "keymapPreset":preset,"shortcutVersion":4,"customShortcuts":["table","close-pane"],
+                "shortcuts":{"table":"","close-pane":"Mod+Alt+W","heading-6":"Mod+6","move-line-up":"Alt+ArrowUp"},
+                "caretAnimation":"quick","autoDownloadUpdates":true
+            });
+            let settings: EditorSettings = serde_json::from_value(input).unwrap();
+            save(&path,&settings).unwrap();
+            let loaded = load(&path).unwrap();
+            assert_eq!(loaded.shortcut_version,4);
+            assert_eq!(loaded.keymap_preset,preset);
+            assert_eq!(loaded.shortcuts["table"],"");
+            assert_eq!(loaded.shortcuts["close-pane"],"Mod+Alt+W");
+            assert_eq!(loaded.custom_shortcuts,vec!["table","close-pane"]);
+            assert_eq!(loaded.caret_animation,"quick");
+            assert!(loaded.auto_download_updates);
+        }
+    }
 
     #[test]
     fn outline_width_defaults_and_saved_preferences() {

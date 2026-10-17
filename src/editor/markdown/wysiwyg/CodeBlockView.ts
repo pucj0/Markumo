@@ -1,5 +1,7 @@
 import { EditorState as CMState, Compartment, Prec, StateEffect, StateField } from '@codemirror/state'
-import { EditorView as CMView, keymap, lineNumbers, Decoration, WidgetType, type DecorationSet } from '@codemirror/view'
+import { EditorView as CMView, drawSelection, keymap, lineNumbers, Decoration, WidgetType, type DecorationSet } from '@codemirror/view'
+import { smoothCaret } from '../../core/smoothCaret'
+import type { CaretAnimation } from '../../core/caretMotion'
 import { defaultKeymap, indentWithTab, indentLess } from '@codemirror/commands'
 import { markumoSyntax } from '../../core/syntaxTheme'
 import { LanguageSelector } from './LanguageSelector'
@@ -44,6 +46,7 @@ export class CodeBlockView implements NodeView {
   private language = new Compartment()
   private numbers = new Compartment()
   private wrap = new Compartment()
+  private caret = new Compartment()
   private updating = false
   private dead = false
   private generation = 0
@@ -74,7 +77,8 @@ export class CodeBlockView implements NodeView {
     settings: MarkdownTypography,
     private history: (forward: boolean) => void,
     private onSearchRequest?: (replace: boolean) => void,
-    private onSearchNavigate?: (forward: boolean) => void
+    private onSearchNavigate?: (forward: boolean) => void,
+    caretAnimation: CaretAnimation = 'smooth'
   ) {
     this.isMermaid = /^mermaid(?:\s|$)/i.test(node.attrs.params)
     this.dom.className = 'md-code-block md-code-block-container'
@@ -148,6 +152,7 @@ export class CodeBlockView implements NodeView {
       state: CMState.create({
         doc: node.textContent,
         extensions: [
+          this.caret.of([smoothCaret(caretAnimation), caretAnimation === 'off' ? [] : drawSelection()]),
           this.language.of([]),
           this.numbers.of(settings.codeLineNumbers ? lineNumbers() : []),
           this.wrap.of(settings.codeWrap ? CMView.lineWrapping : []),
@@ -427,6 +432,10 @@ export class CodeBlockView implements NodeView {
         this.wrap.reconfigure(settings.codeWrap ? CMView.lineWrapping : []),
       ],
     })
+  }
+
+  caretAnimation(mode: CaretAnimation) {
+    this.cm.dispatch({ effects: this.caret.reconfigure([smoothCaret(mode), mode === 'off' ? [] : drawSelection()]) })
   }
 
   stopEvent() {

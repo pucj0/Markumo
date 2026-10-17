@@ -1,5 +1,6 @@
 import type { MarkdownFormat } from '../formatCommands'
 import type { MarkdownResources } from '../images'
+import type { CaretAnimation } from '../../core/caretMotion'
 export interface MarkdownTypography { width:number; fontSize:number; fontFamily:string; lineHeight:number; codeLineNumbers:boolean; codeWrap:boolean; imageBorder:boolean }
 export const defaultMarkdownTypography=():MarkdownTypography=>({width:860,fontSize:16,fontFamily:'system',lineHeight:1.6,codeLineNumbers:true,codeWrap:false,imageBorder:true})
 export interface MarkdownClipboardSettings { copyMarkdown: boolean; copyWholeLine: boolean }
@@ -12,6 +13,7 @@ export interface LiveEditor {
   reveal(position:number,align?:'nearest'|'start'):void
   format(format:MarkdownFormat):boolean
   typography(settings:MarkdownTypography):void
+  caretAnimation(mode:CaretAnimation):void
   clipboardSettings(settings:MarkdownClipboardSettings):void
   shortcut(event:KeyboardEvent):boolean
   clipboard(operation:'copy'|'cut'|'paste'|'select-all'):Promise<void>
@@ -23,6 +25,8 @@ export interface LiveEditor {
   closeSearch():void
 }
 export interface LiveOptions {
+  shortcutLabel?(id:string):string|undefined
+  caretAnimation?:CaretAnimation
   source:string; anchor:number; head:number; resources:MarkdownResources; typography:MarkdownTypography; clipboard?:MarkdownClipboardSettings
   publish(expected:string,patch:{from:number;to:number;insert:string},update:unknown,isolated:boolean):boolean
   selected(anchor:number,head:number):void

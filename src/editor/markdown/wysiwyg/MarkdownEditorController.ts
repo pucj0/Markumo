@@ -31,6 +31,8 @@ import { defaultMarkdownClipboard, type MarkdownClipboardSettings } from './cont
 import { shortcutLabel } from '../../../features/shell/editorSettings'
 import { textClipboard } from '../../../features/shell/clipboard'
 import { cancelSmoothScroll, smoothScrollTo } from '../../core/smoothScroll'
+import { createSmoothCaretPlugin } from './plugins/SmoothCaret'
+import type { CaretAnimation } from '../../core/caretMotion'
 import type { MarkdownFormat } from '../formatCommands'
 import type { LiveEditor, LiveOptions, MarkdownTypography } from './contracts'
 import 'prosemirror-view/style/prosemirror.css'
@@ -66,6 +68,7 @@ export class MarkdownEditorController implements LiveEditor {
     this.fenceAutocomplete?.hide()
   }
   private settings: MarkdownTypography
+  private caretMode: CaretAnimation
   private disposed = false
   private copySettings = defaultMarkdownClipboard()
   private liveClipboard!: LiveClipboard
@@ -90,6 +93,7 @@ export class MarkdownEditorController implements LiveEditor {
 
   constructor(parent: HTMLElement, private options: LiveOptions, sharedBridge?: MarkdownSourceBridge) {
     this.settings = options.typography
+    this.caretMode = options.caretAnimation ?? 'smooth'
     this.copySettings = { ...defaultMarkdownClipboard(), ...options.clipboard }
     // Panes must start from the same immutable PM document and source IDs.
     // Independent parses look equal on screen but force full-document syncs,
@@ -153,6 +157,7 @@ export class MarkdownEditorController implements LiveEditor {
         schema: s,
         doc: this.bridge.doc,
         plugins: [
+          createSmoothCaretPlugin(this.dom, () => this.caretMode),
           new Plugin({
             appendTransaction: (_transactions, _before, state) => {
               const seen = new Set<string>()
@@ -372,7 +377,8 @@ export class MarkdownEditorController implements LiveEditor {
             this.settings,
             options.history,
             replace => this.find(replace),
-            forward => forward ? this.findNext() : this.findPrevious()
+            forward => forward ? this.findNext() : this.findPrevious(),
+            this.caretMode
           )
           this.codeViews.add(code)
           const destroy = code.destroy.bind(code)
@@ -695,6 +701,12 @@ export class MarkdownEditorController implements LiveEditor {
     }
   }
 
+  caretAnimation(mode: CaretAnimation) {
+    this.caretMode = mode
+    this.view.updateState(this.view.state)
+    for (const code of this.codeViews) code.caretAnimation(mode)
+  }
+
   typography(settings: MarkdownTypography) {
     this.settings = settings
     this.dom.dataset.imageBorder = String(settings.imageBorder !== false)
@@ -789,6 +801,7 @@ export class MarkdownEditorController implements LiveEditor {
     if (this.options.readOnly?.() || this.composing) return false
     const marks = { bold: 'strong', italic: 'em', strike: 'strike', 'inline-code': 'code' } as const
     if (format in marks) return this.run(toggleMark(s.marks[marks[format as keyof typeof marks]]), true)
+    if (format === 'heading-0') return this.run(setBlockType(s.nodes.paragraph), true)
     if (format.startsWith('heading-')) return this.run(setBlockType(s.nodes.heading, { level: +format.slice(-1) }), true)
     if (format === 'quote') return this.run(wrapIn(s.nodes.blockquote), true)
     if (format === 'bullet' || format === 'task' || format === 'ordered') {
@@ -1735,7 +1748,7 @@ export class MarkdownEditorController implements LiveEditor {
     const editable = !this.options.readOnly?.() && !this.composing
     const selected = !this.view.state.selection.empty
     const canCopy = selected || this.copySettings.copyWholeLine
-    const label = (key: string) => shortcutLabel(key)
+    const label = (key: string, id?:string) => id ? this.options.shortcutLabel?.(id) ?? shortcutLabel(key) : shortcutLabel(key)
     const clip = (name: string, operation: LiveClipboardOperation, icon?: string, key?: string): LiveMenuItem => ({
       label: name, icon, shortcut: key && label(key), disabled: operation === 'paste' || operation === 'paste-plain' ? !editable : !canCopy || operation === 'cut' && !editable,
       run: () => this.clipboard(operation),
@@ -1752,7 +1765,7 @@ export class MarkdownEditorController implements LiveEditor {
       bullet: ancestors.some(node => node.type === s.nodes.bullet_list) && !ancestors.some(node => node.type === s.nodes.list_item && node.attrs.checked !== null),
       task: ancestors.some(node => node.type === s.nodes.list_item && node.attrs.checked !== null),
     }
-    const format = (name: string, command: MarkdownFormat, icon?: string, key?: string): LiveMenuItem => ({ label: name, icon, pressed: icon ? active[command] : undefined, shortcut: key && label(key), disabled: !editable, run: () => { this.contextFormat(command, !!active[command]) } })
+    const format = (name: string, command: MarkdownFormat, icon?: string, key?: string): LiveMenuItem => ({ label: name, icon, pressed: icon ? active[command] : undefined, shortcut: key && label(key,command), disabled: !editable, run: () => { this.contextFormat(command, !!active[command]) } })
     const insert = (name: string, source: string, where: 'selection' | 'start' | 'end' = 'selection', key?: string): LiveMenuItem => ({ label: name, shortcut: key && label(key), disabled: !editable, run: () => this.insertBlock(source, where) })
     const heading = this.view.state.selection.$from.parent
     const level = heading.type === s.nodes.heading ? heading.attrs.level as number : 0
@@ -1767,10 +1780,10 @@ export class MarkdownEditorController implements LiveEditor {
         { label: '删除', icon: 'delete', disabled: !editable || !selected, run: () => { this.view.dispatch(this.view.state.tr.deleteSelection().setMeta('isolated', true)) } }] },
       { label: '复制 / 粘贴为…', children: [clip('复制为 Markdown', 'markdown', undefined, 'Mod+Shift+C'), clip('复制为 HTML 代码', 'html'), clip('复制内容并简化格式', 'simplified'), 'separator', clip('粘贴为纯文本', 'paste-plain', undefined, 'Mod+Shift+V')] },
       'separator',
-      { icons: [format('加粗', 'bold', 'bold', 'Mod+B'), format('斜体', 'italic', 'italic', 'Mod+I'), format('行内代码', 'inline-code', 'code'), format('链接', 'link', 'link')] },
+      { icons: [format('加粗', 'bold', 'bold', 'Mod+B'), format('斜体', 'italic', 'italic', 'Mod+I'), format('行内代码', 'inline-code', 'code', 'Mod+Shift+`'), format('链接', 'link', 'link', 'Mod+K')] },
       { icons: [format('引用', 'quote', 'quote'), format('有序列表', 'ordered', 'ordered'), format('无序列表', 'bullet', 'bullet'), format('任务列表', 'task', 'task')] },
       'separator',
-      { label: headingNames[level] || '段落', children: [...[1, 2, 3, 4, 5, 6].map(number => ({ label: headingNames[number], checked: level === number, disabled: !editable, shortcut: label(`Mod+${number}`), run: () => this.heading(number) })), 'separator', { label: '段落', checked: level === 0, disabled: !editable, shortcut: label('Mod+0'), run: () => this.heading(0) }] },
+      { label: headingNames[level] || '段落', children: [...[1, 2, 3, 4, 5, 6].map(number => ({ label: headingNames[number], checked: level === number, disabled: !editable, shortcut: label(`Mod+${number}`,'heading-'+number), run: () => this.heading(number) })), 'separator', { label: '段落', checked: level === 0, disabled: !editable, shortcut: label('Mod+0','heading-0'), run: () => this.heading(0) }] },
       { label: '插入', disabled: !editable, children: [
         format('图像', 'image', undefined, 'Mod+Shift+I'),
         { label: '脚注', run: () => this.insertReference(true) }, { label: '链接引用', run: () => this.insertReference(false) },

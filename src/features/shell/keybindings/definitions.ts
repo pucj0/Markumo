@@ -1,6 +1,6 @@
 import type { KeybindingCommand } from './contracts'
 
-export const allCommands: KeybindingCommand[] = [
+const definitions: Omit<KeybindingCommand,'executeId'|'supported'|'contexts'|'userOverridable'|'repeatable'>[] = [
   // --- 文件类 (file) ---
   {
     id: 'new',
@@ -112,6 +112,7 @@ export const allCommands: KeybindingCommand[] = [
   },
   {
     id: 'redo',
+    defaultAliases:['Mod+Shift+Z'],
     label: '重做',
     category: 'edit',
     description: '恢复上一步撤销的编辑操作',
@@ -440,6 +441,7 @@ export const allCommands: KeybindingCommand[] = [
   // --- 视图与界面 (view) ---
   {
     id: 'zoom-in',
+    defaultAliases:['Mod+Shift+='],
     label: '放大字号',
     category: 'view',
     description: '放大编辑器字体大小',
@@ -472,6 +474,28 @@ export const allCommands: KeybindingCommand[] = [
   },
 ]
 
+const codeCommands = new Set(['delete-line','move-line-up','move-line-down','copy-line-down','comment-line','fold-code','unfold-code','uppercase','lowercase'])
+const shellContexts = ['shell','text','source','live','code-block','input','search'] as const
+const aliases: Record<string,string> = { 'close-pane':'close-current-pane', 'merge-splits':'merge-panes' }
+export const allCommands: KeybindingCommand[] = definitions.map(command => ({
+  ...command,
+  executeId: aliases[command.id] || command.id,
+  supported: true,
+  userOverridable: true,
+  repeatable: codeCommands.has(command.id) || ['undo','redo','find-next','find-previous','next-tab','previous-tab','zoom-in','zoom-out'].includes(command.id),
+  contexts: codeCommands.has(command.id) ? ['text','source','code-block']
+    : command.category === 'markdown' ? (command.id.startsWith('md-mode-') || command.id === 'toggle-outline' ? ['shell','source','live','code-block'] : ['source','live'])
+    : command.scope === 'global' || command.scope === 'workspace' || command.category === 'file' || command.category === 'split' || ['next-tab','previous-tab'].includes(command.id) ? [...shellContexts]
+    : command.category === 'search' ? ['text','source','live','code-block','search'] : ['text','source','live','code-block'],
+}))
+
 export const commandMap = new Map<string, KeybindingCommand>(
   allCommands.map(cmd => [cmd.id, cmd])
 )
+
+/** Older menu/palette IDs share configuration with their canonical command. */
+export function commandDefinition(id:string) {
+  const aliases: Record<string,string> = {outline:'toggle-outline',focus:'toggle-focus','md-live':'md-mode-live','md-source':'md-mode-source','md-split':'md-mode-split','split-right':'split-editor'}
+  return commandMap.get(aliases[id] || (id.startsWith('format-') ? id.slice(7) : id))
+    || allCommands.find(command=>command.executeId===id)
+}

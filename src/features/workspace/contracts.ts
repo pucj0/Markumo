@@ -56,6 +56,7 @@ export interface WorkspaceGateway {
   removeWorkspaceFolder(path: string): Promise<void>
   restoreWorkspaces(): Promise<WorkspaceInfo[]>
   openWorkspacePath(path: string, add?: boolean): Promise<WorkspaceInfo>
+  openDroppedWorkspace(token: string): Promise<WorkspaceInfo>
   openWorkspaceFile(path: string, encoding?: string): Promise<OpenFile>
   readDirectory(path: string): Promise<WorkspaceNode[]>
   createFile(parentDir: string, name: string): Promise<WorkspaceNode>

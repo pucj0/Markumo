@@ -67,6 +67,29 @@ pub async fn open_workspace_dialog(
 }
 
 #[tauri::command]
+pub async fn open_dropped_workspace(
+    window: Window,
+    files: State<'_, FileStore>,
+    store: State<'_, WorkspaceStore>,
+    token: String,
+) -> Result<WorkspaceInfo, String> {
+    let service = store.for_window(window.label())?;
+    let files = Arc::clone(files.inner());
+    let owner = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = {
+            let mut files = files.lock().map_err(|e| e.to_string())?;
+            files.set_owner(&owner);
+            files.take_dropped_directory(&token).map_err(|e| e.to_string())?
+        };
+        // Adding preserves existing roots and unsaved editor tabs. With no root,
+        // add_workspace uses the normal initial-workspace opening flow.
+        let result = service.lock().map_err(|e| e.to_string())?.add_workspace(path);
+        result
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn remove_workspace_folder(
     window: Window,
     path: String,

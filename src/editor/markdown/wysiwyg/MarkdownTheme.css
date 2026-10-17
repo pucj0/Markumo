@@ -38,6 +38,9 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
   min-height: 240px;
 }
 
+/* Keep the DOM selection responsible for editing, IME and accessibility. */
+.markdown-live .md-prose.smooth-caret-active { caret-color: transparent !important; }
+
 .markdown-live .md-prose p {
   margin: var(--md-paragraph-spacing) 0;
   line-height: var(--md-line-height);
@@ -555,7 +558,12 @@ body.light .file-icon-gray { color: #6c7c92; }
 
 .markdown-live .md-code-block .cm-content {
   padding: 10px 30px 6px 0;
+  caret-color: var(--bright);
 }
+
+.markdown-live .md-code-block .cm-cursor { border-left-color: var(--bright); }
+.markdown-live .md-code-block .cm-selectionBackground { background: var(--selection-inactive); }
+.markdown-live .md-code-block .cm-focused .cm-selectionBackground { background: var(--selection); }
 
 .markdown-live .md-code-block .cm-line {
   padding: 0 14px;

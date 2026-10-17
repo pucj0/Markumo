@@ -1,3 +1,4 @@
+import { allCommands, commandDefinition, matchingCommand, keybindingContext, isManagedDefault, getPresetBindings } from '../features/shell/keybindings'
 import { ref, computed, watch, onMounted, onUnmounted, markRaw, reactive, nextTick } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
 import type { UnlistenFn } from '@tauri-apps/api/event'
@@ -13,6 +14,7 @@ import { markdownFormats } from '../editor/markdown/formatCommands'
 import { relativeMarkdownLink } from '../editor/markdown/links'
 import { defaultMarkdownTypography, defaultMarkdownClipboard } from '../editor/markdown/wysiwyg/contracts'
 import { FileController, fileError } from '../features/files/FileController'
+import { openDroppedDirectories, type NativeDropInput } from '../features/files/nativeDrop'
 import { sameFilePath } from '../features/files/pathKey'
 import { isMedia } from '../features/files/media'
 import { AutoSaveController } from '../features/files/AutoSaveController'
@@ -20,7 +22,7 @@ import { tauriFiles } from '../features/files/tauriFiles'
 import type { Encoding, FileOpenEncoding, Preferences } from '../features/files/contracts'
 import { WorkspaceController } from '../features/workspace/WorkspaceController'
 import { tauriWorkspace } from '../features/workspace/tauriWorkspace'
-import { currentSettingsVersion, defaultShortcuts, eventShortcut, fontFamilies, loadEditorSettings, saveEditorSettings, validateShortcuts, relativeFilePath, type EditorSettings, type ShortcutAction } from '../features/shell/editorSettings'
+import { currentSettingsVersion, currentShortcutVersion, defaultShortcuts, normalizeShortcut, eventShortcut, fontFamilies, loadEditorSettings, saveEditorSettings, validateShortcuts, relativeFilePath, type EditorSettings, type ShortcutAction } from '../features/shell/editorSettings'
 import type { KeymapPresetId } from '../features/shell/keybindings'
 import { readablePath } from '../features/shell/pathDisplay'
 import { CommandRegistry, recentFileCommand, recentWorkspaceCommand } from '../features/shell/menuModel'
@@ -30,9 +32,12 @@ import { textClipboard } from '../features/shell/clipboard'
 import { editorClipboard, inputClipboard, type ClipboardOperation } from '../editor/commands/clipboard'
 import { EditorView } from '@codemirror/view'
 import { WindowCloseGuard, type CloseSource } from '../features/shell/WindowCloseGuard'
-import { initializeLaunch, sessionInput, SessionWriter } from '../features/shell/launchSession'
+import { initializeLaunch, sessionInput, SessionWriter, restoreEditorLayout } from '../features/shell/launchSession'
 import { invoke } from '@tauri-apps/api/core'
 import { defaultImageRules, imageRuleKey, ImageImporter, imageGateway, clipboardImages, isImageFile, type ImageRules, type ImageSource, type NativeImageInput } from '../editor/markdown/imageImport'
+import { UpdateManager, updateState, openProjectPage } from '../features/shell/AppUpdater'
+import { prepareInstallation } from '../features/shell/updater/prepareInstallation'
+import type UpdateConfirm from '../components/modals/UpdateConfirm.vue'
 import { ExportController, ImportController } from '../features/document-conversion'
 
 export function useAppShell() {
@@ -48,9 +53,11 @@ export function useAppShell() {
   const uiFontSize = ref(14)
   const fontSize = ref(14), wordWrap = ref(false), showOutline = ref(false), defaultMdMode = ref<MarkdownMode>('live')
   const fontFamily = ref<EditorSettings['fontFamily']>('system'), indentSize = ref(2), useTabs = ref(false)
+  const autoCheckUpdates = ref(true), autoDownloadUpdates = ref(false)
   const autoSave = ref(false), autoSaveDelay = ref(1500)
   const treeClickMode = ref<'double' | 'single'>('double')
   const keymapPreset = ref<KeymapPresetId>('markumo')
+  const caretAnimation = ref<EditorSettings['caretAnimation']>('smooth')
   const markdownTypography=ref(defaultMarkdownTypography())
   const outlineWidth=ref(240)
   const markdownClipboard=ref(defaultMarkdownClipboard())
@@ -59,8 +66,10 @@ export function useAppShell() {
   const customShortcuts = ref<ShortcutAction[]>([])
   let settingsReady = false, settingsTimer: ReturnType<typeof setTimeout> | undefined
   let settingsWrites: Promise<void> = Promise.resolve()
+  let settingsError:unknown=null
   const paletteRef = ref<InstanceType<typeof CommandPalette> | null>(null)
   const settingsRef = ref<InstanceType<typeof SettingsModal> | null>(null)
+  const updateConfirmRef=ref<InstanceType<typeof UpdateConfirm>|null>(null)
   const discardRef = ref<InstanceType<typeof DiscardDialog> | null>(null)
   const toastRef = ref<InstanceType<typeof Toast> | null>(null)
   const gotoLineRef = ref<{ open: () => void; close: () => void; visible: boolean } | null>(null)
@@ -73,7 +82,7 @@ export function useAppShell() {
   const recentFiles = ref<Preferences['recent']>([])
   const fileBusy = ref(false)
   const updateInstalling=ref(false)
-  const autoSaver = new AutoSaveController(manager, files, () => fileBusy.value || !!discardRef.value?.visible || !!settingsRef.value?.visible || !!document.querySelector('.workspace-operation-dialog'))
+  const autoSaver = new AutoSaveController(manager, files, () => updateInstalling.value || fileBusy.value || !!discardRef.value?.visible || !!settingsRef.value?.visible || !!document.querySelector('.workspace-operation-dialog'))
   const revision = ref(0)
   const unsubscribe = manager.subscribe(() => revision.value++)
   let lastWorkspaceRevision = 0
@@ -149,26 +158,39 @@ export function useAppShell() {
     if (!images.length)return
     event.preventDefault();event.stopImmediatePropagation();void importImages(doc.id,images)
   }
-  async function nativeFileDrop(payload: { inputs: NativeImageInput[]; x: number; y: number }) {
-    const target=document.elementFromPoint(payload.x,payload.y), pane=target?.closest<HTMLElement>('[data-pane-id],.pane')
-    const inEditor=!!target?.closest('.pane-body')
-    if(pane)manager.focusPane((pane.dataset.paneId || [...pane.classList].find(name=>name.startsWith('pane-'))?.slice(5) || (pane.classList.contains('secondary-pane')?'secondary':'main')) as Parameters<DocumentManager['focusPane']>[0],false)
-    const doc=manager.activeDocument, images=payload.inputs.filter(file=>isImageFile(file.name))
-    if (inEditor && doc?.mode && images.length) {
-      // Mixed drops inside Markdown are imports; never open a bitmap as a Hex tab.
-      const ignored=payload.inputs.filter(file=>!isImageFile(file.name))
-      await imageGateway.release(ignored.map(s=>s.token))
-      if(ignored.length)toast('已忽略非图片文件；请拖到编辑区外打开。')
-      const view=target?.closest('.cm-editor') ? EditorView.findFromDOM(target.closest('.cm-editor')!) : null
-      const position=view?.posAtCoords({x:payload.x,y:payload.y})
-      if(position!=null && !manager.isComposing)view?.dispatch({selection:{anchor:position}})
-      await importImages(doc.id,images)
-    }else{
-      if(fileBusy.value||manager.isComposing||discardRef.value?.visible){await imageGateway.release(payload.inputs.map(s=>s.token));toast('请完成当前操作后重新拖入文件。');return}
-      fileBusy.value=true
-      try{files.acceptBatch(await invoke('open_dropped_files',{tokens:payload.inputs.map(s=>s.token)}))}
-      finally{fileBusy.value=false;void refreshRecent()}
-    }
+  async function nativeFileDrop(payload: { inputs: NativeDropInput[]; x: number; y: number }) {
+    const tokens = payload.inputs.map(input => input.token)
+    try {
+      let inputs = payload.inputs
+      if (inputs.some(input => input.isDirectory)) {
+        if (fileBusy.value || files.workspaceBusy || files.saving.size || manager.isComposing || discardRef.value?.visible || settingsRef.value?.visible) {
+          toast('请完成当前操作后重新拖入文件夹。'); return
+        }
+        fileBusy.value = true
+        try { inputs = await openDroppedDirectories(inputs, token => workspace.openDroppedWorkspace(token)) }
+        finally { fileBusy.value = false }
+      }
+      if (!inputs.length) return
+      const target=document.elementFromPoint(payload.x,payload.y), pane=target?.closest<HTMLElement>('[data-pane-id],.pane')
+      const inEditor=!!target?.closest('.pane-body')
+      if(pane)manager.focusPane((pane.dataset.paneId || [...pane.classList].find(name=>name.startsWith('pane-'))?.slice(5) || (pane.classList.contains('secondary-pane')?'secondary':'main')) as Parameters<DocumentManager['focusPane']>[0],false)
+      const doc=manager.activeDocument, images=inputs.filter(file=>isImageFile(file.name))
+      if (inEditor && doc?.mode && images.length) {
+        // Mixed drops inside Markdown are imports; never open a bitmap as a Hex tab.
+        const ignored=inputs.filter(file=>!isImageFile(file.name))
+        await imageGateway.release(ignored.map(s=>s.token))
+        if(ignored.length)toast('已忽略非图片文件；请拖到编辑区外打开。')
+        const view=target?.closest('.cm-editor') ? EditorView.findFromDOM(target.closest('.cm-editor')!) : null
+        const position=view?.posAtCoords({x:payload.x,y:payload.y})
+        if(position!=null && !manager.isComposing)view?.dispatch({selection:{anchor:position}})
+        await importImages(doc.id,images)
+      }else{
+        if(fileBusy.value||manager.isComposing||discardRef.value?.visible){toast('请完成当前操作后重新拖入文件。');return}
+        fileBusy.value=true
+        try{files.acceptBatch(await invoke('open_dropped_files',{tokens:inputs.map(s=>s.token)}))}
+        finally{fileBusy.value=false;void refreshRecent()}
+      }
+    } finally { await imageGateway.release(tokens).catch(error => toast(fileError(error))) }
   }
   let pendingClose: { kind: 'document'; id: string; pane: string } | { kind: 'window' } | { kind: 'reopen'; id: string; encoding: FileOpenEncoding } | null = null
   let tabCloseQueue: { id: string; pane: string }[] = []
@@ -184,9 +206,38 @@ export function useAppShell() {
   const startupLoading=ref(desktop)
   let sessionWriter:SessionWriter|undefined
   let launchReady=false
+  const updateStatus=reactive(updateState()),updatePanelOpen=ref(false)
+  const updateManager=markRaw(new UpdateManager(updateStatus,{
+    check:async()=>{if(!desktop)throw Error('应用更新需要 Tauri 桌面版');const {check}=await import('@tauri-apps/plugin-updater');return check({timeout:15000})},
+    prepare:prepareUpdate,
+    finishPreparation:()=>{updateInstalling.value=false},
+    acquire:async()=>{if(import.meta.env.DEV)throw Error('开发模式不执行安装，请使用已安装的正式版。');await validateUpdateWindows();await invoke('begin_update_install')},
+    release:()=>invoke('end_update_install'),
+    markPending:async version=>{await invoke('mark_update_pending',{targetVersion:version});await invoke('ensure_update_window');if(manager.hasDirtyDocuments||manager.isComposing||fileBusy.value||files.workspaceBusy||files.saving.size)throw Error('编辑状态已变化，停止安装。')},
+    clearPending:()=>invoke('clear_update_pending'),
+    relaunch:async()=>{const {relaunch}=await import('@tauri-apps/plugin-process');await relaunch()},notify:toast,
+  }))
+  async function openUpdatePanel(){updatePanelOpen.value=true;if(['idle','error'].includes(updateStatus.phase))await updateManager.checkForUpdates()}
+  async function openUpdateRelease(){try{await openProjectPage(desktop,true,updateStatus.version||updateStatus.confirmedVersion||undefined)}catch(error){updateStatus.error=`无法打开更新日志：${fileError(error)}`;toast(updateStatus.error)}}
+  async function openUpdateLink(url:string){try{if(desktop)await invoke('open_external_link',{url});else window.open(url,'_blank','noopener,noreferrer')}catch(error){updateStatus.error=fileError(error)}}
+  let reportTimer:ReturnType<typeof setTimeout>|undefined
+  let lastWindowReport=''
+  function reportUpdateWindow(){
+    if(!desktop||!alive||reportTimer)return
+    reportTimer=setTimeout(()=>{
+      reportTimer=undefined
+      const status={dirtyCount:manager.openedDocuments.filter(doc=>doc.dirty).length,busy:fileBusy.value||files.workspaceBusy||!!files.saving.size,composing:manager.isComposing,ready:launchReady}
+      const signature=JSON.stringify(status)
+      if(signature===lastWindowReport)return
+      lastWindowReport=signature
+      void invoke('report_update_window',{status}).catch(()=>{lastWindowReport=''})
+    },150)
+  }
+  watch([revision,fileBusy,updateInstalling,startupLoading],reportUpdateWindow)
+  watch([autoCheckUpdates,autoDownloadUpdates,startupLoading],()=>updateManager.configure({autoCheckUpdates:autoCheckUpdates.value,autoDownloadUpdates:autoDownloadUpdates.value},!startupLoading.value),{immediate:true})
   let closeSource: CloseSource = 'native'
   const windowClose = new WindowCloseGuard({
-    status: () => ({ fileBusy: fileBusy.value || files.workspaceBusy || updateInstalling.value, savingCount: files.saving.size,
+    status: () => ({ fileBusy: fileBusy.value || files.workspaceBusy || updateInstalling.value || !!updateConfirmRef.value?.visible, savingCount: files.saving.size,
       composing: manager.isComposing, dirtyCount: manager.openedDocuments.filter(doc => doc.dirty).length,
       documentCount: manager.openedDocuments.length, activePane: manager.activePane, hasActiveDocument: !!manager.activeId }),
     flush: async()=>{await flushSettings();scheduleSession();await sessionWriter?.flush()},
@@ -225,6 +276,11 @@ export function useAppShell() {
     fileBusy.value = true
     try { await files.recent(path); await refreshRecent() } finally { fileBusy.value = false; void drainPending() }
   }
+  async function runFileOperation(action:()=>Promise<unknown>){
+    if(fileBusy.value||files.workspaceBusy||updateInstalling.value||manager.isComposing){toast('请先完成当前文件操作和输入。');return}
+    fileBusy.value=true
+    try{await action()}catch(error){toast(fileError(error))}finally{fileBusy.value=false;void drainPending()}
+  }
   async function saveDoc(id: string, saveAs = false, encoding?: Encoding) {
     if (!desktop) { toast('浏览器仅支持内存编辑；请使用 Tauri 桌面版打开或保存磁盘文件。'); return false }
     if (fileBusy.value) return false
@@ -239,15 +295,29 @@ export function useAppShell() {
     try { await (await import('@tauri-apps/api/window')).getCurrentWindow().close() }
     catch (error) { closeSource = 'native'; toast(`退出失败：${fileError(error)}`) }
   }
+  async function validateUpdateWindows(){
+        const other=await invoke<({dirtyCount:number;ready:boolean}|null)[]>('update_windows_status')
+        if(other.length){const dirty=other.reduce((n,state)=>n+(state?.dirtyCount||0),0);throw Error('另有 '+other.length+' 个 Markumo 窗口'+(dirty?'，包含 '+dirty+' 个未保存文档':'')+(other.some(state=>!state?.ready)?'（部分窗口状态尚未就绪）':'')+'。请先在这些窗口保存修改并关闭窗口，再重试安装。')}
+        await invoke('ensure_update_window')
+
+  }
   async function prepareUpdate(){
-    const safe=()=>!startupLoading.value&&!fileBusy.value&&!files.workspaceBusy&&!files.saving.size&&!manager.isComposing&&!discardRef.value?.visible&&!manager.openedDocuments.some(doc=>doc.dirty)
-    if(!desktop||!safe())return false
-    await invoke('ensure_update_window')
-    await flushSettings();scheduleSession();await sessionWriter?.flush()
-    if(!safe())return false
-    // Check again after asynchronous persistence, before invoking the installer.
-    await invoke('ensure_update_window')
-    return safe()
+    if(!desktop)return false
+    if(!launchReady)throw Error('启动会话恢复尚未就绪，请重新启动后再安装更新。')
+    return prepareInstallation({
+      status:()=>({dirtyIds:manager.openedDocuments.filter(doc=>doc.dirty).map(doc=>doc.id),busy:startupLoading.value||fileBusy.value||files.workspaceBusy||!!files.saving.size||!!discardRef.value?.visible||!!document.querySelector('.workspace-operation-dialog'),composing:manager.isComposing}),
+      validateWindows:validateUpdateWindows,
+      confirmSave:async count=>{settingsRef.value?.close();paletteRef.value?.close();return await updateConfirmRef.value?.confirm(count)??false},
+      save:id=>files.save(id),lock:value=>{updateInstalling.value=value},
+      persist:async()=>{
+        await flushSettings(true)
+        const writer=sessionWriter||new SessionWriter(input=>invoke('persist_session',{input,forUpdate:true}),()=>{})
+        try {
+          writer.schedule(sessionInput(manager,workspace.roots,{mode:appMode.value,sidebarVisible:sidebarVisible.value,sidebarWidth:sidebarWidth.value}))
+          await writer.flush(true)
+        } finally { if(!sessionWriter)writer.dispose() }
+      },
+    })
   }
   async function reopenEncoding(encoding: FileOpenEncoding, force = false) {
     const doc = manager.activeDocument
@@ -506,6 +576,8 @@ export function useAppShell() {
   const paletteActions = computed<PaletteAction[]>(() => {
     revision.value
     const actions: PaletteAction[] = [
+      {id:'palette',title:'命令面板',detail:'',category:'action',action:()=>openPalette('action')},
+      {id:'quick-open',title:'快速打开文件',detail:'',category:'action',action:()=>openPalette('file')},
       { id: 'new', title: '新建文本草稿', detail: 'Ctrl+N', category: 'action', action: createNewDoc },
       { id:'new-markdown',title:'新建 Markdown 文档',detail:'Markdown',category:'action',action:()=>{manager.createUntitled('md')} },
       { id:'close-current',title:'关闭文件',detail:'',category:'action',disabled:!activeDoc.value,action:()=>{if(manager.activeId)closeDocById(manager.activeId,manager.activePane)} },
@@ -524,14 +596,14 @@ export function useAppShell() {
       { id: 'save', title: '保存文件', detail: 'Ctrl+S', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass', action: () => void saveActive() },
       { id: 'save-as', title: '另存为', detail: 'Ctrl+Shift+S', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass', action: () => void saveActive(true) },
       { id: 'save-utf8', title: '另存为 UTF-8', detail: '转换编码，无 BOM', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass' || activeDoc.value?.encoding === 'Hex', action: () => void saveActive(true, 'UTF-8') },
-      { id: 'import-html', title: '导入 HTML…', detail: 'HTML 转 Markdown', category: 'action', action: () => void importController.importDocument('html') },
-      { id: 'import-docx', title: '导入 Word (.docx)…', detail: 'Word 转 Markdown (Pandoc)', category: 'action', action: () => void importController.importDocument('docx') },
-      { id: 'export-pdf', title: '导出 PDF…', detail: '导出为 PDF 文档', category: 'action', disabled: !exportController.canExportActive(), action: () => void exportController.exportDocument('pdf') },
-      { id: 'export-html', title: '导出 HTML…', detail: '包含排版样式', category: 'action', disabled: !exportController.canExportActive(), action: () => void exportController.exportDocument('html') },
-      { id: 'export-html-plain', title: '导出 HTML（无主题样式）…', detail: '语义化纯 HTML', category: 'action', disabled: !exportController.canExportActive(), action: () => void exportController.exportDocument('html-plain') },
-      { id: 'export-docx', title: '导出 Word (.docx)…', detail: 'Markdown 转 Word (Pandoc)', category: 'action', disabled: !exportController.canExportActive(), action: () => void exportController.exportDocument('docx') },
-      { id: 'export-png', title: '导出 PNG 长图…', detail: '整页高清长图', category: 'action', disabled: !exportController.canExportActive(), action: () => void exportController.exportDocument('png') },
-      { id: 'export-repeat', title: '使用上一次设置导出', detail: '', category: 'action', disabled: !exportController.canExportActive(), action: () => void exportController.exportRepeat() },
+      { id: 'import-html', title: '导入 HTML…', detail: 'HTML 转 Markdown', category: 'action', action: () => void runFileOperation(() => importController.importDocument('html')) },
+      { id: 'import-docx', title: '导入 Word (.docx)…', detail: 'Word 转 Markdown (Pandoc)', category: 'action', action: () => void runFileOperation(() => importController.importDocument('docx')) },
+      { id: 'export-pdf', title: '导出 PDF…', detail: '导出为 PDF 文档', category: 'action', disabled: !exportController.canExportActive(), action: () => void runFileOperation(() => exportController.exportDocument('pdf')) },
+      { id: 'export-html', title: '导出 HTML…', detail: '包含排版样式', category: 'action', disabled: !exportController.canExportActive(), action: () => void runFileOperation(() => exportController.exportDocument('html')) },
+      { id: 'export-html-plain', title: '导出 HTML（无主题样式）…', detail: '语义化纯 HTML', category: 'action', disabled: !exportController.canExportActive(), action: () => void runFileOperation(() => exportController.exportDocument('html-plain')) },
+      { id: 'export-docx', title: '导出 Word (.docx)…', detail: 'Markdown 转 Word (Pandoc)', category: 'action', disabled: !exportController.canExportActive(), action: () => void runFileOperation(() => exportController.exportDocument('docx')) },
+      { id: 'export-png', title: '导出 PNG 长图…', detail: '整页高清长图', category: 'action', disabled: !exportController.canExportActive(), action: () => void runFileOperation(() => exportController.exportDocument('png')) },
+      { id: 'export-repeat', title: '使用上一次设置导出', detail: '', category: 'action', disabled: !exportController.canExportActive(), action: () => void runFileOperation(() => exportController.exportRepeat()) },
       { id: 'export-settings', title: '导出设置…', detail: '首选项', category: 'action', action: () => openSettings('conversion') },
       { id: 'find', title: '查找当前文档', detail: 'Ctrl+F', category: 'action', action: () => manager.command('find') },
       { id: 'replace', title: '替换当前文档', detail: 'Ctrl+R', category: 'action', disabled: activeDoc.value?.kind === 'javaClass', action: () => manager.command('replace') },
@@ -541,7 +613,7 @@ export function useAppShell() {
       { id: 'uppercase', title: '选区转大写', detail: 'Ctrl+Alt+U', category: 'action', action: () => manager.transformSelection(true) },
       { id: 'lowercase', title: '选区转小写', detail: 'Ctrl+Alt+L', category: 'action', action: () => manager.transformSelection(false) },
       { id: 'goto-line', title: '转到指定行', detail: 'Ctrl+G', category: 'action', action: openGotoLine },
-      { id: 'split-editor', title: manager.isSplit ? '关闭分栏' : '双 Pane 分栏编辑', detail: 'Ctrl+\\', category: 'action', action: toggleSplitPane },
+      { id: 'split-editor', title: '向右拆分分栏', detail: '', category: 'action', action: () => manager.splitPane('right') },
       { id: 'split-right', title: '向右拆分', detail: '', category: 'action', action: () => manager.splitPane('right') },
       { id: 'split-down', title: '向下拆分', detail: '', category: 'action', action: () => manager.splitPane('bottom') },
       { id: 'split-left', title: '向左拆分', detail: '', category: 'action', action: () => manager.splitPane('left') },
@@ -581,7 +653,7 @@ export function useAppShell() {
       { id: 'code-block', title: '插入代码块', detail: 'Ctrl+Shift+K', category: 'action', action: () => manager.formatMarkdown('code-block') },
       { id: 'quote', title: '插入引用块', detail: 'Ctrl+Shift+Q', category: 'action', action: () => manager.formatMarkdown('quote') },
       { id: 'link', title: '插入/编辑链接', detail: 'Ctrl+K', category: 'action', action: () => manager.formatMarkdown('link') },
-      { id: 'image', title: '插入图片', detail: 'Ctrl+Shift+I', category: 'action', action: () => { if (!desktop || fileBusy.value || activeDoc.value?.readOnly) return; void chooseImages() } },
+      { id: 'image', title: '插入图片', detail: 'Ctrl+Shift+I', category: 'action', action: () => { if (fileBusy.value || activeDoc.value?.readOnly) return; if (desktop) void chooseImages(); else manager.formatMarkdown('image') } },
       { id: 'inline-code', title: '插入行内代码', detail: 'Ctrl+Shift+`', category: 'action', action: () => manager.formatMarkdown('inline-code') },
       { id: 'strike', title: '删除线', detail: 'Alt+Shift+5', category: 'action', action: () => manager.formatMarkdown('strike') },
       { id: 'heading-1', title: '一级标题 (H1)', detail: 'Ctrl+1', category: 'action', action: () => manager.formatMarkdown('heading-1') },
@@ -590,7 +662,7 @@ export function useAppShell() {
       { id: 'heading-4', title: '四级标题 (H4)', detail: 'Ctrl+4', category: 'action', action: () => manager.formatMarkdown('heading-4') },
       { id: 'heading-5', title: '五级标题 (H5)', detail: 'Ctrl+5', category: 'action', action: () => manager.formatMarkdown('heading-5') },
       { id: 'heading-6', title: '六级标题 (H6)', detail: 'Ctrl+6', category: 'action', action: () => manager.formatMarkdown('heading-6') },
-      { id: 'heading-0', title: '普通段落', detail: 'Ctrl+0', category: 'action', action: () => manager.formatMarkdown('heading-0' as any) },
+      { id: 'heading-0', title: '普通段落', detail: 'Ctrl+0', category: 'action', action: () => manager.formatMarkdown('heading-0') },
       { id: 'md-mode-live', title: 'Markdown 实时排版', detail: 'Ctrl+Alt+1', category: 'action', action: () => setMarkdownMode('live') },
       { id: 'md-mode-source', title: 'Markdown 源码编辑', detail: 'Ctrl+Alt+2', category: 'action', action: () => setMarkdownMode('source') },
       { id: 'md-mode-split', title: 'Markdown 双栏预览', detail: 'Ctrl+Alt+3', category: 'action', action: () => setMarkdownMode('split') },
@@ -622,7 +694,10 @@ export function useAppShell() {
       const textCommands = new Set(['save','save-as','save-utf8','cut','paste','replace','undo','redo','uppercase','lowercase','goto-line','delete-line','copy-line-down','move-line-up','move-line-down','comment-line','fold-code','unfold-code'])
       for (const action of actions) if (textCommands.has(action.id)) action.disabled = true
     }
-    for (const action of actions) if (action.id in shortcuts.value) action.detail = shortcutLabel(shortcuts.value[action.id as ShortcutAction])
+    for (const action of actions) {
+      const definition = commandDefinition(action.id)
+      if (definition) action.detail = shortcutLabel(shortcuts.value[definition.id])
+    }
     return [...actions,
       { id:'open-file-bytes',title:'以字节方式打开文件',detail:'可编辑十六进制',category:'action' as const,disabled:!desktop||fileBusy.value,action:()=>void openFile('Hex') },
       { id:'edit-file-bytes',title:'编辑文件字节',detail:'可编辑十六进制',category:'action' as const,disabled:!desktop||!activeDoc.value?.fileToken||fileBusy.value||isMedia(activeDoc.value),action:()=>void reopenEncoding('Hex') },
@@ -653,10 +728,25 @@ export function useAppShell() {
       ...recentFiles.value.map(file => ({ id: recentFileCommand(file.path), title: `最近：${file.name}`, fileName: file.name, detail: readablePath(file.path), category: 'file' as const, disabled: !desktop || fileBusy.value, action: () => void openRecent(file.path) }))]
   })
 
-  const commandRegistry = computed(() => new CommandRegistry(paletteActions.value.map(action => ({
-    id:action.id,title:action.title,detail:action.detail,enabled:!action.disabled,
-    shortcut:action.id in shortcuts.value ? shortcuts.value[action.id as ShortcutAction] : ({cut:'Mod+X',copy:'Mod+C',paste:'Mod+V','select-all':'Mod+A'} as Record<string,string>)[action.id],run:action.action,
-  }))))
+  const commandRegistry = computed(() => {
+    const actions = paletteActions.value
+    const commands = actions.map(action => {
+      const definition = commandDefinition(action.id)
+      const clipboardKey = ({cut:'Mod+X',copy:'Mod+C',paste:'Mod+V','select-all':'Mod+A'} as Record<string,string>)[action.id]
+      return {
+        id:action.id,title:action.title,detail:action.detail,
+        enabled:!action.disabled && (definition?.category !== 'markdown' || (!!activeDoc.value?.mode && !manager.isComposing)),
+        shortcut:definition ? shortcuts.value[definition.id] : clipboardKey,
+        run:action.action,
+      }
+    })
+    for (const command of allCommands) {
+      if (commands.some(item => item.id === command.id)) continue
+      const entry = commands.find(item => item.id === command.executeId)
+      if (entry) commands.push({...entry,id:command.id,shortcut:shortcuts.value[command.id]})
+    }
+    return new CommandRegistry(commands)
+  })
   const menuGroups = computed(() => {revision.value;return mainMenu({sidebar:sidebarVisible.value,outline:showOutline.value,wrap:wordWrap.value,split:manager.isSplit,focus:focusMode.value,
     markdown:!!activeDoc.value?.mode,markdownMode:activeDoc.value?.mode,composing:manager.isComposing,recentFiles:recentFiles.value,recentWorkspaces:workspace.recentWorkspaces,
     canExport: exportController.canExportActive()})})
@@ -706,28 +796,27 @@ export function useAppShell() {
     if (eventShortcut(event) === 'Mod+R') event.preventDefault()
     if (document.querySelector('.app-menu-popup') && document.activeElement?.closest('[data-menu-popup],.app-menu') && !(event.ctrlKey||event.metaKey||event.altKey)) return
     if (document.querySelector('.workspace-operation-dialog') || event.isComposing || alreadyHandled || manager.isComposing || paletteRef.value?.visible || settingsRef.value?.visible || discardRef.value?.visible || gotoLineRef.value?.visible) return
-    const binding = event.key === '+' && shortcuts.value['zoom-in'] === 'Mod+=' && (event.ctrlKey || event.metaKey) && !event.altKey ? 'Mod+=' : eventShortcut(event)
-    if (manager.activeLiveEditor?.shortcut(event)) return
+    const binding = eventShortcut(event)
+    const context = keybindingContext(event.target,!!manager.activeDocument?.mode)
+    if (context === 'dialog') return
+    if ((context === 'input' || context === 'search') && ['Mod+Z','Mod+Y','Mod+Shift+Z','Mod+C','Mod+V','Mod+X','Mod+A'].includes(binding)) return
     if(desktop && binding==='Mod+V' && event.target instanceof Element && event.target.closest('.cm-content,.md-prose') && manager.activeDocument?.mode){event.preventDefault();event.stopPropagation();void clipboardAction('paste');return}
-    const id = (Object.keys(shortcuts.value) as ShortcutAction[]).find(key => shortcuts.value[key] === binding)
-    if (!id && Object.values(defaultShortcuts).includes(binding as typeof defaultShortcuts[ShortcutAction])) {
-      event.preventDefault(); event.stopPropagation(); return
+    const command = matchingCommand(binding,shortcuts.value,context)
+    if (command) {
+      // Resolve the focused pane before executing; nested CodeMirror commands
+      // are routed by DocumentManager to that exact view.
+      event.preventDefault(); event.stopPropagation()
+      if(event.repeat && !command.repeatable)return
+      const pane = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-pane-id]')?.dataset.paneId : undefined
+      if (pane) manager.focusPane(pane,false)
+      executeCommand(command.id)
+      return
     }
-    const control = event.target instanceof Element ? event.target.closest('input,textarea,select,[contenteditable=true]') : null
-    // Ordinary inputs (including search fields) keep native editing shortcuts.
-    if (control && !control.closest('.cm-content, .cm-search, .md-prose') && id && ['undo','redo','find','replace','uppercase','lowercase','bold','italic'].includes(id)) return
-    let action: (() => void) | undefined
-    if (id === 'save') action = () => void saveActive()
-    else if (id === 'save-as') action = () => void saveActive(true)
-    else if (id === 'open') action = () => void openFile()
-    else if (id === 'palette') action = () => openPalette('action')
-    else if (id === 'quick-open') action = () => openPalette('file')
-    else if (id) {
-      action = () => executeCommand(id)
-    } else if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'z' && control?.closest('.cm-content')) action = () => manager.command('redo')
-    else if (event.key === 'Escape' && focusMode.value && !document.querySelector('.cm-search, .cm-tooltip')) action = toggleFocus
-    if (action || id) { event.preventDefault(); event.stopPropagation(); action?.() }
+    if (isManagedDefault(binding,context,keymapPreset.value)) { event.preventDefault();event.stopPropagation();return }
+    if (manager.activeLiveEditor?.shortcut(event)) return
+    if (event.key === 'Escape' && focusMode.value && !document.querySelector('.cm-search, .cm-tooltip')) {event.preventDefault();toggleFocus()}
   }
+
   function beforeUnload(event: BeforeUnloadEvent) {
     if (manager.hasDirtyDocuments || manager.isComposing || fileBusy.value || files.saving.size) { event.preventDefault(); event.returnValue = '' }
   }
@@ -753,6 +842,7 @@ export function useAppShell() {
   }, { immediate: true })
   watch(wordWrap, value => manager.setWrap(value), { immediate: true })
   watch(defaultMdMode, value => manager.setDefaultMarkdownMode(value), { immediate: true })
+  watch(caretAnimation, value => manager.setCaretAnimation(value), { immediate: true })
   watch(markdownTypography,value=>manager.setMarkdownTypography(value),{immediate:true,deep:true})
   watch(markdownClipboard,value=>manager.setMarkdownClipboard(value),{immediate:true,deep:true})
   watch(uiFontSize, value => { document.documentElement.style.setProperty('--ui-font-size', `${value}px`) }, { immediate: true })
@@ -760,25 +850,33 @@ export function useAppShell() {
   watch(fontFamily, value => { document.documentElement.style.setProperty('--font-mono', fontFamilies[value]); manager.refreshTypography() }, { immediate: true })
   watch([indentSize,useTabs], () => manager.setIndent(indentSize.value,useTabs.value), { immediate: true })
   function settingsSnapshot(): EditorSettings {
-    return { outlineWidth:outlineWidth.value,markdownClipboard:{...markdownClipboard.value},markdownTypography:{...markdownTypography.value},theme: theme.value, uiFontSize: uiFontSize.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value, treeClickMode: treeClickMode.value, keymapPreset: keymapPreset.value,
-      defaultMdMode: defaultMdMode.value, indentSize: indentSize.value, useTabs: useTabs.value, imageRules:{...imageRules.value},documentImageRules:{...documentImageRules.value}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: 3, customShortcuts:[...customShortcuts.value], shortcuts: { ...shortcuts.value }, fileModes: { ...fileModes.value } }
+    return { autoCheckUpdates:autoCheckUpdates.value,autoDownloadUpdates:autoDownloadUpdates.value,caretAnimation:caretAnimation.value,outlineWidth:outlineWidth.value,markdownClipboard:{...markdownClipboard.value},markdownTypography:{...markdownTypography.value},theme: theme.value, uiFontSize: uiFontSize.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value, treeClickMode: treeClickMode.value, keymapPreset: keymapPreset.value,
+      defaultMdMode: defaultMdMode.value, indentSize: indentSize.value, useTabs: useTabs.value, imageRules:{...imageRules.value},documentImageRules:{...documentImageRules.value}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: currentShortcutVersion, customShortcuts:[...customShortcuts.value], shortcuts: { ...shortcuts.value }, fileModes: { ...fileModes.value } }
   }
-  function flushSettings() {
+  function flushSettings(strict=false) {
     if (settingsTimer) clearTimeout(settingsTimer)
     settingsTimer = undefined
     if (!settingsReady) return settingsWrites
     const settings = settingsSnapshot()
-    settingsWrites = settingsWrites.then(() => saveEditorSettings(settings)).catch(error => { toast(`首选项保存失败：${fileError(error)}`) })
-    return settingsWrites
+    settingsWrites = settingsWrites.then(() => saveEditorSettings(settings)).then(()=>{settingsError=null}).catch(error => { settingsError=error;toast(`首选项保存失败：${fileError(error)}`) })
+    return settingsWrites.then(()=>{if(strict&&settingsError)throw settingsError})
   }
+  watch(shortcuts,value=>manager.setShortcutLabels(Object.fromEntries(Object.entries(value).map(([id,binding])=>[id,shortcutLabel(binding)]))),{immediate:true,deep:true})
   function updateShortcuts(value: EditorSettings['shortcuts']) {
-    const error = validateShortcuts(value)
+    value=Object.fromEntries(allCommands.map(command=>[command.id,value[command.id]===''?'':normalizeShortcut(value[command.id]) || value[command.id]]))
+    const error = validateShortcuts(value,shortcuts.value)
     if (error) { toast(error); return }
-    customShortcuts.value=[...new Set([...customShortcuts.value,...(Object.keys(value) as ShortcutAction[]).filter(id=>value[id]!==shortcuts.value[id])])]
+    customShortcuts.value=allCommands.filter(command=>value[command.id]!==getPresetBindings(keymapPreset.value)[command.id]).map(command=>command.id)
     shortcuts.value = value
   }
+  function updateKeymap(value: {preset:KeymapPresetId; bindings:Record<string,string>}) {
+    const error = validateShortcuts(value.bindings)
+    if (error) {toast(error);return}
+    keymapPreset.value = value.preset
+    updateShortcuts(value.bindings)
+  }
   watch([autoSave, autoSaveDelay], () => autoSaver.configure(desktop && settingsReady && autoSave.value, autoSaveDelay.value))
-  watch([outlineWidth,markdownClipboard,markdownTypography,theme,uiFontSize,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,treeClickMode,keymapPreset,imageRules,documentImageRules], () => {
+  watch([autoCheckUpdates,autoDownloadUpdates,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,theme,uiFontSize,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,treeClickMode,keymapPreset,imageRules,documentImageRules], () => {
     if (!settingsReady) return
     if (settingsTimer) clearTimeout(settingsTimer)
     settingsTimer = setTimeout(() => void flushSettings(),250)
@@ -813,6 +911,8 @@ export function useAppShell() {
       if (!alive) return
       uiFontSize.value = settings.uiFontSize; theme.value = settings.theme; fontSize.value = settings.fontSize; fontFamily.value = settings.fontFamily; wordWrap.value = settings.wordWrap
       autoSave.value = settings.autoSave; autoSaveDelay.value = settings.autoSaveDelay
+      autoCheckUpdates.value=settings.autoCheckUpdates;autoDownloadUpdates.value=settings.autoDownloadUpdates
+      caretAnimation.value=settings.caretAnimation
       markdownTypography.value=settings.markdownTypography
       outlineWidth.value=settings.outlineWidth
       markdownClipboard.value=settings.markdownClipboard
@@ -836,6 +936,7 @@ export function useAppShell() {
         files.acceptBatch(launch.files)
         const selected=manager.openedDocuments.find(doc=>doc.path===launch.activePath)||manager.openedDocuments[0]
         if(selected)manager.select(selected.id,'main')
+        restoreEditorLayout(manager,launch.editorLayout)
         appMode.value=launch.kind==='file'?'single':launch.layout.mode
         sidebarWidth.value=launch.layout.sidebarWidth
         sidebarVisible.value=launch.kind==='app'&&!!workspace.rootPath&&launch.layout.sidebarVisible&&!wasNarrow
@@ -866,7 +967,7 @@ export function useAppShell() {
         // select that tab instead of reading the file again or adding a tab.
         const stopActivate=await (await import('@tauri-apps/api/window')).getCurrentWindow().listen<string[]>('external-activate',event=>{void activateExternal(event.payload)})
         if(alive)unlistenActivate=stopActivate;else stopActivate()
-        const stopDrop=await (await import('@tauri-apps/api/window')).getCurrentWindow().listen<{inputs:NativeImageInput[];x:number;y:number}>('native-file-drop',event=>{void nativeFileDrop(event.payload).catch(error=>toast(fileError(error)))})
+        const stopDrop=await (await import('@tauri-apps/api/window')).getCurrentWindow().listen<{inputs:NativeDropInput[];x:number;y:number}>('native-file-drop',event=>{void nativeFileDrop(event.payload).catch(error=>toast(fileError(error)))})
         if(alive)unlistenDrop=stopDrop;else stopDrop()
         const prefs = await tauriFiles.preferences()
         if (alive) {
@@ -879,6 +980,14 @@ export function useAppShell() {
       } catch (error) { toast(fileError(error)) }
     }
     autoSaver.configure(desktop && autoSave.value, autoSaveDelay.value)
+    if(desktop&&alive){
+      try{const runtime=await invoke<{version:string;platform:string;installSupported:boolean}>('update_runtime');if(!alive)return;Object.assign(updateStatus,{currentVersion:runtime.version,platform:runtime.platform,installSupported:runtime.installSupported});
+        const confirmation=await invoke<{confirmed:boolean;targetVersion:string}|null>('confirm_update_startup');
+        if(!alive)return;if(confirmation?.confirmed){updateStatus.confirmedVersion=runtime.version;toast('Markumo 已更新至 v'+runtime.version)}
+        else if(confirmation){toast('上次更新尚未确认，当前运行版本为 v'+runtime.version+'，可重新检查更新。')}
+      }catch(error){updateStatus.error=fileError(error)}
+      updateManager.start(!import.meta.env.DEV);reportUpdateWindow()
+    }
   })
   onUnmounted(() => {
     systemTheme.removeEventListener('change', updateSystemTheme)
@@ -887,6 +996,7 @@ export function useAppShell() {
     window.removeEventListener('paste',imagePaste,true)
     window.removeEventListener('resize', adaptWindowWidth)
     alive = false
+    updateManager.dispose();if(reportTimer)clearTimeout(reportTimer)
     unlistenWindow?.()
     unlistenPending?.()
     unlistenActivate?.()
@@ -901,7 +1011,7 @@ export function useAppShell() {
     sessionWriter?.dispose()
     autoSaver.dispose(); files.dispose(); workspace.destroy(); unsubscribeWorkspace(); unsubscribe(); manager.dispose()
   })
-  return { outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
+  return { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts,updateKeymap, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
     paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, mainOpenedDocuments, mainActiveId, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
     setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, selectDocById, handleSelectDoc,
     pinDocById, createNewDoc, closeDocById,closeOtherTabs,cancelPendingClose, discardPending, savePending, setLanguage, setMarkdownMode,

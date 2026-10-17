@@ -12,6 +12,9 @@ use workspace::SearchManager;
 
 /// Registers a window's workspace service and launch record.
 fn register_window(app:&tauri::AppHandle,label:&str,paths:Vec<PathBuf>)->Result<(),String>{
+    let updates=app.state::<commands::update::UpdateStore>();
+    let coordinator=updates.lock().map_err(|e|e.to_string())?;
+    if coordinator.owner.is_some(){return Err("正在安装更新，请重启后再打开新窗口。".into())}
     let temporary=!paths.is_empty();
     let mut ws=workspace::WorkspaceService::default();
     ws.configure(app.path().app_data_dir().map_err(|e|e.to_string())?.join("workspaces.json"));
@@ -117,6 +120,7 @@ pub fn run() {
         .manage(workspace_store)
         .manage(session::LaunchStore::default())
         .manage(session::SessionStore::default())
+        .manage(commands::update::UpdateStore::default())
         .manage(search_manager)
         .setup(move |app| {
             let store = app.state::<FileStore>();
@@ -126,7 +130,12 @@ pub fn run() {
             service.configure(app_data.join("files.json"));
             drop(service);
             app.state::<session::SessionStore>().lock().map_err(|_|std::io::Error::other("会话状态损坏"))?.configure(app_data.join("last-session.json"));
-            register_window(app.handle(),"main",session::argument_paths(std::env::args(),&std::env::current_dir()?)).map_err(std::io::Error::other)?;
+            let paths=session::argument_paths(std::env::args(),&std::env::current_dir()?);
+            let restoring_update=commands::update::restore_after_update(&app_data.join("pending-update.json"),env!("CARGO_PKG_VERSION"));
+            register_window(app.handle(),"main",if restoring_update{Vec::new()}else{paths.clone()}).map_err(std::io::Error::other)?;
+            if restoring_update {
+                if let Some(main)=app.state::<session::LaunchStore>().lock().map_err(|_|std::io::Error::other("会话状态损坏"))?.windows.get_mut("main"){main.pending=paths;}
+            }
 
             Ok(())
         })
@@ -146,12 +155,16 @@ pub fn run() {
             }
             if let tauri::WindowEvent::Destroyed=event{
                 let app=window.app_handle();
+                if let Ok(mut update)=app.state::<commands::update::UpdateStore>().lock(){update.release(window.label());update.statuses.remove(window.label());}
                 app.state::<WorkspaceStore>().remove(window.label());
                 if let Ok(mut registry)=app.state::<session::LaunchStore>().lock(){registry.windows.remove(window.label());}
                 if let Ok(mut files)=app.state::<FileStore>().lock(){files.release_owner(window.label());}
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::update::update_runtime, commands::update::report_update_window, commands::update::update_windows_status,
+            commands::update::begin_update_install, commands::update::end_update_install, commands::update::mark_update_pending,
+            commands::update::clear_update_pending, commands::update::confirm_update_startup,
             commands::app::get_app_version,
             commands::app::ensure_update_window,
             commands::session::initialize_launch,commands::session::persist_session,
@@ -172,6 +185,7 @@ pub fn run() {
             commands::workspace::reveal_workspace_node,
             commands::files::drain_pending, commands::files::file_preferences, commands::files::persist_layout,
             commands::workspace::open_workspace_dialog,
+            commands::workspace::open_dropped_workspace,
             commands::workspace::remove_workspace_folder,
             commands::workspace::restore_workspace_folders,
             commands::workspace::open_workspace_path,

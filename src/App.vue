@@ -11,9 +11,8 @@
       :menu-groups="menuGroups"
       :command-registry="commandRegistry"
       :quick-shortcut="shortcuts['quick-open']"
-      :before-update="prepareUpdate"
-      :update-enabled="!fileBusy && !startupLoading"
-      @update-installing="updateInstalling=$event"
+      :update-state="updateStatus"
+      @open-update="openUpdatePanel"
       @execute-command="executeCommand"
       @open-file="openFile()"
       @save-file="saveActive()"
@@ -112,6 +111,10 @@
 
     <!-- 首选项模态框 -->
     <SettingsModal
+      v-model:auto-check-updates="autoCheckUpdates"
+      v-model:auto-download-updates="autoDownloadUpdates"
+      :current-version="updateStatus.currentVersion"
+      @check-update="settingsRef?.close();openUpdatePanel()"
       v-model:markdown-clipboard="markdownClipboard"
       v-model:markdown-typography="markdownTypography"
       v-model:image-rules="imageRules"
@@ -123,6 +126,7 @@
       v-model:theme="theme"
       v-model:ui-font-size="uiFontSize"
       v-model:font-size="fontSize"
+      v-model:caret-animation="caretAnimation"
       v-model:word-wrap="wordWrap"
       v-model:show-outline="showOutline"
       v-model:default-md-mode="defaultMdMode"
@@ -132,7 +136,8 @@
       v-model:auto-save="autoSave"
       v-model:auto-save-delay="autoSaveDelay"
       v-model:tree-click-mode="treeClickMode"
-      v-model:keymap-preset="keymapPreset"
+      :keymap-preset="keymapPreset"
+      @update:keymap="updateKeymap"
       :shortcuts="shortcuts"
       @update:shortcuts="updateShortcuts"
     />
@@ -140,8 +145,10 @@
     <!-- 操作提示 Toast -->
     <DiscardDialog ref="discardRef" :can-save="desktop" :busy="fileBusy" @save="savePending" @discard="discardPending" @cancel="cancelPendingClose" />
     <Toast ref="toastRef" />
-    <div v-if="updateInstalling" class="update-install-overlay" role="status">正在安装更新并重启，请稍候…</div>
   </div>
+  <UpdatePanel v-if="updatePanelOpen" :state="updateStatus" @close="updatePanelOpen=false" @check="updateManager.checkForUpdates()" @download="updateManager.downloadUpdate()" @install="updateManager.installUpdate()" @release="openUpdateRelease" @link="openUpdateLink" />
+  <UpdateConfirm ref="updateConfirmRef" />
+  <div v-if="updateInstalling" class="update-install-overlay" role="status">{{ updateStatus.phase==='preparing' ? '正在保存文档和工作现场…' : '正在安装更新，请稍候…' }}</div>
 </template>
 
 <script setup lang="ts">
@@ -155,15 +162,17 @@ import SettingsModal from './components/modals/SettingsModal.vue'
 import DiscardDialog from './components/modals/DiscardDialog.vue'
 import GotoLineModal from './components/modals/GotoLineModal.vue'
 import Toast from './components/common/Toast.vue'
+import UpdatePanel from './components/common/UpdatePanel.vue'
+import UpdateConfirm from './components/modals/UpdateConfirm.vue'
 import { computed } from 'vue'
 import { useAppShell } from './app/useAppShell'
-const { outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
+const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
   paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
   setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,
   reopenEncoding, convertEncoding, saveAsEncoding,
   gotoLineRef, handleGotoLine, revealInExplorerToken,
-  desktop, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading,updateInstalling,prepareUpdate } = useAppShell()
+  desktop, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading,updateInstalling } = useAppShell()
 
 const activeDocLineCount = computed(() => {
   if (!activeDoc.value) return 1

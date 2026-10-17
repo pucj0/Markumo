@@ -1,5 +1,6 @@
 import type { KeymapPresetId } from './contracts'
 import { allCommands } from './definitions'
+import { normalizeKeybinding } from './normalizer'
 
 export interface KeymapPreset {
   id: KeymapPresetId
@@ -27,6 +28,7 @@ const fleetBindings: Record<string, string> = {
   'close-current': 'Mod+W',
   explorer: 'Alt+1',
   sidebar: 'Mod+B',
+  bold: '', // Fleet's tool-window binding owns Mod+B; inherited Markdown key is unbound.
   'workspace-search': 'Mod+Shift+F',
   find: 'Mod+F',
   replace: 'Mod+R',
@@ -58,6 +60,7 @@ const typoraBindings: Record<string, string> = {
   'close-current': 'Mod+W',
   explorer: 'Mod+Shift+L',
   sidebar: 'Mod+Shift+F',
+  'workspace-search': '', // Typora uses this chord for its sidebar.
   'goto-line': 'Mod+J',
   bold: 'Mod+B',
   italic: 'Mod+I',
@@ -66,6 +69,7 @@ const typoraBindings: Record<string, string> = {
   link: 'Mod+K',
   image: 'Mod+Shift+I',
   'code-block': 'Mod+Shift+K',
+  'delete-line': '', // In Typora this chord inserts a fence, including source mode.
   table: 'Mod+T',
   quote: 'Mod+Shift+Q',
   'heading-1': 'Mod+1',
@@ -101,5 +105,6 @@ export const keymapPresets: Record<KeymapPresetId, KeymapPreset> = {
 }
 
 export function getPresetBindings(presetId: KeymapPresetId): Record<string, string> {
-  return { ...(keymapPresets[presetId] || keymapPresets.markumo).bindings }
+  const bindings = (keymapPresets[presetId] || keymapPresets.markumo).bindings
+  return Object.fromEntries(allCommands.map(command => [command.id, normalizeKeybinding(bindings[command.id] || '') || '']))
 }

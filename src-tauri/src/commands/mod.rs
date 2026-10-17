@@ -4,3 +4,4 @@ pub mod files;
 pub mod workspace;
 pub mod session;
 pub mod conversion;
+pub mod update;

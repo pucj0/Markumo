@@ -1,5 +1,5 @@
 <template>
-  <div class="shortcut-recorder-wrap" :class="{ 'is-recording': isRecording }">
+  <div ref="rootRef" :data-command-id="commandId" @focusout="onBlur" class="shortcut-recorder-wrap" :class="{ 'is-recording': isRecording }">
     <!-- 1. 静止展示态 -->
     <template v-if="!isRecording">
       <div
@@ -48,9 +48,8 @@
         role="textbox"
         aria-live="polite"
         aria-label="正在录制快捷键，请按下键盘组合键"
-        @keydown.prevent.stop="onKeyDown"
+        @keydown.stop="onKeyDown"
         @keyup.prevent.stop="onKeyUp"
-        @blur="onBlur"
       >
         <span class="recording-prompt">
           {{ draftKeycaps.length ? '' : '请按下新的快捷键…' }}
@@ -73,7 +72,7 @@
           type="button"
           class="recorder-btn cancel"
           title="取消录制 (Esc)"
-          @click="cancelRecording"
+          @click="cancelRecording()"
         >
           取消
         </button>
@@ -92,7 +91,7 @@
       >
         重新分配
       </button>
-      <button type="button" class="dismiss-btn" title="取消" @click="conflictInfo = null">✕</button>
+      <button type="button" class="dismiss-btn" title="取消" @click="cancelRecording()">✕</button>
     </div>
   </div>
 </template>
@@ -102,7 +101,7 @@ import { ref, computed, nextTick } from 'vue'
 import {
   formatKeycaps,
   eventToKeybinding,
-  checkBindingConflict,
+  checkBindingConflict, isPriorityConflict,
   type KeybindingConflict,
 } from '../../features/shell/keybindings'
 
@@ -115,9 +114,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:binding', val: string): void
-  (e: 'reassign', payload: { newBinding: string; takeFromCommandId: string }): void
+  (e: 'reassign', payload: { commandId:string; newBinding: string; takeFromCommandId: string }): void
 }>()
 
+const rootRef = ref<HTMLElement|null>(null)
 const isRecording = ref(false)
 const recordingInputRef = ref<HTMLElement | null>(null)
 const draftBinding = ref('')
@@ -148,10 +148,11 @@ function startRecording() {
   })
 }
 
-function cancelRecording() {
+function cancelRecording(restoreFocus=true) {
   isRecording.value = false
   draftBinding.value = ''
   conflictInfo.value = null
+  if(restoreFocus)nextTick(()=>rootRef.value?.querySelector<HTMLElement>('.keycap-container')?.focus({preventScroll:true}))
 }
 
 function clearBinding() {
@@ -160,14 +161,19 @@ function clearBinding() {
 }
 
 function resetToDefault() {
-  emit('update:binding', props.defaultBinding || '')
-  conflictInfo.value = null
+  draftBinding.value=props.defaultBinding || ''
+  conflictInfo.value=checkBindingConflict(props.commandId,draftBinding.value,props.allBindings)
+  if(conflictInfo.value && isPriorityConflict(props.commandId,conflictInfo.value,draftBinding.value))conflictInfo.value=null
+  if (!conflictInfo.value) emit('update:binding',draftBinding.value)
 }
 
-function onBlur() {
-  // 如果正在提示冲突，不强制关掉，允许点击重新分配
-  if (conflictInfo.value) return
-  cancelRecording()
+function onBlur(event:FocusEvent) {
+  if (event.relatedTarget instanceof Node && rootRef.value?.contains(event.relatedTarget)) return
+  // Switching the display to the recording input removes the focused keycap.
+  // Wait for that render/focus transfer before treating it as leaving the row.
+  nextTick(() => {
+    if (!conflictInfo.value && !rootRef.value?.contains(document.activeElement)) cancelRecording(false)
+  })
 }
 
 function onKeyUp(event: KeyboardEvent) {
@@ -177,6 +183,9 @@ function onKeyUp(event: KeyboardEvent) {
 }
 
 function onKeyDown(event: KeyboardEvent) {
+  if(event.isComposing)return
+  if(event.key==='Tab')return
+  event.preventDefault()
   // 1. Esc 退出录制
   if (event.key === 'Escape') {
     cancelRecording()
@@ -195,7 +204,7 @@ function onKeyDown(event: KeyboardEvent) {
   // 4. 解析按键
   const newKey = eventToKeybinding(event)
   if (!newKey) {
-    // 还在按纯修饰键
+    // Leave modifiers pending; plain text keys are never captured as commands.
     return
   }
 
@@ -217,6 +226,7 @@ function onKeyDown(event: KeyboardEvent) {
 function reassignConflict() {
   if (conflictInfo.value && draftBinding.value) {
     emit('reassign', {
+      commandId:props.commandId,
       newBinding: draftBinding.value,
       takeFromCommandId: conflictInfo.value.commandId,
     })
@@ -353,7 +363,7 @@ function reassignConflict() {
   display: flex;
   align-items: center;
   gap: 6px;
-  white-space: nowrap;
+  white-space: normal;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
@@ -385,4 +395,6 @@ function reassignConflict() {
   font-size: 11px;
   padding: 0 2px;
 }
+.keycap,.recorder-btn,.recording-prompt,.conflict-alert{font-size:var(--ui-small-font-size)}
+@media(prefers-reduced-motion:reduce){.recording-box{animation:none}}
 </style>

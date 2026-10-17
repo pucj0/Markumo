@@ -33,18 +33,25 @@ export const categoryLabels: Record<CommandCategory, string> = {
 export type KeymapPresetId = 'markumo' | 'fleet' | 'typora'
 
 export interface KeybindingCommand {
+  /** Shell registry entry. Aliases keep persisted command IDs stable. */
+  executeId: string
+  supported: boolean
+  contexts: KeybindingContext[]
   id: string
   label: string
   category: CommandCategory
   description: string
   scope: KeybindingScope
   defaultBinding?: string
-  repeatable?: boolean
-  userOverridable?: boolean
+  defaultAliases?:string[]
+  repeatable: boolean
+  userOverridable: boolean
   when?: string
 }
+export type KeybindingContext = 'shell' | 'text' | 'source' | 'live' | 'code-block' | 'input' | 'search' | 'dialog'
 
 export interface KeybindingConflict {
+  commandIds?:string[]
   commandId: string
   commandLabel: string
   category: CommandCategory

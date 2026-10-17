@@ -1,11 +1,12 @@
 import type { KeybindingConflict, KeybindingScope } from './contracts'
-import { commandMap } from './definitions'
+import { allCommands, commandMap } from './definitions'
+import { commandsOverlap, intentionalOverlap, effectiveBindings } from './resolver'
+import { normalizeKeybinding } from './normalizer'
 
 // 浏览器/系统硬性保留键（不能由应用随意重定义）
 export const reservedSystemKeys = new Set([
   'F5',
   'Mod+Shift+R',
-  'Mod+Shift+I', // 开发者工具（调试保留）
   'Mod+C',
   'Mod+V',
   'Mod+X',
@@ -17,21 +18,10 @@ export const reservedSystemKeys = new Set([
  */
 export function areScopesMutuallyExclusive(scopeA: KeybindingScope, scopeB: KeybindingScope): boolean {
   if (scopeA === scopeB) return false
-
-  // markdown-live 与 editor/markdown-source 互斥
-  if (
-    (scopeA === 'markdown-live' && (scopeB === 'editor' || scopeB === 'markdown-source')) ||
-    (scopeB === 'markdown-live' && (scopeA === 'editor' || scopeA === 'markdown-source'))
-  ) {
-    return true
-  }
-
-  // 对话框与普通编辑互斥
-  if (scopeA === 'dialog' || scopeB === 'dialog') {
-    return true
-  }
-
-  return false
+  const left = allCommands.filter(command => command.scope === scopeA)
+  const right = allCommands.filter(command => command.scope === scopeB)
+  if (!left.length || !right.length) return scopeA === 'dialog' || scopeB === 'dialog'
+  return !left.some(a => right.some(b => commandsOverlap(a.id,b.id)))
 }
 
 /**
@@ -43,6 +33,7 @@ export function checkBindingConflict(
   currentBindings: Record<string, string>
 ): KeybindingConflict | null {
   if (!newBinding) return null
+  newBinding = normalizeKeybinding(newBinding) || newBinding
 
   // 1. 系统/编辑器核心保留键
   if (reservedSystemKeys.has(newBinding)) {
@@ -53,34 +44,32 @@ export function checkBindingConflict(
       scope: commandMap.get(targetCommandId)?.scope || 'global',
       binding: newBinding,
       conflictType: 'reserved-key',
-      description: `按键 ${newBinding} 为操作系统或剪贴板/开发者工具保留键，不可占用`,
+      description: `按键 ${newBinding} 为操作系统或剪贴板/刷新保留键，不可占用`,
     }
   }
 
-  const targetCmd = commandMap.get(targetCommandId)
-  const targetScope = targetCmd?.scope || 'global'
 
-  // 2. 检查与其他命令的绑定
-  for (const [cmdId, binding] of Object.entries(currentBindings)) {
-    if (cmdId === targetCommandId) continue
-    if (binding === newBinding) {
-      const otherCmd = commandMap.get(cmdId)
-      const otherScope = otherCmd?.scope || 'global'
-
-      // 判断作用域是否严格冲突
-      if (!areScopesMutuallyExclusive(targetScope, otherScope)) {
-        return {
-          commandId: cmdId,
-          commandLabel: otherCmd?.label || cmdId,
-          category: otherCmd?.category || 'general',
-          scope: otherScope,
-          binding: newBinding,
-          conflictType: 'exact-same-scope',
-          description: `该按键已分配给【${otherCmd?.label || cmdId}】`,
-        }
-      }
-    }
+  const owners = Object.keys(currentBindings).filter(id=>id !== targetCommandId && effectiveBindings(id,currentBindings).includes(newBinding) && commandsOverlap(targetCommandId,id))
+  if (!owners.length) return null
+  const command = commandMap.get(owners[0])!
+  return {
+    commandId:command.id, commandIds:owners, commandLabel:command.label,
+    category:command.category,scope:command.scope,binding:newBinding,conflictType:'exact-same-scope',
+    description:'该按键已分配给'+owners.map(id=>'【'+commandMap.get(id)!.label+'】').join('、')+'；重新分配将解除这些重叠绑定',
   }
+}
+export function isPriorityConflict(id:string, conflict:KeybindingConflict, binding:string) {
+  return (conflict.commandIds || [conflict.commandId]).every(other=>intentionalOverlap(id,other,binding))
+}
 
-  return null
+/** Preset validation uses the same overlap rules as recording and execution. */
+export function validatePresetConflicts(bindings: Record<string,string>): string[] {
+  const errors = new Set<string>()
+  for (const command of allCommands) {
+    const binding = bindings[command.id]
+    if (!binding) continue
+    const conflict = checkBindingConflict(command.id,binding,bindings)
+    if (conflict && !isPriorityConflict(command.id,conflict,binding)) errors.add(command.label + '：' + conflict.description)
+  }
+  return [...errors]
 }

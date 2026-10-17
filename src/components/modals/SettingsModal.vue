@@ -8,15 +8,15 @@
         </header>
         <div class="settings-body">
           <nav class="settings-nav" aria-label="设置分类">
-            <button v-for="section in sections" :key="section.id" :aria-label="section.title" :class="{ active: activeSection === section.id }" @click="goToSection(section.id)">
+            <button v-for="section in sections" :key="section.id" :aria-label="section.title" :aria-current="activeSection === section.id ? 'location' : undefined" :aria-controls="`settings-${section.id}`" :class="{ active: activeSection === section.id }" @click="goToSection(section.id)">
               <Icon :name="section.icon" size="small" /><span>{{ section.title }}</span>
             </button>
           </nav>
-          <div ref="contentRef" class="settings-content">
+          <div ref="contentRef" class="settings-content" tabindex="0" aria-label="设置内容">
             <!-- 1. 外观 -->
             <section id="settings-appearance" class="settings-section">
               <h3>外观</h3>
-              <div class="settingrow"><label for="settings-theme">颜色主题</label><select id="settings-theme" :value="theme" @change="$emit('update:theme', ($event.target as HTMLSelectElement).value as ThemePreference)"><option value="light">浅色</option><option value="dark">深色</option><option value="system">跟随系统</option></select></div>
+              <div class="settingrow"><span class="setting-label">颜色主题</span><SegmentedControl id="settings-theme" label="颜色主题" :model-value="theme" :options="[{value:'light',label:'浅色'},{value:'dark',label:'深色'},{value:'system',label:'跟随系统'}]" @update:model-value="emit('update:theme', $event as ThemePreference)" /></div>
               <div class="settingrow"><label for="settings-ui-size">界面字号</label><div class="number-control"><input id="settings-ui-size" type="number" min="12" max="20" step="1" :value="uiFontDraft" :aria-invalid="!!uiFontError" aria-describedby="ui-font-hint" @input="updateUiFont" @blur="finishUiFont" @keydown.enter.prevent="finishUiFont" /><span>px</span><button class="reset-font" title="恢复默认界面字号 14px" aria-label="恢复默认界面字号" @click="emit('update:uiFontSize', 14)">恢复默认</button></div></div>
               <p v-if="uiFontError" class="field-error" role="alert">{{ uiFontError }}</p>
               <p id="ui-font-hint" class="setting-hint">仅调整界面文字；编辑器与 Markdown 正文字号分别设置。</p>
@@ -28,12 +28,21 @@
             <!-- 2. 编辑 -->
             <section id="settings-editor" class="settings-section">
               <h3>编辑</h3>
+              <div class="settingrow"><label for="settings-caret-animation">光标动画</label><select id="settings-caret-animation" :value="caretAnimation" @change="emit('update:caretAnimation', ($event.target as HTMLSelectElement).value as EditorSettings['caretAnimation'])"><option value="off">关闭</option><option value="quick">快速跟手</option><option value="smooth">平滑滑动</option></select></div>
               <div class="settingrow"><label for="settings-wrap">自动软换行</label><input id="settings-wrap" class="setting-switch" type="checkbox" :checked="wordWrap" @change="$emit('update:wordWrap', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><label for="settings-outline">显示文档大纲</label><input id="settings-outline" class="setting-switch" type="checkbox" :checked="showOutline" @change="$emit('update:showOutline', ($event.target as HTMLInputElement).checked)" /></div>
-              <div class="settingrow"><label for="settings-indent">缩进宽度</label><select id="settings-indent" :value="indentSize" @change="$emit('update:indentSize', Number(($event.target as HTMLSelectElement).value))"><option v-for="n in 8" :key="n" :value="n">{{ n }}</option></select></div>
+              <div class="settingrow"><label for="settings-indent">缩进宽度</label><div class="indent-control"><SegmentedControl label="常用缩进宽度" :model-value="indentSize" :options="[2,4,8].map(value=>({value,label:String(value)}))" @update:model-value="emit('update:indentSize',Number($event))" /><input id="settings-indent" type="number" min="1" max="8" :value="indentSize" aria-label="缩进宽度 1 至 8" @change="updateIndent" /></div></div>
               <div class="settingrow"><label for="settings-tabs">使用 Tab 缩进</label><input id="settings-tabs" class="setting-switch" type="checkbox" :checked="useTabs" @change="$emit('update:useTabs', ($event.target as HTMLInputElement).checked)" /></div>
-              <div class="settingrow"><label for="settings-tree-click">文件夹展开方式</label><select id="settings-tree-click" :value="treeClickMode || 'double'" @change="$emit('update:treeClickMode', ($event.target as HTMLSelectElement).value as ('double' | 'single'))"><option value="double">双击展开/收起（默认）</option><option value="single">单击展开/收起</option></select></div>
+              <div class="settingrow"><span class="setting-label">文件夹展开方式</span><SegmentedControl id="settings-tree-click" label="文件夹展开方式" :model-value="treeClickMode || 'double'" :options="[{value:'single',label:'单击'},{value:'double',label:'双击（默认）'}]" @update:model-value="emit('update:treeClickMode', $event as 'single' | 'double')" /></div>
               <p class="setting-hint">文件始终单击预览，双击固定；修改文件后自动固定标签。</p>
+            </section>
+
+            <section id="settings-updates" class="settings-section">
+              <h3>应用更新</h3>
+              <div class="settingrow"><label for="settings-update-check">自动检查更新</label><input id="settings-update-check" class="setting-switch" type="checkbox" :checked="autoCheckUpdates" @change="emit('update:autoCheckUpdates', ($event.target as HTMLInputElement).checked)" /></div>
+              <div class="settingrow"><label for="settings-update-download">自动后台下载更新</label><input id="settings-update-download" class="setting-switch" type="checkbox" :checked="autoDownloadUpdates" @change="emit('update:autoDownloadUpdates', ($event.target as HTMLInputElement).checked)" /></div>
+              <p class="setting-hint">发现新版本后，在后台下载安装包。下载完成后仍由你决定何时安装和重启。</p>
+              <div class="settingrow"><span>当前版本 {{ currentVersion || '读取中…' }}</span><button class="reset-font" @click="emit('check-update')">检查更新</button></div>
             </section>
 
             <!-- 3. 保存 -->
@@ -58,7 +67,7 @@
               <div class="settingrow"><label for="settings-md-numbers">代码块行号</label><input id="settings-md-numbers" type="checkbox" :checked="markdownTypography?.codeLineNumbers ?? true" @change="updateMd('codeLineNumbers', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><label for="settings-md-wrap">代码块自动换行</label><input id="settings-md-wrap" type="checkbox" :checked="markdownTypography?.codeWrap ?? false" @change="updateMd('codeWrap', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><label for="settings-md-image-border">显示图片边框</label><input id="settings-md-image-border" type="checkbox" :checked="markdownTypography?.imageBorder ?? true" @change="updateMd('imageBorder', ($event.target as HTMLInputElement).checked)" /></div>
-              <div class="settingrow"><label for="settings-md-mode">Markdown 默认模式</label><select id="settings-md-mode" :value="defaultMdMode" @change="$emit('update:defaultMdMode', ($event.target as HTMLSelectElement).value as MarkdownMode)"><option value="live">即时排版</option><option value="source">源码</option><option value="split">双栏</option></select></div>
+              <div class="settingrow"><span class="setting-label">Markdown 默认模式</span><SegmentedControl id="settings-md-mode" label="Markdown 默认模式" :model-value="defaultMdMode" :options="[{value:'live',label:'即时排版'},{value:'source',label:'源码'},{value:'split',label:'双栏'}]" @update:model-value="emit('update:defaultMdMode', $event as MarkdownMode)" /></div>
               <ImageSettings :global-rules="imageRules" :document-rules="documentImageRules" :document-path="markdownPath" :document-name="markdownName" @global="emit('update:imageRules', $event)" @document="emit('update:documentImageRules', $event)" />
             </section>
 
@@ -83,11 +92,8 @@
                 </select>
               </div>
               <div class="settingrow">
-                <label for="settings-pdf-orientation">页面方向</label>
-                <select id="settings-pdf-orientation" :value="conversionSettings.pdf.orientation" @change="updatePdf('orientation', ($event.target as HTMLSelectElement).value as 'portrait' | 'landscape')">
-                  <option value="portrait">纵向</option>
-                  <option value="landscape">横向</option>
-                </select>
+                <span class="setting-label">页面方向</span>
+                <SegmentedControl id="settings-pdf-orientation" label="页面方向" :model-value="conversionSettings.pdf.orientation" :options="[{value:'portrait',label:'纵向'},{value:'landscape',label:'横向'}]" @update:model-value="updatePdf('orientation', $event as 'portrait' | 'landscape')" />
               </div>
               <div class="settingrow">
                 <label for="settings-pdf-margins">页边距</label>
@@ -123,6 +129,7 @@
 
             <!-- 6. 快捷键（全新独立完整配置体系） -->
             <section id="settings-shortcuts" class="settings-section shortcuts-management-section">
+              <h3>快捷键</h3>
               <header class="shortcuts-toolbar">
                 <div class="toolbar-field">
                   <label for="settings-keymap-preset">键位方案</label>
@@ -130,7 +137,7 @@
                     id="settings-keymap-preset"
                     :value="keymapPreset || 'markumo'"
                     class="preset-select"
-                    @change="onPresetChange(($event.target as HTMLSelectElement).value as KeymapPresetId)"
+                    @change="onPresetChange(($event.target as HTMLSelectElement).value as KeymapPresetId); ($event.target as HTMLSelectElement).value = currentPresetId"
                   >
                     <option v-for="preset in Object.values(keymapPresets)" :key="preset.id" :value="preset.id">
                       {{ preset.name }}
@@ -152,8 +159,17 @@
                 <button type="button" class="reset-all-btn" title="重置为当前方案的默认快捷键" @click="resetAllToDefault">
                   恢复默认
                 </button>
+                <SegmentedControl label="筛选快捷键" v-model="shortcutFilter" :options="[{value:'all',label:'全部'},{value:'modified',label:'已修改'},{value:'unbound',label:'未绑定'}]" />
               </header>
 
+              <div v-if="pendingPreset" class="preset-confirm" role="alert">
+                <p>应用 {{ keymapPresets[pendingPreset].name }} 将替换当前绑定（{{ modifiedCount }} 项已修改）。清除的绑定也会恢复。</p>
+                <p v-for="warning in presetWarnings" :key="warning">{{ warning }}</p>
+                <p v-if="pendingPreset === 'fleet'">Mod+B 用于侧边栏；Markdown 加粗默认未绑定。</p>
+                <p v-if="pendingPreset === 'typora'">Mod+Shift+F 用于侧边栏，Mod+Shift+K 用于代码块；工作区搜索和删除当前行默认未绑定。</p>
+                <button :disabled="!!presetWarnings.length" @click="confirmPreset">确认应用</button><button @click="pendingPreset=null">取消</button>
+              </div>
+              <p class="setting-hint">Markdown 正文中 Mod+0 优先转换为普通段落；其他位置恢复字号。行编辑命令适用于文本、源码和内嵌代码块。</p>
               <!-- 按分类展示命令列表 -->
               <div class="shortcuts-groups">
                 <div
@@ -169,12 +185,15 @@
                       class="shortcut-item-row"
                     >
                       <div class="cmd-info">
-                        <span class="cmd-label">{{ cmd.label }}</span>
+                        <span class="cmd-label">{{ cmd.label }} <small v-if="(localShortcuts[cmd.id] || '') !== (defaultBindings[cmd.id] || '')" class="modified-badge">已修改</small></span>
                         <span class="cmd-desc">{{ cmd.description }}</span>
+                        <span v-if="effectiveBindings(cmd.id,localShortcuts).length > 1" class="cmd-desc">兼容键：{{ effectiveBindings(cmd.id,localShortcuts).slice(1).map(value=>keybindingLabel(value)).join(' / ') }}</span>
+                        <span v-if="existingConflict(cmd.id)" class="binding-warning" role="status">{{ existingConflict(cmd.id) }}</span>
                       </div>
 
                       <div class="cmd-recorder">
                         <ShortcutRecorder
+                          v-if="cmd.supported && cmd.userOverridable"
                           :command-id="cmd.id"
                           :binding="localShortcuts[cmd.id]"
                           :default-binding="defaultBindings[cmd.id]"
@@ -182,7 +201,7 @@
                           :aria-label="`快捷键 ${cmd.label}`"
                           @update:binding="onUpdateSingleBinding(cmd.id, $event)"
                           @reassign="onReassignBinding"
-                        />
+                        /><span v-else class="cmd-desc">{{ cmd.supported ? '固定快捷键' : '尚未支持' }}</span>
                       </div>
                     </div>
                   </div>
@@ -203,8 +222,9 @@
 
 <script setup lang="ts">
 import { useModal } from '../../features/shell/useModal'
-import { nextTick, ref, computed, watch } from 'vue'
+import { nextTick, ref, computed, watch, onUnmounted } from 'vue'
 import Icon from '../common/Icon.vue'
+import SegmentedControl from '../common/SegmentedControl.vue'
 import ImageSettings from './ImageSettings.vue'
 import ShortcutRecorder from '../common/ShortcutRecorder.vue'
 import type { ImageRules } from '../../editor/markdown/imageImport'
@@ -225,15 +245,19 @@ import {
   categoryLabels,
   allCommands,
   keymapPresets,
-  getPresetBindings,
+  getPresetBindings, reassignBinding, validatePresetConflicts, keybindingLabel, checkBindingConflict, isPriorityConflict, effectiveBindings,
 } from '../../features/shell/keybindings'
 
 const props = defineProps<{
+  autoCheckUpdates: boolean
+  autoDownloadUpdates: boolean
+  currentVersion: string
   markdownClipboard?: MarkdownClipboardSettings
   markdownTypography?: MarkdownTypography
   theme: ThemePreference
   uiFontSize: number
   fontSize: number
+  caretAnimation: EditorSettings['caretAnimation']
   wordWrap: boolean
   showOutline: boolean
   defaultMdMode: MarkdownMode
@@ -252,11 +276,14 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  (e: 'update:autoCheckUpdates' | 'update:autoDownloadUpdates', value: boolean): void
+  (e: 'check-update'): void
   (e: 'update:markdownClipboard', value: MarkdownClipboardSettings): void
   (e: 'update:markdownTypography', value: MarkdownTypography): void
   (e: 'update:theme', val: ThemePreference): void
   (e: 'update:uiFontSize', val: number): void
   (e: 'update:fontSize', val: number): void
+  (e: 'update:caretAnimation', val: EditorSettings['caretAnimation']): void
   (e: 'update:wordWrap', val: boolean): void
   (e: 'update:showOutline', val: boolean): void
   (e: 'update:defaultMdMode', val: MarkdownMode): void
@@ -264,7 +291,7 @@ const emit = defineEmits<{
   (e: 'update:indentSize', val: number): void
   (e: 'update:useTabs', val: boolean): void
   (e: 'update:treeClickMode', val: 'double' | 'single'): void
-  (e: 'update:keymapPreset', val: KeymapPresetId): void
+  (e: 'update:keymap', val: {preset:KeymapPresetId;bindings:Record<string,string>}): void
   (e: 'update:shortcuts', val: Record<string, string>): void
   (e: 'update:autoSave', val: boolean): void
   (e: 'update:autoSaveDelay', val: number): void
@@ -334,6 +361,7 @@ function updatePdf<K extends keyof ConversionSettings['pdf']>(key: K, val: Conve
 const sections = [
   { id: 'appearance', title: '外观', icon: 'sun' },
   { id: 'editor', title: '编辑', icon: 'font' },
+  { id: 'updates', title: '更新', icon: 'download' },
   { id: 'save', title: '保存', icon: 'save' },
   { id: 'markdown', title: 'Markdown', icon: 'files' },
   { id: 'conversion', title: '导入与导出', icon: 'export' },
@@ -347,15 +375,54 @@ watch(visible, value => {
     localShortcuts.value = { ...props.shortcuts }
     fontDraft.value = String(props.fontSize)
     fontError.value = ''
+    contentRef.value?.scrollTo({top:0,behavior:'instant'})
     activeSection.value = 'appearance'
+    pendingPreset.value=null
+    searchQuery.value=''
+    shortcutFilter.value='all'
     conversionSettings.value = loadConversionSettings()
     void checkPandoc()
   }
 })
 
+let scrollFrame = 0
+let stopScrollTracking = () => {}
+function updateActiveSection() {
+  scrollFrame = 0
+  const container = contentRef.value
+  if (!container) return
+  const targets = Array.from(container.querySelectorAll<HTMLElement>('.settings-section'))
+  if (container.scrollTop <= 1) {activeSection.value = 'appearance';return}
+  if (container.scrollTop + container.clientHeight >= container.scrollHeight - 2) {activeSection.value = 'shortcuts';return}
+  const top = container.getBoundingClientRect().top + 36
+  let active = targets[0]
+  for (const target of targets) { if (target.getBoundingClientRect().top <= top) active = target; else break }
+  if (active) activeSection.value = active.id.replace('settings-','')
+}
+function scheduleScrollTracking() { if (!scrollFrame) scrollFrame = requestAnimationFrame(updateActiveSection) }
+watch(contentRef, container => {
+  stopScrollTracking()
+  if (!container) return
+  container.scrollTop = 0
+  container.addEventListener('scroll',scheduleScrollTracking,{passive:true})
+  const observer = new ResizeObserver(scheduleScrollTracking)
+  observer.observe(container)
+  container.querySelectorAll('.settings-section').forEach(section=>observer.observe(section))
+  stopScrollTracking = () => {container.removeEventListener('scroll',scheduleScrollTracking);observer.disconnect();cancelAnimationFrame(scrollFrame);scrollFrame=0}
+  scheduleScrollTracking()
+}, {flush:'post'})
+onUnmounted(()=>stopScrollTracking())
 function goToSection(id: string) {
-  activeSection.value = id
-  contentRef.value?.querySelector(`#settings-${id}`)?.scrollIntoView({ block: 'start' })
+  const container=contentRef.value, target=container?.querySelector<HTMLElement>('#settings-'+id)
+  if (!container || !target) return
+  const top=target.getBoundingClientRect().top-container.getBoundingClientRect().top+container.scrollTop-20
+  container.scrollTo({top,behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'})
+  activeSection.value=id
+}
+function updateIndent(event:Event) {
+  const input=event.target as HTMLInputElement, value=Number(input.value)
+  if(Number.isInteger(value)&&value>=1&&value<=8)emit('update:indentSize',value)
+  else input.value=String(props.indentSize)
 }
 
 function updateFont(event: Event) {
@@ -369,6 +436,8 @@ function finishFont() { fontDraft.value = String(props.fontSize); fontError.valu
 // --- 快捷键管理逻辑 ---
 const localShortcuts = ref<Record<string, string>>({ ...props.shortcuts })
 const searchQuery = ref('')
+const shortcutFilter = ref('all')
+const pendingPreset = ref<KeymapPresetId|null>(null)
 
 watch(() => props.shortcuts, next => {
   localShortcuts.value = { ...next }
@@ -377,41 +446,43 @@ watch(() => props.shortcuts, next => {
 const currentPresetId = computed<KeymapPresetId>(() => props.keymapPreset || 'markumo')
 const defaultBindings = computed(() => getPresetBindings(currentPresetId.value))
 
-function onPresetChange(newPreset: KeymapPresetId) {
-  emit('update:keymapPreset', newPreset)
-  const presetDefaults = getPresetBindings(newPreset)
-  localShortcuts.value = { ...presetDefaults }
-  emit('update:shortcuts', { ...presetDefaults })
+const modifiedCount = computed(()=>allCommands.filter(command=>(localShortcuts.value[command.id]||'')!==(defaultBindings.value[command.id]||'')).length)
+const presetWarnings = computed(()=>pendingPreset.value ? validatePresetConflicts(getPresetBindings(pendingPreset.value)) : [])
+function existingConflict(id:string) {
+  const binding=localShortcuts.value[id], conflict=checkBindingConflict(id,binding,localShortcuts.value)
+  return conflict && !isPriorityConflict(id,conflict,binding) ? conflict.description : ''
 }
-
-function resetAllToDefault() {
-  const presetDefaults = getPresetBindings(currentPresetId.value)
-  localShortcuts.value = { ...presetDefaults }
-  emit('update:shortcuts', { ...presetDefaults })
+function onPresetChange(newPreset: KeymapPresetId) { pendingPreset.value = newPreset }
+function resetAllToDefault() { pendingPreset.value = currentPresetId.value }
+function confirmPreset() {
+  if (!pendingPreset.value || presetWarnings.value.length) return
+  const preset=pendingPreset.value, bindings=getPresetBindings(preset)
+  localShortcuts.value=bindings
+  pendingPreset.value=null
+  emit('update:keymap',{preset,bindings})
 }
-
 function onUpdateSingleBinding(cmdId: string, binding: string) {
-  localShortcuts.value[cmdId] = binding
+  localShortcuts.value = {...localShortcuts.value,[cmdId]:binding}
   emit('update:shortcuts', { ...localShortcuts.value })
 }
-
-function onReassignBinding(payload: { newBinding: string; takeFromCommandId: string }) {
-  // 解绑原命令
-  if (payload.takeFromCommandId) {
-    localShortcuts.value[payload.takeFromCommandId] = ''
-  }
-  emit('update:shortcuts', { ...localShortcuts.value })
+function onReassignBinding(payload: { commandId:string; newBinding: string; takeFromCommandId: string }) {
+  const next = reassignBinding(localShortcuts.value,payload.commandId,payload.newBinding)
+  if (!next) return
+  localShortcuts.value=next
+  emit('update:shortcuts',next)
 }
 
 // 搜索与分类过滤
 const filteredCommands = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
-  if (!q) return allCommands
   return allCommands.filter(cmd => {
+    const binding = localShortcuts.value[cmd.id] || ''
+    if(shortcutFilter.value==='modified' && binding===(defaultBindings.value[cmd.id]||''))return false
+    if(shortcutFilter.value==='unbound' && binding)return false
+    if (!q) return true
     const labelMatch = cmd.label.toLowerCase().includes(q)
     const idMatch = cmd.id.toLowerCase().includes(q)
-    const binding = localShortcuts.value[cmd.id] || ''
-    const bindingMatch = binding.toLowerCase().includes(q)
+    const bindingMatch = [binding,keybindingLabel(binding),...effectiveBindings(cmd.id,localShortcuts.value).map(value=>keybindingLabel(value))].some(label=>label.toLowerCase().replace(/\s/g,'').includes(q.replace(/\s/g,'')))
     return labelMatch || idMatch || bindingMatch
   })
 })
@@ -463,7 +534,7 @@ h2 { margin:0;font-size: calc(var(--ui-font-size) + 2px);font-weight:600 }
 .settings-section:last-child { border-bottom:0;margin-bottom:0 }
 h3 { margin:0 0 12px;font-size: var(--ui-font-size);font-weight:600;color:var(--bright) }
 .settingrow { display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:calc(var(--ui-control-height) + 10px);font-size: var(--ui-font-size);color:var(--ink) }
-.settingrow label { flex:1;min-width:0 }
+.settingrow label,.settingrow .setting-label { flex:1;min-width:0 }
 select { width:176px;max-width:55%;height:var(--ui-control-height);background:var(--editor);border:1px solid var(--line);color:var(--ink);padding:4px 8px;border-radius:6px;font:inherit }
 .number-control { display:flex;align-items:center;gap:8px;color:var(--muted) }
 .number-control input { width:76px;height:var(--ui-control-height);border:1px solid var(--line);border-radius:6px;background:var(--editor);color:var(--ink);padding:4px 8px;font:inherit }
@@ -662,4 +733,27 @@ select:disabled { opacity:.45 }
   .settings-nav { width:44px;padding:12px 4px }.settings-nav button { padding:10px;justify-content:center }.settings-nav span { display:none }.settings-content { padding:16px }.settings-head { padding:14px 16px }
 }
 .fade-enter-active,.fade-leave-active { transition:opacity .15s }.fade-enter-from,.fade-leave-to { opacity:0 }
+.shortcuts-toolbar {position:sticky;top:-20px;z-index:2;background:var(--paper);padding:10px 0;flex-wrap:wrap;gap:8px}
+.shortcuts-toolbar .toolbar-field{flex:1 1 100%;min-width:0;flex-wrap:wrap}
+.shortcuts-toolbar .toolbar-search{min-width:140px}
+.shortcuts-toolbar :deep(.segmented-control){font-size:var(--ui-small-font-size)}
+.preset-select,.shortcut-search-input,.reset-all-btn{font-size:var(--ui-small-font-size);height:auto;min-height:var(--ui-control-height)}
+.shortcut-item-row{gap:12px;align-items:start;flex-wrap:wrap;padding:8px 0}
+.cmd-info{flex:1 1 160px;overflow-wrap:anywhere}.cmd-recorder{flex:0 1 260px;min-width:0;max-width:100%}
+.cmd-recorder :deep(.shortcut-recorder-wrap){display:flex;flex-wrap:wrap;max-width:100%}
+.cmd-recorder :deep(.keycap-container){flex-wrap:wrap;max-width:100%;min-width:0}
+.cmd-recorder :deep(.conflict-alert){position:static;flex-basis:100%;max-width:100%;min-width:0;flex-wrap:wrap}
+.cmd-label,.category-title,.toolbar-field label{font-size:var(--ui-font-size)}
+.cmd-desc,.keycap-unset,.setting-hint{font-size:var(--ui-small-font-size);line-height:1.5}
+.binding-warning{font-size:var(--ui-small-font-size);color:var(--yellow);overflow-wrap:anywhere}
+.modified-badge{color:var(--accent);font-size:var(--ui-small-font-size);font-weight:400}
+.preset-confirm{padding:10px;border:1px solid var(--accent);border-radius:6px;margin-bottom:12px;font-size:var(--ui-small-font-size)}
+.preset-confirm p{margin:0 0 8px}.preset-confirm button{padding:5px 10px;background:var(--accentbg);color:var(--accent);border-radius:4px;margin-right:8px}
+.settingrow{flex-wrap:wrap;gap:8px;padding:4px 0}.settingrow > label,.settingrow > .setting-label{flex:1 1 140px}.settingrow > :deep(.segmented-control){flex:0 1 auto;min-width:0}
+.settingrow > input[type=number]{width:90px;max-width:100%;background:var(--editor);color:var(--ink);border:1px solid var(--line);border-radius:5px;padding:5px;font:inherit}
+.indent-control{display:flex;gap:8px;align-items:center;max-width:100%;flex-wrap:wrap}.indent-control input{width:52px;min-height:30px;background:var(--editor);color:var(--ink);border:1px solid var(--line);border-radius:5px;font:inherit}
+.number-control{flex-wrap:wrap;max-width:100%}.pandoc-row{flex-wrap:wrap}.pandoc-info{min-width:0;overflow-wrap:anywhere}
+.settings-content{overflow-anchor:auto}
+.settings-content:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.settings-section{scroll-margin-top:20px}
+@media(prefers-reduced-motion:reduce){.fade-enter-active,.fade-leave-active,.setting-switch,.setting-switch::before{transition:none}}
 </style>

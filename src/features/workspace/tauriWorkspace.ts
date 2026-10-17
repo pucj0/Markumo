@@ -84,6 +84,10 @@ export const tauriWorkspace: WorkspaceGateway = {
     return invoke<OpenFile>('open_workspace_file', { path, encoding: encoding ?? null })
   },
 
+  async openDroppedWorkspace(token: string): Promise<WorkspaceInfo> {
+    return mapInfo(await invoke<RawWorkspaceInfo>('open_dropped_workspace', { token }))
+  },
+
   async readDirectory(path: string): Promise<WorkspaceNode[]> {
     const raw = await invoke<RawWorkspaceNode[]>('read_directory', { path })
     return raw.map(mapNode)

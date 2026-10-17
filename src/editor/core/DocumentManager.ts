@@ -10,6 +10,7 @@ import { detectLanguage, loadLanguage, type LanguageName } from '../languages'
 import { TabGroup } from '../../features/tabs/TabGroup'
 import { EditorLayoutManager } from '../layout/EditorLayoutManager'
 import type { SplitDirection } from '../layout/types'
+import type { SerializedLayoutNode } from '../layout/types'
 import type { EditorDocument, Theme, MarkdownMode } from '../../types'
 import { lineEndings, type LineEndingSnapshot } from './lineEndings'
 import type { FileMetadata, OpenFile, ClassInfo, MediaMetadata } from '../../features/files/contracts'
@@ -22,6 +23,8 @@ import { imageImportBookmarks } from '../markdown/imageImport'
 import { sameFilePath } from '../../features/files/pathKey'
 import { isMedia, newMediaViewState, type MediaViewState } from '../../features/files/media'
 import { cancelSmoothScroll, smoothScrollTo } from './smoothScroll'
+import { smoothCaret } from './smoothCaret'
+import type { CaretAnimation } from './caretMotion'
 
 export interface DocumentSeed { id: string; name: string; path: string; text: string; pinned?: boolean; mode?: MarkdownMode; kind?: 'text' | 'javaClass'; classInfo?: ClassInfo; encoding?: string }
 export type Pane = string
@@ -37,6 +40,7 @@ interface CachedDocument {
   theme: Compartment
   markdownMode: Compartment
   indent: Compartment
+  caret: Compartment
   languageGeneration: number
   readyLanguageGeneration: number | null
   scroll: { top: number; left: number }
@@ -52,6 +56,9 @@ export class DocumentManager {
   private liveOrigin: {pane:string;update:unknown}|null = null
   private markdownTypography = defaultMarkdownTypography()
   private markdownClipboard = defaultMarkdownClipboard()
+  private caretAnimation: CaretAnimation = 'smooth'
+  private shortcutLabels: Record<string,string> = {}
+  setShortcutLabels(labels:Record<string,string>) {this.shortcutLabels={...labels}}
   private readonly records = new Map<string, CachedDocument>()
   // Media documents deliberately have no EditorState, selection, undo history or text baseline.
   private readonly mediaRecords = new Map<string, { meta: EditorDocument; panes: Map<string, MediaViewState> }>()
@@ -159,7 +166,7 @@ export class DocumentManager {
   }
 
   private create(seed: DocumentSeed) {
-    const language = new Compartment(), wrap = new Compartment(), theme = new Compartment(), markdownMode = new Compartment(), indent = new Compartment()
+    const language = new Compartment(), wrap = new Compartment(), theme = new Compartment(), markdownMode = new Compartment(), indent = new Compartment(), caret = new Compartment()
     const endings = lineEndings(seed.text)
     const binary = seed.kind === 'javaClass'
     const byteEditor = seed.encoding === 'Hex'
@@ -170,6 +177,7 @@ export class DocumentManager {
       doc: seed.text,
       extensions: [
         coreExtensions,
+        caret.of(smoothCaret(this.caretAnimation)),
         imageImportBookmarks,
         markdownResources.of(createMarkdownResources(() => this.records.get(seed.id)?.meta.fileToken,()=>{const meta=this.records.get(seed.id)?.meta;return `${meta?.fileToken||''}|${meta?.path||''}`})),
         binary ? [EditorState.readOnly.of(true), EditorView.editable.of(false), EditorState.transactionFilter.of(tr => tr.docChanged ? [] : tr)] : [],
@@ -219,7 +227,7 @@ export class DocumentManager {
         encoding: seed.encoding || 'UTF-8', eol: /\r\n/.test(seed.text) ? 'CRLF' : 'LF', bom: false, readOnly: false, lastDiskVersion: null,
         charCount: state.doc.length, line: 1, column: 1, mode: initialMdMode,
       },
-      state, baseline: state.doc, baselineEndings: endings.snapshot(state), endings, language, wrap, theme, markdownMode, indent, languageGeneration: 0, readyLanguageGeneration: null, scroll: { top: 0, left: 0 },
+      state, baseline: state.doc, baselineEndings: endings.snapshot(state), endings, language, wrap, theme, markdownMode, indent, caret, languageGeneration: 0, readyLanguageGeneration: null, scroll: { top: 0, left: 0 },
       panes: { main: { selection: state.selection, top: 0, left: 0 }, secondary: { selection: state.selection, top: 0, left: 0 } },
     }
     this.records.set(seed.id, record)
@@ -528,7 +536,8 @@ export class DocumentManager {
         const source=record.state.doc.toString(),saved=record.panes[resolved]
         const sibling=[...this.liveViews.values()].find(live=>live.id===record.meta.id)?.editor
         const editor=new MarkdownEditorController(parent,{
-          source,anchor:saved.selection.main.anchor,head:saved.selection.main.head,resources:record.state.facet(markdownResources),typography:this.markdownTypography,clipboard:this.markdownClipboard,
+          shortcutLabel:id=>this.shortcutLabels[id],
+          source,anchor:saved.selection.main.anchor,head:saved.selection.main.head,resources:record.state.facet(markdownResources),typography:this.markdownTypography,clipboard:this.markdownClipboard,caretAnimation:this.caretAnimation,
           publish:(expected,patch,update,isolated)=>{
             if(this.records.get(record.meta.id)!==record||record.state.doc.toString()!==expected||record.state.readOnly)return false
             this.liveOrigin={pane:resolved,update}
@@ -572,6 +581,14 @@ export class DocumentManager {
     const resolved = this.resolvePaneId(pane)
     this.mountPane(parent, resolved)
     this.paneView(resolved)?.focus()
+  }
+
+  restoreLayout(layout: SerializedLayoutNode) {
+    for (const pane of this.hosts.keys()) this.destroyView(pane)
+    const restored = this.layout.deserialize(layout)
+    for (const pane of this.hosts.keys()) if (this.layout.getPane(pane)) this.showActive(pane)
+    this.notify()
+    return restored
   }
 
   mountSecondary(parent: HTMLElement) {
@@ -805,7 +822,16 @@ export class DocumentManager {
     for (const record of this.records.values()) this.effects(record, [record.indent.reconfigure([EditorState.tabSize.of(size), indentUnit.of(tabs ? '\t' : ' '.repeat(size))])])
   }
 
+  private get focusedCodeView() {
+    const element = document.activeElement?.closest<HTMLElement>('.cm-editor')
+    return element ? EditorView.findFromDOM(element) : null
+  }
   transformSelection(upper: boolean) {
+    const nested = this.focusedCodeView
+    if (nested && nested !== this.activeEditorView) {
+      if (!nested.state.readOnly && !this.isComposing) nested.dispatch({changes:nested.state.selection.ranges.filter(range=>!range.empty).map(range=>({from:range.from,to:range.to,insert:upper?nested.state.sliceDoc(range.from,range.to).toUpperCase():nested.state.sliceDoc(range.from,range.to).toLowerCase()})),annotations:isolateHistory.of('full'),userEvent:'input.case'})
+      return
+    }
     const id = this.activeId, view = this.paneView(this.activePane), record = id && this.records.get(id)
     if (!record || this.isComposing) return
     const state = view?.state || record.state
@@ -1013,6 +1039,11 @@ export class DocumentManager {
     for (const record of this.records.values()) this.effects(record, [record.theme.reconfigure(editorTheme(theme))])
   }
   refreshTypography() { this.setTheme(this.theme) }
+  setCaretAnimation(mode: CaretAnimation) {
+    this.caretAnimation = mode
+    for (const record of this.records.values()) this.effects(record, [record.caret.reconfigure(smoothCaret(mode))])
+    for (const live of this.liveViews.values()) live.editor.caretAnimation(mode)
+  }
   setMarkdownTypography(settings:MarkdownTypography){this.markdownTypography={...settings};for(const live of this.liveViews.values())live.editor.typography(settings);this.notify()}
   getMarkdownTypography(){return this.markdownTypography}
   setMarkdownClipboard(settings:MarkdownClipboardSettings){this.markdownClipboard={...settings};for(const live of this.liveViews.values())live.editor.clipboardSettings(settings)}
@@ -1025,15 +1056,16 @@ export class DocumentManager {
     }
     if (command === 'undo') { this.historyCommand(false); return }
     if (command === 'redo') { this.historyCommand(true); return }
+    const nested = this.focusedCodeView
     const live = this.activeLiveEditor
-    if (live) {
+    if (live && (!nested || ['find','replace','find-next','find-previous'].includes(command))) {
       if (command === 'find') live.find(false)
       else if (command === 'replace') live.find(true)
       else if (command === 'find-next') live.findNext()
       else if (command === 'find-previous') live.findPrevious()
       return
     }
-    const view = this.paneView(this.activePane)
+    const view = nested || this.paneView(this.activePane)
     if (!view) return
     view.focus()
     if (command === 'find-next') findNext(view)

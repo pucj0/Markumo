@@ -14,6 +14,67 @@ const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 pub struct ImageInput {
     pub token: String,
     pub name: String,
+    pub is_directory: bool,
+}
+
+#[cfg(test)]
+mod dropped_directory_tests {
+    use super::*;
+
+    #[test]
+    fn dropped_directories_are_classified_and_open_as_workspace_roots() {
+        let temporary = tempfile::tempdir().unwrap();
+        let folder = temporary.path().join("folder.png");
+        let second = temporary.path().join("second");
+        let file = temporary.path().join("note.md");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        std::fs::write(&file, "# test").unwrap();
+        let mut files = FileService::default();
+        files.set_owner("main");
+        let inputs = files.image_inputs(vec![folder.clone(), file, second.clone()]);
+        assert!(inputs[0].is_directory);
+        assert!(!inputs[1].is_directory);
+        assert!(serde_json::to_value(&inputs[0]).unwrap()["isDirectory"].as_bool().unwrap());
+        let mut workspace = crate::workspace::WorkspaceService::default();
+        let info = workspace.add_workspace(files.take_dropped_directory(&inputs[0].token).unwrap()).unwrap();
+        assert_eq!(PathBuf::from(info.root_path), folder.canonicalize().unwrap());
+        workspace.add_workspace(files.take_dropped_directory(&inputs[2].token).unwrap()).unwrap();
+        assert_eq!(workspace.roots().len(), 2);
+        assert!(files.take_dropped_directory(&inputs[0].token).is_err());
+        let batch = files.open_image_inputs(&[inputs[1].token.clone()]);
+        assert_eq!(batch.files.len(), 1);
+        assert!(batch.errors.is_empty());
+    }
+
+    #[test]
+    fn dropped_directory_tokens_are_window_scoped_and_revocable() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut files = FileService::default();
+        files.set_owner("main");
+        let input = files.image_inputs(vec![temporary.path().to_path_buf()]).remove(0);
+        files.set_owner("other");
+        assert!(files.take_dropped_directory(&input.token).is_err());
+        files.set_owner("main");
+        assert!(files.take_dropped_directory("untrusted-token").is_err());
+        assert!(files.take_dropped_directory(&input.token).is_ok());
+        let input = files.image_inputs(vec![temporary.path().to_path_buf()]).remove(0);
+        files.release_image_inputs(&[input.token.clone()]);
+        assert!(files.take_dropped_directory(&input.token).is_err());
+    }
+
+    #[test]
+    fn dropped_directory_is_revalidated_before_use() {
+        let temporary = tempfile::tempdir().unwrap();
+        let folder = temporary.path().join("changed");
+        std::fs::create_dir(&folder).unwrap();
+        let mut files = FileService::default();
+        let input = files.image_inputs(vec![folder.clone()]).remove(0);
+        std::fs::remove_dir(&folder).unwrap();
+        std::fs::write(&folder, "now a file").unwrap();
+        assert!(files.take_dropped_directory(&input.token).is_err());
+        assert!(files.take_dropped_directory(&input.token).is_err());
+    }
 }
 
 #[derive(Deserialize)]
@@ -236,6 +297,8 @@ impl FileService {
             .into_iter()
             .take(100)
             .map(|path| {
+                let is_directory = std::fs::symlink_metadata(&path)
+                    .is_ok_and(|metadata| metadata.is_dir());
                 self.next_token += 1;
                 let token = format!("image-input-{}", self.next_token);
                 let name = path
@@ -245,7 +308,7 @@ impl FileService {
                     .into_owned();
                 self.image_inputs
                     .insert(token.clone(), (self.current_owner.clone(), path));
-                ImageInput { token, name }
+                ImageInput { token, name, is_directory }
             })
             .collect()
     }
@@ -272,6 +335,22 @@ impl FileService {
             .collect();
         self.release_image_inputs(tokens);
         self.open_batch(paths, None)
+    }
+
+    /// Consume only a native capability belonging to this window. Validate again
+    /// at use time: the dropped path may have disappeared or become a link.
+    pub fn take_dropped_directory(&mut self, token: &str) -> Result<PathBuf> {
+        let path = self.image_inputs.get(token)
+            .filter(|(owner, _)| owner == &self.current_owner)
+            .map(|(_, path)| path.clone())
+            .ok_or_else(|| FileError::new("scope", "拖入目录授权已失效，请重新拖入。"))?;
+        self.image_inputs.remove(token);
+        crate::workspace::guard::validate_under_root(&path, &path)
+            .map_err(|error| FileError::new("path", &error.to_string()))?;
+        if !std::fs::metadata(&path).map_err(FileError::io)?.is_dir() {
+            return fail("path", "拖入的路径不是目录。");
+        }
+        Ok(path)
     }
 
     pub fn image_directory(&self, token: &str, relative: &str) -> Result<PathBuf> {

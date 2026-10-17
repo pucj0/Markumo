@@ -5,11 +5,25 @@ import path from 'node:path'
 import {pathToFileURL} from 'node:url'
 import {createServer} from 'vite'
 import {createHash} from 'node:crypto'
-import {collect,platforms,validate} from './release.mjs'
+import {collect,platforms,validate,releaseNotes} from './release.mjs'
 
 const version=JSON.parse(fs.readFileSync('package.json','utf8')).version,tag=`v${version}`
 assert.equal(validate(tag),version)
 assert.throws(()=>validate('v0.0.0'),/must match/)
+const pkg=JSON.parse(fs.readFileSync('package.json','utf8')),config=JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json','utf8'))
+const cargo=fs.readFileSync('src-tauri/Cargo.toml','utf8'),lock=fs.readFileSync('src-tauri/Cargo.lock','utf8')
+assert.equal(pkg.license,'AGPL-3.0-only')
+assert.match(cargo,/^license = "AGPL-3\.0-only"$/m)
+assert.equal(config.bundle.license,pkg.license)
+assert.equal(path.resolve('src-tauri',config.bundle.licenseFile),path.resolve('LICENSE'))
+assert.equal(config.bundle.resources['../LICENSE'],'LICENSE')
+const license=fs.readFileSync('LICENSE','utf8')
+assert.match(license,/GNU AFFERO GENERAL PUBLIC LICENSE/)
+assert.match(license,/Version 3, 19 November 2007/)
+assert.match(license,/13\. Remote Network Interaction/)
+assert.ok(Buffer.byteLength(license)>30000)
+assert.equal(/name = "markumo"\r?\nversion = "([^"]+)"/.exec(lock)?.[1],version)
+assert.ok(fs.existsSync(`docs/releases/${tag}.md`))
 const folder=fs.mkdtempSync(path.join(os.tmpdir(),'markumo-release-'))
 try{
   for(const platform of platforms){
@@ -21,6 +35,13 @@ try{
   }
   const result=collect(folder,version,tag,'pucj0/Markumo')
   assert.equal(result.assets.length,9)
+  assert.equal(result.manifest.notes,releaseNotes(version,tag))
+  const notesDir=path.join(folder,'notes');fs.mkdirSync(notesDir)
+  assert.match(releaseNotes(version,tag,notesDir),/Markumo/)
+  fs.writeFileSync(path.join(notesDir,tag+'.md'),'# Real notes\n\n- Feature improvement')
+  assert.equal(collect(folder,version,tag,'pucj0/Markumo',notesDir).manifest.notes,'# Real notes\n\n- Feature improvement')
+  fs.writeFileSync(path.join(notesDir,tag+'.md'),'x'.repeat(65537))
+  assert.throws(()=>collect(folder,version,tag,'pucj0/Markumo',notesDir),/64 KiB/)
   assert.equal(result.assets.some(asset=>asset.name.endsWith('.sig')),false)
   assert.deepEqual(JSON.parse(result.assets.find(asset=>asset.name==='latest.json').bytes),result.manifest)
   const checksums=result.assets.find(asset=>asset.name==='SHA256SUMS').bytes.toString()
@@ -45,21 +66,22 @@ try{
   await page.getByRole('button',{name:'在 GitHub 查看 Markumo'}).click()
   assert.deepEqual(await page.evaluate(()=>window.projectLinks),[['https://github.com/pucj0/Markumo','_blank','noopener,noreferrer']])
   const result=await page.evaluate(async()=>{
-    const {AppUpdater,updateState}=await import('/src/features/shell/AppUpdater.ts')
+    const {UpdateManager,updateState}=await import('/src/features/shell/AppUpdater.ts')
+    const services={acquire:async()=>{},release:async()=>{},markPending:async()=>{},clearPending:async()=>{},finishPreparation(){},notify(){}}
     let installs=0,downloads=0,relaunches=0,closed=0,allowed=false
     const update={version:'1.1.0',body:'Release notes',async download(progress){downloads++;progress({event:'Started',data:{contentLength:20}});progress({event:'Progress',data:{chunkLength:20}})},async install(){installs++},async close(){closed++}}
-    const state=updateState(),controller=new AppUpdater(state,{check:async()=>update,beforeInstall:async()=>allowed,relaunch:async()=>{relaunches++}})
-    await controller.check();const available=state.phase==='available'
-    await controller.install();const guarded=state.phase==='downloaded'&&installs===0&&state.received===20
-    allowed=true;await controller.install();const installed=state.phase==='ready'&&downloads===1&&installs===1&&relaunches===1
+    const state=updateState(),controller=new UpdateManager(state,{...services,check:async()=>update,prepare:async()=>allowed,relaunch:async()=>{relaunches++}})
+    await controller.checkForUpdates();const available=state.phase==='available'
+    await controller.downloadUpdate();await controller.installUpdate();const guarded=state.phase==='downloaded'&&installs===0&&state.received===20
+    allowed=true;await controller.installUpdate();const installed=state.phase==='awaiting-restart'&&downloads===1&&installs===1&&relaunches===1
     controller.dispose();await Promise.resolve()
-    const failure=updateState(),failed=new AppUpdater(failure,{check:async()=>{throw Error('offline')},beforeInstall:async()=>true,relaunch:async()=>{}})
-    await failed.check();const offline=failure.phase==='error'&&failure.error.includes('offline');failed.dispose()
-    let release;const pending=new Promise(resolve=>release=resolve),late=updateState(),cancelled=new AppUpdater(late,{check:()=>pending,beforeInstall:async()=>true,relaunch:async()=>{}})
-    const checking=cancelled.check();cancelled.dispose();release(update);await checking
+    const failure=updateState(),failed=new UpdateManager(failure,{...services,check:async()=>{throw Error('offline')},prepare:async()=>true,relaunch:async()=>{}})
+    await failed.checkForUpdates();const offline=failure.phase==='error'&&failure.error.includes('offline');failed.dispose()
+    let release;const pending=new Promise(resolve=>release=resolve),late=updateState(),cancelled=new UpdateManager(late,{...services,check:()=>pending,prepare:async()=>true,relaunch:async()=>{}})
+    const checking=cancelled.checkForUpdates();await new Promise(resolve=>setTimeout(resolve,0));cancelled.dispose();release(update);await checking
     const corrupt=updateState();let corruptInstalled=false
-    const signatureFailure=new AppUpdater(corrupt,{check:async()=>({...update,download:async()=>{throw Error('signature verification failed')},install:async()=>{corruptInstalled=true}}),beforeInstall:async()=>true,relaunch:async()=>{}})
-    await signatureFailure.check();await signatureFailure.install();signatureFailure.dispose()
+    const signatureFailure=new UpdateManager(corrupt,{...services,check:async()=>({...update,download:async()=>{throw Error('signature verification failed')},install:async()=>{corruptInstalled=true}}),prepare:async()=>true,relaunch:async()=>{}})
+    await signatureFailure.checkForUpdates();await signatureFailure.downloadUpdate();signatureFailure.dispose()
     return {available,guarded,installed,offline,closed,signatureRejected:!corruptInstalled&&corrupt.phase==='available'}
   })
   assert.deepEqual(result,{available:true,guarded:true,installed:true,offline:true,closed:3,signatureRejected:true})

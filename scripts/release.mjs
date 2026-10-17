@@ -17,8 +17,18 @@ export function validate(tag=process.env.RELEASE_TAG){
   return pkg.version
 }
 function walk(folder){return fs.readdirSync(folder,{withFileTypes:true}).flatMap(entry=>entry.isDirectory()?walk(path.join(folder,entry.name)):[path.join(folder,entry.name)])}
-export function collect(folder,version,tag,repository){
-  const assets=[],manifest={version,notes:`Markumo ${version}`,pub_date:new Date().toISOString(),platforms:{}}
+export function releaseNotes(version,tag,directory='docs/releases'){
+  if(!/^v\d+\.\d+\.\d+$/.test(tag))throw Error('Invalid release notes tag.')
+  const file=path.join(directory,`${tag}.md`)
+  if(fs.existsSync(file)){
+    const notes=fs.readFileSync(file,'utf8').trim()
+    if(Buffer.byteLength(notes)>65536)throw Error('Release notes exceed 64 KiB.')
+    if(notes)return notes
+  }
+  return `Markumo ${version}\n\n功能改进、体验优化与问题修复。请查看 GitHub Release 获取完整发布信息。`
+}
+export function collect(folder,version,tag,repository,notesDirectory='docs/releases'){
+  const assets=[],manifest={version,notes:releaseNotes(version,tag,notesDirectory),pub_date:new Date().toISOString(),platforms:{}}
   for(const platform of platforms){
     const files=walk(path.join(folder,`bundles-${platform.target}`))
     for(const extension of [platform.update,...platform.extra]){
@@ -43,8 +53,8 @@ export function collect(folder,version,tag,repository){
 async function publish(){
   const tag=process.env.RELEASE_TAG,version=validate(tag),repository=process.env.GITHUB_REPOSITORY
   if(!/^[\w.-]+\/[\w.-]+$/.test(repository||''))throw Error('GITHUB_REPOSITORY is required.')
-  const {assets}=collect('.release-artifacts',version,tag,repository)
-  const notesFile=`docs/releases/${tag}.md`,body=fs.existsSync(notesFile)?fs.readFileSync(notesFile,'utf8'):`Markumo ${version}`
+  const {assets,manifest}=collect('.release-artifacts',version,tag,repository)
+  const body=manifest.notes
   const token=process.env.GITHUB_TOKEN;if(!token)throw Error('GITHUB_TOKEN is required.')
   async function api(url,method='GET',data,raw=false){
     const response=await fetch(url,{method,headers:{Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','Content-Type':raw?'application/octet-stream':'application/json'},body:data===undefined?undefined:raw?data:JSON.stringify(data),signal:AbortSignal.timeout(180000)})

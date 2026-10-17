@@ -263,6 +263,8 @@ pub struct LastSession {
     pub tabs: Vec<SessionTab>,
     pub active_path: Option<String>,
     pub layout: Layout,
+    #[serde(default)]
+    pub editor_layout: Option<serde_json::Value>,
 }
 impl LastSession {
     fn validate(&self) -> Result<(), String> {
@@ -316,8 +318,42 @@ impl LastSession {
         {
             return Err("会话标签或活动标签无效".into());
         }
+        if let Some(editor)=&self.editor_layout {validate_editor_layout(editor,&unique)?;}
         Ok(())
     }
+}
+fn validate_editor_layout(layout:&serde_json::Value, paths:&std::collections::HashSet<&String>)->Result<(),String>{
+    fn node(raw:&serde_json::Value,paths:&std::collections::HashSet<&String>,ids:&mut std::collections::HashSet<String>,depth:usize)->Result<(),String>{
+        if depth>8||ids.len()>=63{return Err("分栏布局超出限制".into())}
+        let id=raw["id"].as_str().filter(|id|!id.is_empty()&&id.len()<=128).ok_or("分栏标识无效")?;
+        if !ids.insert(id.into()){return Err("分栏标识重复".into())}
+        let allowed=match raw["type"].as_str(){
+            Some("split")=>{
+                if ![Some("horizontal"),Some("vertical")].contains(&raw["orientation"].as_str())||raw["ratio"].as_f64().is_none_or(|ratio|!(0.05..=0.95).contains(&ratio)){return Err("分栏比例无效".into())}
+                node(&raw["first"],paths,ids,depth+1)?;node(&raw["second"],paths,ids,depth+1)?;
+                vec!["type","id","orientation","ratio","first","second"]
+            },
+            Some("leaf")=>{
+                let tabs=raw["tabs"].as_array().filter(|tabs|tabs.len()<=100).ok_or("分栏标签无效")?;
+                for tab in tabs {
+                    if tab["documentId"].as_str().is_none_or(|path|!paths.iter().any(|p|p.as_str()==path))||!tab["pinned"].is_boolean()||tab.as_object().is_none_or(|obj|obj.keys().any(|key|!["documentId","pinned"].contains(&key.as_str()))){return Err("分栏文件无效".into())}
+                }
+                if !raw["activeId"].is_null()&&!tabs.iter().any(|tab|tab["documentId"]==raw["activeId"]){return Err("分栏活动标签无效".into())}
+                vec!["type","id","tabs","activeId"]
+            }, _=>return Err("分栏类型无效".into())
+        };
+        if raw.as_object().is_none_or(|object|object.keys().any(|key|!allowed.contains(&key.as_str()))){return Err("分栏字段无效".into())}Ok(())
+    }
+    if serde_json::to_vec(layout).map_err(|e|e.to_string())?.len()>128*1024{return Err("分栏布局过大".into())}
+    let mut ids=std::collections::HashSet::new();node(&layout["root"],paths,&mut ids,0)?;
+    if layout["activePane"].as_str().is_none_or(|pane|!ids.contains(pane))||(!layout["maximizedPane"].is_null()&&layout["maximizedPane"].as_str().is_none_or(|pane|!ids.contains(pane))){return Err("活动分栏无效".into())}
+    if layout.as_object().is_none_or(|object|object.keys().any(|key|!["root","activePane","maximizedPane","modes"].contains(&key.as_str()))){return Err("分栏元数据字段无效".into())}
+    if let Some(modes)=layout.get("modes"){
+        for(pane,values)in modes.as_object().ok_or("编辑模式无效")?{
+            if !ids.contains(pane){return Err("编辑模式分栏无效".into())}
+            for(path,mode)in values.as_object().ok_or("编辑模式无效")?{if !paths.iter().any(|p|p.as_str()==path)||![Some("live"),Some("source"),Some("split")].contains(&mode.as_str()){return Err("编辑模式无效".into())}}
+        }
+    }Ok(())
 }
 #[derive(Default)]
 pub struct SessionService {
@@ -376,6 +412,8 @@ pub struct SessionInput {
     pub tabs: Vec<SessionTabInput>,
     pub active_token: Option<String>,
     pub layout: Layout,
+    #[serde(default)]
+    pub editor_layout: Option<serde_json::Value>,
 }
 pub fn capture(
     input: SessionInput,
@@ -422,7 +460,52 @@ pub fn capture(
         tabs,
         active_path,
         layout: input.layout,
+        editor_layout: input.editor_layout.map(|mut layout| -> Result<serde_json::Value,String> {
+            fn map_node(node:&mut serde_json::Value,files:&FileService,depth:usize)->Result<(),String>{
+                if depth>8{return Err("分栏布局过深".into())}
+                if node["id"].as_str().is_none_or(|id|id.len()>128){return Err("分栏标识无效".into())}
+                match node["type"].as_str(){
+                    Some("split")=>{map_node(&mut node["first"],files,depth+1)?;map_node(&mut node["second"],files,depth+1)?;},
+                    Some("leaf")=>{
+                        let tabs=node["tabs"].as_array_mut().ok_or("分栏标签无效")?;
+                        if tabs.len()>100{return Err("分栏标签过多".into())}
+                        for tab in tabs {let token=tab["documentId"].as_str().ok_or("分栏文件无效")?;let path=files.session_path(token).map_err(|e|e.message)?;tab["documentId"]=path.to_string_lossy().to_string().into();}
+                        if let Some(token)=node["activeId"].as_str(){let path=files.session_path(token).map_err(|e|e.message)?;node["activeId"]=path.to_string_lossy().to_string().into();}
+                    },
+                    _=>return Err("分栏类型无效".into())
+                } Ok(())
+            }
+            if serde_json::to_vec(&layout).map_err(|e|e.to_string())?.len()>128*1024{return Err("分栏布局过大".into())}
+            map_node(&mut layout["root"],files,0)?;
+            if let Some(modes)=layout.get_mut("modes"){
+                for values in modes.as_object_mut().ok_or("编辑模式无效")?.values_mut(){
+                    let entries=values.as_object().ok_or("编辑模式无效")?.clone();let mut mapped=serde_json::Map::new();
+                    for(token,mode)in entries{mapped.insert(files.session_path(&token).map_err(|e|e.message)?.to_string_lossy().into_owned(),mode);}
+                    *values=serde_json::Value::Object(mapped);
+                }
+            }Ok(layout)
+        }).transpose()?,
     };
     session.validate()?;
     Ok(session)
+}
+
+#[cfg(test)]
+mod editor_layout_tests {
+    use super::*;
+    #[test]
+    fn split_editor_session_maps_capabilities_to_paths_and_round_trips_safely(){
+        let temp=tempfile::tempdir().unwrap();let file=temp.path().join("note.md");std::fs::write(&file,"# editor state\n").unwrap();
+        let mut files=FileService::default();files.set_owner("main");let opened=files.open_selected(file,None).unwrap();let token=&opened.metadata.token;
+        let input=serde_json::json!({"kind":"single","tabs":[{"token":token,"encoding":"UTF-8"}],"activeToken":token,"layout":{"mode":"single","sidebarVisible":false,"sidebarWidth":254},
+            "editorLayout":{"activePane":"secondary","maximizedPane":null,"modes":{"main":{token:"source"},"secondary":{token:"live"}},"root":{"type":"split","id":"split","orientation":"horizontal","ratio":0.4,
+                "first":{"type":"leaf","id":"main","tabs":[{"documentId":token,"pinned":true}],"activeId":token},"second":{"type":"leaf","id":"secondary","tabs":[{"documentId":token,"pinned":true}],"activeId":token}}}});
+        let session=capture(serde_json::from_value(input).unwrap(),&files,Vec::new()).unwrap();
+        assert_eq!(session.editor_layout.as_ref().unwrap()["root"]["first"]["tabs"][0]["documentId"],opened.metadata.path);
+        let mut store=SessionService::default();store.configure(temp.path().join("last-session.json"));store.save(&session).unwrap();
+        let restored=store.load().unwrap().unwrap();assert_eq!(restored.editor_layout.as_ref().unwrap()["activePane"],"secondary");
+        assert_eq!(restored.editor_layout.as_ref().unwrap()["modes"]["main"][&opened.metadata.path],"source");
+        let mut corrupt=restored.clone();corrupt.editor_layout.as_mut().unwrap()["root"]["first"]["content"]="must not persist document bodies".into();assert!(store.save(&corrupt).is_err());
+        let mut legacy=serde_json::to_value(restored).unwrap();legacy.as_object_mut().unwrap().remove("editorLayout");let old:LastSession=serde_json::from_value(legacy).unwrap();old.validate().unwrap();assert!(old.editor_layout.is_none());
+    }
 }

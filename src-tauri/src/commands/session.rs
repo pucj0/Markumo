@@ -17,6 +17,7 @@ pub struct Startup {
     layout: Layout,
     warnings: Vec<String>,
     owns_session: bool,
+    editor_layout: Option<serde_json::Value>,
 }
 
 #[tauri::command]
@@ -51,6 +52,7 @@ pub async fn initialize_launch(
             layout: Layout::default(),
             warnings: Vec::new(),
             owns_session: launch.kind == LaunchKind::App,
+            editor_layout: None,
         };
         let session = match session {
             Ok(session) => session,
@@ -62,6 +64,7 @@ pub async fn initialize_launch(
         if let Some(session) = session.as_ref() {
             result.layout = session.layout.clone();
             result.active_path = session.active_path.clone();
+            result.editor_layout = session.editor_layout.clone();
             if session.kind == "workspace" {
                 let mut ws = workspaces.lock().map_err(|e| e.to_string())?;
                 for root in &session.roots {
@@ -127,9 +130,13 @@ pub async fn persist_session(
     sessions: State<'_, SessionStore>,
     files: State<'_, FileStore>,
     workspaces: State<'_, WorkspaceStore>,
+    updates: State<'_, super::update::UpdateStore>,
+    for_update: Option<bool>,
 ) -> Result<(), String> {
     let label = window.label();
-    if launches
+    if for_update.unwrap_or(false) {
+        updates.lock().map_err(|e|e.to_string())?.require_owner(label)?;
+    } else if launches
         .lock()
         .map_err(|e| e.to_string())?
         .owner()

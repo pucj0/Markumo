@@ -1,0 +1,25 @@
+.smooth-caret-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  z-index: 6;
+  contain: strict;
+}
+.smooth-caret-layer[hidden] { display: none; }
+.smooth-caret {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--bright, currentColor);
+  pointer-events: none;
+}
+/* drawSelection, selection backgrounds and secondary cursors stay installed.
+   Multi-range selections use the original cursor layer in its entirety. */
+.cm-editor.smooth-caret-active > .cm-scroller > .cm-cursorLayer { visibility: hidden; }
+.cm-editor.smooth-caret-active > .cm-scroller > .cm-content,
+.cm-editor.smooth-caret-active > .cm-scroller > .cm-content * { caret-color: transparent !important; }

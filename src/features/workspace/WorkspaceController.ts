@@ -152,6 +152,14 @@ export class WorkspaceController {
   }
 
   async openWorkspacePath(path: string, add = false): Promise<boolean> {
+    return this.loadWorkspace(() => this.gateway.openWorkspacePath(path, add), add)
+  }
+
+  async openDroppedWorkspace(token: string): Promise<boolean> {
+    return this.loadWorkspace(() => this.gateway.openDroppedWorkspace(token), true)
+  }
+
+  private async loadWorkspace(load: () => Promise<WorkspaceInfo>, add: boolean): Promise<boolean> {
     if (this.operationBusy || this.fileController.saving.size || this.documentManager.isComposing) {
       this.notify('请等待文件操作和输入完成，再切换工作区。'); return false
     }
@@ -161,7 +169,7 @@ export class WorkspaceController {
     }
     if (!this.beginMutation()) return false
     try {
-      const info = await this.gateway.openWorkspacePath(path, add)
+      const info = await load()
       if (add && this.rootPath) this.addWorkspace(info)
       else this.applyWorkspace(info)
       return true
