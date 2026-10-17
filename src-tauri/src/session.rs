@@ -301,6 +301,7 @@ impl LastSession {
                 "windows-1252",
                 "Hex",
                 "ClassInfo",
+                "Media",
             ]
             .contains(&t.encoding.as_str())
         }) {

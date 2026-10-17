@@ -21,7 +21,9 @@ export interface ClassInfo {
 export interface HexPage { offset: number; totalLength: number; nextOffset: number | null; text: string }
 export interface TextOpenFile extends FileMetadata { kind?: 'text'; text: string }
 export interface JavaClassOpenFile extends FileMetadata { kind: 'javaClass'; text: ''; classInfo: ClassInfo }
-export type OpenFile = TextOpenFile | JavaClassOpenFile
+export interface MediaMetadata { byteLength: number; mime: string; format: string; width?: number; height?: number }
+export interface MediaOpenFile extends FileMetadata { kind: 'image' | 'pdf'; text: ''; media: MediaMetadata }
+export type OpenFile = TextOpenFile | JavaClassOpenFile | MediaOpenFile
 export interface OpenBatch { files: OpenFile[]; errors: string[] }
 export interface SaveTarget { token: string; path: string; version: string | null }
 export interface Preferences {

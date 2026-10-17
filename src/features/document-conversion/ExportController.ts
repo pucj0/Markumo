@@ -19,7 +19,7 @@ export class ExportController {
     if (!doc) return false
     // Document must be a Markdown file or in markdown mode
     return (
-      doc.kind !== 'javaClass' &&
+      (!doc.kind || doc.kind === 'text') &&
       doc.encoding !== 'Hex' &&
       (doc.mode !== undefined || /\.(md|markdown|mdown|mkd)$/i.test(doc.name))
     )

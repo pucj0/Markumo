@@ -7,7 +7,7 @@
       :theme="theme"
       :focus-mode="focusMode"
       :desktop="desktop"
-      :file-busy="fileBusy || activeDoc?.kind === 'javaClass'"
+      :file-busy="fileBusy || (!!activeDoc?.kind && activeDoc.kind !== 'text')"
       :menu-groups="menuGroups"
       :command-registry="commandRegistry"
       :quick-shortcut="shortcuts['quick-open']"

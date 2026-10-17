@@ -1,7 +1,9 @@
 <template>
   <div class="pane-body" :class="{ 'class-pane': doc?.kind === 'javaClass' }">
     <div v-if="currentMode === 'live' && tooLarge" class="markdown-budget" role="status">文档超过 Live 安全预算，当前使用源码编辑。</div>
-    <div v-show="doc" ref="host" class="editor-host" :style="hostStyle" @scroll.capture="onEditorScroll"></div>
+    <ImageViewer v-if="doc?.kind === 'image'" :key="`${doc.id}:${doc.fileToken}:${pane}`" :doc="doc" :state="manager.mediaViewState(doc.id, pane)" @metadata="(media, version) => doc && manager.updateMediaMetadata(doc.id, media, version)" />
+    <PdfViewer v-if="doc?.kind === 'pdf'" :key="`${doc.id}:${doc.fileToken}:${pane}`" :doc="doc" :pane="pane" :state="manager.mediaViewState(doc.id, pane)" @metadata="(media, version) => doc && manager.updateMediaMetadata(doc.id, media, version)" />
+    <div v-show="doc && !isMedia(doc)" ref="host" class="editor-host" :style="hostStyle" @scroll.capture="onEditorScroll"></div>
     <div v-if="currentMode === 'split' && !tooLarge" class="split-resizer" title="拖动调整双栏比例" @mousedown.prevent="startSplitResize"></div>
     <SplitPreview v-if="currentMode === 'split'" ref="preview" :style="previewStyle" :image-border="manager.getMarkdownTypography().imageBorder" :content="text" :too-large="tooLarge" :resources="resources" :resource-key="`${doc?.fileToken||''}|${doc?.path||''}`" @scroll-line="onPreviewScroll" @edit-image="editImage" />
     <ClassHexPanel v-if="doc?.kind === 'javaClass'" :key="doc.id" :doc="doc" :files="files" />
@@ -9,7 +11,10 @@
   </div>
 </template>
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { isMedia } from '../../features/files/media'
+const ImageViewer = defineAsyncComponent(() => import('../viewers/ImageViewer.vue'))
+const PdfViewer = defineAsyncComponent(() => import('../viewers/PdfViewer.vue'))
 import SplitPreview from '../../editor/markdown/splitPreview.vue'
 import type { DocumentManager, Pane } from '../../editor/core/DocumentManager'
 import type { EditorDocument } from '../../types'
@@ -109,6 +114,10 @@ function onPreviewScroll(lineNumber: number) {
 }
 
 onMounted(() => { if (host.value) props.manager.mountPane(host.value, props.pane) })
+watch(() => props.pane, (pane, previous) => {
+  props.manager.unmount(previous, host.value)
+  if (host.value) props.manager.mountPane(host.value, pane)
+}, { flush: 'post' })
 watch(() => !!props.doc, (present, previous) => {
   if (present && !previous && props.manager.activePane === props.pane) props.manager.focusPane(props.pane)
 }, { flush: 'post' })

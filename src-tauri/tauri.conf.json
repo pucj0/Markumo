@@ -23,8 +23,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'",
-      "devCsp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; font-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'",
+      "devCsp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; font-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {
@@ -43,6 +43,19 @@
       }
     },
     "fileAssociations": [
+      {
+        "ext": ["png", "apng", "jpg", "jpeg", "jfif", "gif", "webp", "bmp", "svg", "ico", "cur", "avif"],
+        "name": "Markumo.ImageFile",
+        "description": "图片 (Markumo)",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["pdf"],
+        "name": "Markumo.PdfDocument",
+        "description": "PDF 文档 (Markumo)",
+        "role": "Viewer",
+        "mimeType": "application/pdf"
+      },
       {
         "ext": ["txt", "log", "ini", "cfg", "conf", "properties"],
         "name": "Markumo.TextDocument",

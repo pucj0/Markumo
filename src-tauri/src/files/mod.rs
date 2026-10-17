@@ -2,6 +2,7 @@ pub(crate) mod atomic;
 mod codec;
 pub mod classfile;
 pub mod images;
+pub mod media;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -35,10 +36,11 @@ pub struct OpenFile {
     // Empty for JavaClass, never decoded from binary bytes.
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")] pub class_info: Option<classfile::ClassInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub media: Option<media::MediaMetadata>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum FileKind { Text, JavaClass }
+pub enum FileKind { Text, JavaClass, Image, Pdf }
 #[derive(Default, Serialize)]
 pub struct OpenBatch { pub files: Vec<OpenFile>, pub errors: Vec<String> }
 #[derive(Debug, Serialize)]
@@ -222,6 +224,18 @@ impl FileService {
     }
     pub fn open_selected(&mut self, selected: PathBuf, encoding: Option<&str>) -> Result<OpenFile> {
         let path = checked_path(&selected, false)?;
+        // Inspect a bounded header before the text reader (which keeps its 16 MiB limit).
+        if encoding.is_none() || encoding == Some("Media") {
+            if let Some((kind, media, version)) = media::inspect(&path)? {
+                let token = self.grant(selected, path.clone(), false);
+                let warning = self.recent(&path);
+                return Ok(OpenFile { metadata: FileMetadata { token, path: path.to_string_lossy().into_owned(),
+                    name: path.file_name().unwrap().to_string_lossy().into_owned(), encoding: "Binary".into(),
+                    bom: false, eol: "LF".into(), read_only: true, version, warning }, kind,
+                    text: String::new(), class_info: None, media: Some(media) });
+            }
+            if encoding == Some("Media") { return fail("media_type", "文件已不再是支持的图片或 PDF，请关闭后重新打开。"); }
+        }
         let (bytes, version, read_only) = read_disk(&path)?;
         // Keep structural inspection as an explicit view; opening is editable by default.
         if encoding == Some("ClassInfo") {
@@ -229,7 +243,7 @@ impl FileService {
             let token = self.grant(selected, path.clone(), false);
             let warning = self.recent(&path);
             return Ok(OpenFile { metadata: FileMetadata { token, path:path.to_string_lossy().into_owned(), name:path.file_name().unwrap().to_string_lossy().into_owned(),
-                encoding:"Binary".into(),bom:false,eol:"LF".into(),read_only:true,version,warning },kind:FileKind::JavaClass,text:String::new(),class_info:Some(class_info) });
+                encoding:"Binary".into(),bom:false,eol:"LF".into(),read_only:true,version,warning },kind:FileKind::JavaClass,text:String::new(),class_info:Some(class_info),media:None });
         }
         if encoding == Some("Hex") && bytes.len() > MAX_BYTES as usize / 3 { return fail("size", "文件的十六进制显示超过 16 MiB，请使用专用二进制编辑器。"); }
         // Extensions select highlighting only. Binary bytes use an editable,
@@ -249,14 +263,14 @@ impl FileService {
         self.grants.get_mut(&token).unwrap().hex = encoding == "Hex";
         let warning = self.recent(&path);
         Ok(OpenFile { metadata: FileMetadata { token, path: path.to_string_lossy().into_owned(), name: path.file_name().unwrap().to_string_lossy().into_owned(),
-            eol: codec::eol(&text), encoding, bom, read_only, version, warning }, kind:FileKind::Text,text,class_info:None })
+            eol: codec::eol(&text), encoding, bom, read_only, version, warning }, kind:FileKind::Text,text,class_info:None,media:None })
     }
     pub fn open_recent(&mut self, path: &str, encoding: Option<&str>) -> Result<OpenFile> {
         if !self.preferences.recent.iter().any(|entry| entry.path == path) { return fail("scope", "该路径不在最近文件授权列表。" ); }
         self.open_selected(PathBuf::from(path), encoding)
     }
     pub fn reopen(&mut self, token: &str, encoding: &str) -> Result<OpenFile> {
-        if encoding != "Hex" { self.require_text_grant(token)?; }
+        if encoding != "Hex" && encoding != "Media" { self.require_text_grant(token)?; }
         let path = self.validate(token, false)?;
         self.open_selected(path, Some(encoding))
     }
@@ -298,7 +312,7 @@ impl FileService {
     fn require_text_grant(&self, token: &str) -> Result<()> {
         self.session_path(token)?;
         match self.grants.get(token) {
-            Some(grant) if !grant.writable => fail("read_only_binary", "ClassFile 仅供只读查看，不能作为文本保存或另存为。"),
+            Some(grant) if !grant.writable => fail("read_only_binary", "媒体和 ClassFile 仅供只读查看，不能作为文本保存或另存为。"),
             Some(_) => Ok(()),
             None => fail("scope", "文件授权已经释放或无效。"),
         }

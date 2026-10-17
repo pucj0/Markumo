@@ -258,7 +258,7 @@ const activeDoc = computed(() => {
 })
 
 const isMarkdownDoc = computed(() => {
-  return activeDoc.value?.kind !== 'javaClass' && /\.(md|markdown)$/i.test(activeDoc.value?.name || '')
+  return (!activeDoc.value?.kind || activeDoc.value.kind === 'text') && /\.(md|markdown)$/i.test(activeDoc.value?.name || '')
 })
 
 const outlineItems = computed<OutlineItem[]>(() => {

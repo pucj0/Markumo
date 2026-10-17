@@ -75,7 +75,7 @@ register('batch','bat cmd');register('shell','sh bash zsh fish');register('power
 register('java','java class jar');register('c','c h');register('cpp','cpp cc cxx c++ hpp hh hxx');register('csharp','cs csx')
 register('kotlin','kt kts');register('swift','swift');register('ruby','rb erb rake');register('php','php phtml')
 register('dart','dart');register('svelte','svelte');register('graphql','graphql gql')
-register('image','png jpg jpeg gif webp avif bmp ico tif tiff heic');register('vector','svg svgz')
+register('image','png apng jpg jpeg jfif jpe pjpeg pjp gif webp avif bmp ico cur tif tiff heic heif');register('vector','svg svgz')
 register('archive','zip 7z rar gz bz2 xz tar tgz zst');register('audio','mp3 wav flac ogg m4a aac opus')
 register('video','mp4 mkv mov avi webm m4v');register('font','ttf otf woff woff2');register('pdf','pdf')
 register('binary','exe dll bin dat wasm so dylib o obj lib a pdb');register('lock','lock')

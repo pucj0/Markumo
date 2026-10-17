@@ -1,6 +1,7 @@
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { Encoding, FileOpenEncoding, FileGateway, OpenBatch, OpenFile } from './contracts'
 import { sameFilePath } from './pathKey'
+import { isMedia } from './media'
 
 export function fileError(error: unknown) {
   if (typeof error === 'string') return error
@@ -15,20 +16,25 @@ export class FileController {
   readonly saving = new Set<string>()
   workspaceBusy = false
   private disposed = false
-  constructor(readonly manager: DocumentManager, readonly gateway: FileGateway, private readonly notify: (message: string) => void) {}
+  private readonly stopRelease: () => void
+  constructor(readonly manager: DocumentManager, readonly gateway: FileGateway, private readonly notify: (message: string) => void) {
+    this.stopRelease = manager.onFileRelease(token => { void gateway.release(token).catch(error => notify(fileError(error))) })
+  }
 
   accept(file: OpenFile, preview = false) {
     if (this.disposed) { void this.gateway.release(file.token).catch(() => {}); return false }
     const existing = this.manager.openedDocuments.find(doc => doc.fileToken && sameFilePath(doc.path, file.path))
-    const before = this.manager.openedDocuments
     if (!this.manager.openFile(file, preview)) {
       if (file.token !== existing?.fileToken) void this.gateway.release(file.token).catch(() => {})
       this.notify('请先完成输入法输入，再重新打开文件。')
       return false
     }
-    const openedIds = new Set(this.manager.openedDocuments.map(doc => doc.id))
-    for (const doc of before) {
-      if (doc.fileToken && !openedIds.has(doc.id)) void this.gateway.release(doc.fileToken).catch(error => this.notify(fileError(error)))
+    if (existing && isMedia(existing) && existing.lastDiskVersion !== file.version) {
+      // Reopening a read-only preview should pick up external changes, without duplicating the document.
+      if (this.manager.reloadFile(existing.id, file)) {
+        if (existing.fileToken && existing.fileToken !== file.token) void this.gateway.release(existing.fileToken).catch(() => {})
+        return true
+      }
     }
     if (existing && existing.fileToken !== file.token) void this.gateway.release(file.token).catch(error => this.notify(fileError(error)))
     if (existing && existing.lastDiskVersion !== file.version) this.notify('检测到磁盘版本变化。保留当前编辑内容；请先另存为，再关闭并重开原文件。')
@@ -56,6 +62,7 @@ export class FileController {
     return this.performSave(id, false, undefined, undefined, true)
   }
   private async performSave(id: string, saveAs: boolean, encoding: Encoding | undefined, bom: boolean | undefined, automatic: boolean): Promise<'saved' | 'changed' | 'failed' | 'skipped'> {
+    if (isMedia(this.manager.metadata(id))) return 'skipped'
     if (this.manager.metadata(id)?.kind === 'javaClass') { if (!automatic) this.notify('ClassFile 仅供只读查看，不能作为文本保存或另存为。'); return 'skipped' }
     if (this.manager.metadata(id)?.encoding === 'Hex' && encoding && encoding !== 'Hex') {
       this.notify('字节编辑内容请直接保存或另存为；不能把十六进制显示文字作为原文件的文本编码保存。'); return 'skipped'
@@ -97,6 +104,7 @@ export class FileController {
   }
   async reopen(encoding: FileOpenEncoding, force = false) {
     const doc = this.manager.activeDocument
+    if (isMedia(doc)) return
     if (doc?.kind === 'javaClass' && encoding !== 'Hex') { this.notify('请使用“编辑文件字节”切回可编辑内容。'); return }
     if (!doc?.fileToken) { this.notify('请先打开真实文件。'); return }
     if (!force && (doc.dirty || this.manager.isComposing || this.saving.has(doc.id))) {
@@ -115,9 +123,7 @@ export class FileController {
   }
   close(id: string, discard = false, pane: string = this.manager.activePane) {
     if (this.saving.has(id)) { this.notify('保存进行中，请稍后关闭。'); return 'saving' as const }
-    const token = this.manager.metadata(id)?.fileToken
     const result = this.manager.close(id, discard, pane)
-    if (result === 'closed' && token && !this.manager.metadata(id)) void this.gateway.release(token).catch(error => this.notify(fileError(error)))
     return result
   }
   async classHex(id: string, offset: number) {
@@ -128,6 +134,7 @@ export class FileController {
   dispose() {
     if (this.disposed) return
     this.disposed = true
+    this.stopRelease()
     // HMR can dispose the frontend while the Rust process keeps running.
     for (const token of new Set(this.manager.openedDocuments.map(doc => doc.fileToken).filter((token): token is string => !!token))) {
       void this.gateway.release(token).catch(() => {})

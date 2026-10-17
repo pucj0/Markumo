@@ -12,7 +12,7 @@ import { EditorLayoutManager } from '../layout/EditorLayoutManager'
 import type { SplitDirection } from '../layout/types'
 import type { EditorDocument, Theme, MarkdownMode } from '../../types'
 import { lineEndings, type LineEndingSnapshot } from './lineEndings'
-import type { FileMetadata, OpenFile, ClassInfo } from '../../features/files/contracts'
+import type { FileMetadata, OpenFile, ClassInfo, MediaMetadata } from '../../features/files/contracts'
 import { classSummary } from '../../features/files/classSummary'
 import { defaultMarkdownTypography, type MarkdownTypography, type LiveEditor } from '../markdown/wysiwyg/contracts'
 import { markdownFormatTransaction, type MarkdownFormat } from '../markdown/formatCommands'
@@ -20,6 +20,7 @@ import { captureLineBaseline, savedLineBaseline } from './changeGutter'
 import { createMarkdownResources, markdownResources, refreshMarkdownResources } from '../markdown/images'
 import { imageImportBookmarks } from '../markdown/imageImport'
 import { sameFilePath } from '../../features/files/pathKey'
+import { isMedia, newMediaViewState, type MediaViewState } from '../../features/files/media'
 
 export interface DocumentSeed { id: string; name: string; path: string; text: string; pinned?: boolean; mode?: MarkdownMode; kind?: 'text' | 'javaClass'; classInfo?: ClassInfo; encoding?: string }
 export type Pane = string
@@ -50,8 +51,11 @@ export class DocumentManager {
   private liveOrigin: {pane:string;update:unknown}|null = null
   private markdownTypography = defaultMarkdownTypography()
   private readonly records = new Map<string, CachedDocument>()
+  // Media documents deliberately have no EditorState, selection, undo history or text baseline.
+  private readonly mediaRecords = new Map<string, { meta: EditorDocument; panes: Map<string, MediaViewState> }>()
   private readonly seeds = new Map<string, DocumentSeed>()
   private readonly listeners = new Set<() => void>()
+  private readonly releaseListeners = new Set<(token: string) => void>()
   private readonly deferred = new Map<string, StateEffect<unknown>[]>()
   private timer: ReturnType<typeof setTimeout> | null = null
   private nextUntitled = 1
@@ -70,6 +74,7 @@ export class DocumentManager {
   }
 
   subscribe(listener: () => void) { this.listeners.add(listener); return () => this.listeners.delete(listener) }
+  onFileRelease(listener: (token: string) => void) { this.releaseListeners.add(listener); return () => this.releaseListeners.delete(listener) }
   notify() { for (const listener of this.listeners) listener() }
 
   get isSplit() { return this.layout.getAllLeafIds().length > 1 }
@@ -115,6 +120,8 @@ export class DocumentManager {
   }
 
   metadata(id: string): EditorDocument | null {
+    const media = this.mediaRecords.get(id)
+    if (media) return { ...media.meta, pinned: this.layout.getAllPanes().some(p => p.group.tabs.some(t => t.documentId === id && t.pinned)) }
     const record = this.records.get(id)
     if (!record) return null
     const pane = this.activePane
@@ -126,6 +133,28 @@ export class DocumentManager {
   }
   getState(id: string) { return this.records.get(id)?.state }
   getText(id: string) { return this.records.get(id)?.state.doc.toString() }
+  mediaViewState(id: string, pane: string) {
+    const record = this.mediaRecords.get(id)
+    if (!record) return newMediaViewState()
+    if (!record.panes.has(pane)) record.panes.set(pane, newMediaViewState())
+    return record.panes.get(pane)!
+  }
+  updateMediaMetadata(id: string, media: MediaMetadata, version: string) {
+    const record = this.mediaRecords.get(id)
+    if (!record) return
+    record.meta.media = media; record.meta.lastDiskVersion = version; this.notify()
+  }
+  private copyMediaViewState(id: string, from: string, to: string) {
+    const record = this.mediaRecords.get(id)
+    if (record && !record.panes.has(to)) record.panes.set(to, { ...this.mediaViewState(id, from) })
+  }
+
+  private createMedia(id: string, file: Extract<OpenFile, { kind: 'image' | 'pdf' }>) {
+    this.mediaRecords.set(id, { meta: { id, uri: `file:${file.path}`, name: file.name, path: file.path,
+      kind: file.kind, media: file.media, fileToken: file.token, readOnly: true, dirty: false, pinned: true,
+      language: 'Plain Text', languageStatus: 'ready', encoding: 'Binary', eol: 'LF', bom: false,
+      charCount: 0, line: 0, column: 0, lastDiskVersion: file.version }, panes: new Map() })
+  }
 
   private create(seed: DocumentSeed) {
     const language = new Compartment(), wrap = new Compartment(), theme = new Compartment(), markdownMode = new Compartment(), indent = new Compartment()
@@ -201,9 +230,10 @@ export class DocumentManager {
     // A second open must never reload a dirty editor or reset its undo history.
     // The same file may arrive with a different spelling (case, separators) from
     // the shell, so the lookup uses the shared path key rather than exact text.
-    const existing = [...this.records.values()].find(record => record.meta.fileToken && sameFilePath(record.meta.path, file.path))
+    const existing = [...this.records.values(), ...this.mediaRecords.values()].find(record => record.meta.fileToken && sameFilePath(record.meta.path, file.path))
     if (existing) { this.open(existing.meta.id, preview); return existing.meta.id }
     const id = `file:${file.token}`
+    if (file.kind === 'image' || file.kind === 'pdf') { this.createMedia(id, file); this.open(id, preview); return id }
     const seed: DocumentSeed = { id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text, pinned: !preview,
       kind: file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined, encoding: file.encoding }
     this.seeds.set(id, seed)
@@ -255,12 +285,31 @@ export class DocumentManager {
   }
 
   reloadFile(id: string, file: OpenFile, force = false) {
+    if (this.mediaRecords.has(id)) {
+      if (this.disposed || this.isComposing) return false
+      const previous = this.mediaRecords.get(id)!
+      if (file.kind === 'image' || file.kind === 'pdf') {
+        this.createMedia(id, file); this.mediaRecords.get(id)!.panes = previous.panes
+      } else {
+        this.mediaRecords.delete(id)
+        const next = this.create({ id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text,
+          kind: file.kind, classInfo: file.kind === 'javaClass' ? file.classInfo : undefined, encoding: file.encoding })
+        this.attachMetadata(next, file)
+      }
+      for (const pane of this.layout.getAllLeafIds()) if (this.paneGroup(pane).activeId === id) this.showActive(pane)
+      this.notify(); return true
+    }
     const record = this.records.get(id)
     if (!record || (!force && record.meta.dirty) || this.isComposing || this.disposed) return false
     this.deferred.delete(id)
     for(const pane of this.layout.getAllLeafIds())if(this.paneGroup(pane).activeId===id)this.destroyView(pane)
     const seed: DocumentSeed = { id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text,
-      kind: file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined, encoding: file.encoding }
+      kind: file.kind === 'image' || file.kind === 'pdf' ? 'text' : file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined, encoding: file.encoding }
+    if (file.kind === 'image' || file.kind === 'pdf') {
+      this.records.delete(id); this.createMedia(id, file)
+      for (const pane of this.layout.getAllLeafIds()) if (this.paneGroup(pane).activeId === id) this.showActive(pane)
+      this.notify(); return true
+    }
     const next = this.create(seed)
     this.attachMetadata(next, file)
     this.restoreFileMode(next)
@@ -270,6 +319,8 @@ export class DocumentManager {
   }
 
   renamePath(oldPath: string, newPath: string, newName: string): boolean {
+    const media = [...this.mediaRecords.values()].find(r => r.meta.path === oldPath)
+    if (media) { Object.assign(media.meta, { path: newPath, name: newName, uri: `file:${newPath}` }); this.notify(); return true }
     const record = [...this.records.values()].find(r => r.meta.path === oldPath)
     if (!record) return false
     const previousName = record.meta.name
@@ -317,21 +368,21 @@ export class DocumentManager {
     if (this.disposed || this.isComposing) return false
     const targetPane = this.resolvePaneId(pane)
     let record = this.records.get(id)
-    if (!record) {
+    if (!record && !this.mediaRecords.has(id)) {
       const seed = this.seeds.get(id)
       if (!seed) return false
       record = this.create(seed)
     }
     this.captureScroll(targetPane)
-    const isMarkdown = /\.(md|markdown)$/i.test(record.meta.name)
-    if (!record.panes[targetPane]) {
+    const isMarkdown = !!record && /\.(md|markdown)$/i.test(record.meta.name)
+    if (record && !record.panes[targetPane]) {
       record.panes[targetPane] = {
         selection: record.state.selection,
         top: 0,
         left: 0,
         mode: isMarkdown ? (record.meta.mode || this.defaultMarkdownMode || 'live') : undefined,
       }
-    } else if (isMarkdown && !record.panes[targetPane].mode) {
+    } else if (record && isMarkdown && !record.panes[targetPane].mode) {
       record.panes[targetPane].mode = record.meta.mode || this.defaultMarkdownMode || 'live'
     }
     const group = this.paneGroup(targetPane), previousId = group.activeId
@@ -369,11 +420,11 @@ export class DocumentManager {
   close(id: string, discard = false, pane: Pane = this.activePane): 'closed' | 'dirty' | 'composing' | 'missing' {
     const targetPane = this.resolvePaneId(pane)
     const group = this.paneGroup(targetPane)
-    if (!this.records.has(id) || !group.tabs.some(t => t.documentId === id)) return 'missing'
+    if ((!this.records.has(id) && !this.mediaRecords.has(id)) || !group.tabs.some(t => t.documentId === id)) return 'missing'
     if (this.isComposing) return 'composing'
 
     const isLastRef = !this.layout.getAllPanes().some(p => p.id !== targetPane && p.group.tabs.some(t => t.documentId === id))
-    if (isLastRef && this.records.get(id)!.meta.dirty && !discard) return 'dirty'
+    if (isLastRef && this.records.get(id)?.meta.dirty && !discard) return 'dirty'
 
     this.captureScroll(targetPane)
     const wasActive = group.activeId === id
@@ -396,7 +447,9 @@ export class DocumentManager {
 
   private release(id: string) {
     if (this.layout.getAllPanes().some(p => p.group.tabs.some(t => t.documentId === id))) return
-    this.records.delete(id); this.deferred.delete(id)
+    const token = this.metadata(id)?.fileToken
+    this.records.delete(id); this.mediaRecords.delete(id); this.deferred.delete(id)
+    if (token) for (const listener of this.releaseListeners) listener(token)
   }
   paneGroup(pane: Pane) {
     const resolved = this.resolvePaneId(pane)
@@ -524,6 +577,10 @@ export class DocumentManager {
     const resolvedSource = this.resolvePaneId(sourcePane)
     if (resolvedSource !== resolvedTarget) this.captureScroll(resolvedSource)
     const newPaneId = this.layout.splitPane(resolvedTarget, direction, openDocId)
+    if (openDocId && this.mediaRecords.has(openDocId)) {
+      const media = this.mediaRecords.get(openDocId)!
+      media.panes.set(newPaneId, { ...this.mediaViewState(openDocId, resolvedSource) })
+    }
     if (openDocId) {
       let record = this.records.get(openDocId)
       if (!record) {
@@ -568,6 +625,8 @@ export class DocumentManager {
     this.hosts.delete(resolved)
     const closed = this.layout.closePane(resolved)
     if (closed) {
+      for (const tab of pane?.group.tabs || []) this.release(tab.documentId)
+      for (const media of this.mediaRecords.values()) media.panes.delete(resolved)
       this.showActive(this.layout.activePaneId)
       this.notify()
     }
@@ -584,6 +643,7 @@ export class DocumentManager {
         const pane = this.layout.getPane(paneId)
         if (pane) {
           for (const tab of pane.group.tabs) {
+            this.copyMediaViewState(tab.documentId, paneId, primaryId)
             const record = this.records.get(tab.documentId)
             if (record && !record.panes[primaryId]) {
               record.panes[primaryId] = { ...record.panes[paneId] }
@@ -607,6 +667,7 @@ export class DocumentManager {
     if (this.disposed || this.isComposing || !this.layout.getPane(resolvedFrom)?.group.tabs.some(t => t.documentId === id) || !this.layout.getPane(resolvedTo)) return false
     this.captureScroll(resolvedFrom)
     if (resolvedFrom !== resolvedTo) this.captureScroll(resolvedTo)
+    this.copyMediaViewState(id, resolvedFrom, resolvedTo)
     const record = this.records.get(id)
     if (record && !record.panes[resolvedTo] && record.panes[resolvedFrom]) {
       record.panes[resolvedTo] = { ...record.panes[resolvedFrom] }
@@ -646,6 +707,7 @@ export class DocumentManager {
     if (!options.copy || from === to) return this.moveTab(id, from, to, options.targetIndex)
 
     this.captureScroll(from)
+    this.copyMediaViewState(id, from, to)
     const record = this.records.get(id)
     if (record && !record.panes[to] && record.panes[from]) record.panes[to] = { ...record.panes[from] }
     const existing = target.group.tabs.findIndex(tab => tab.documentId === id)
@@ -926,6 +988,11 @@ export class DocumentManager {
   getMarkdownTypography(){return this.markdownTypography}
   command(command: 'undo' | 'redo' | 'find' | 'replace' | 'find-next' | 'find-previous' | 'delete-line' | 'copy-line-down' | 'move-line-up' | 'move-line-down' | 'comment-line' | 'fold-code' | 'unfold-code') {
     if (!this.activeId || this.isComposing) return
+    if (isMedia(this.activeDocument)) {
+      if (this.activeDocument?.kind === 'pdf' && ['find','find-next','find-previous'].includes(command))
+        window.dispatchEvent(new CustomEvent('pdf-command', { detail: { pane: this.activePane, command } }))
+      return
+    }
     if (command === 'undo') { this.historyCommand(false); return }
     if (command === 'redo') { this.historyCommand(true); return }
     const live = this.activeLiveEditor
@@ -958,6 +1025,6 @@ export class DocumentManager {
     this.liveViews.clear();this.liveLoads.clear()
     this.views.clear()
     this.hosts.clear()
-    this.records.clear(); this.seeds.clear(); this.deferred.clear(); this.listeners.clear()
+    this.records.clear(); this.mediaRecords.clear(); this.seeds.clear(); this.deferred.clear(); this.listeners.clear(); this.releaseListeners.clear()
   }
 }

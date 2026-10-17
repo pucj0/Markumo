@@ -17,7 +17,7 @@ export async function initializeLaunch(): Promise<LaunchResult> {
 }
 export function sessionInput(manager:DocumentManager, roots:readonly WorkspaceInfo[], layout:Preferences['layout']):SessionInput {
   const docs=manager.openedDocuments.filter(doc=>!!doc.fileToken&&!!doc.path)
-  return {kind:roots.length?'workspace':'single',tabs:docs.map(doc=>({token:doc.fileToken!,encoding:doc.kind==='javaClass'?'ClassInfo':doc.encoding})),
+  return {kind:roots.length?'workspace':'single',tabs:docs.map(doc=>({token:doc.fileToken!,encoding:doc.kind==='javaClass'?'ClassInfo':doc.kind==='image'||doc.kind==='pdf'?'Media':doc.encoding})),
     activeToken:docs.find(doc=>doc.id===manager.activeId)?.fileToken||docs[0]?.fileToken||null,layout:{...layout}}
 }
 

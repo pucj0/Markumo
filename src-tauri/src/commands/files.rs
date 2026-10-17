@@ -5,6 +5,46 @@ use crate::files::{FileError, FileMetadata, FileService, Layout, OpenBatch, Open
 
 pub type FileStore = Arc<Mutex<FileService>>;
 
+#[tauri::command]
+pub async fn media_metadata(window: Window, store: State<'_, FileStore>, token: String) -> Result<(crate::files::media::MediaMetadata, String)> {
+    operate(store.inner().clone(), window.label().into(), move |s| s.media_metadata(&token)).await
+}
+#[tauri::command]
+pub async fn read_media_chunk(window: Window, store: State<'_, FileStore>, token: String, expected_version: String, offset: u64, length: usize) -> Result<tauri::ipc::Response> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+    struct ReadPermit;
+    impl Drop for ReadPermit { fn drop(&mut self) { ACTIVE.fetch_sub(1, Ordering::AcqRel); } }
+    let mut active = ACTIVE.load(Ordering::Acquire);
+    loop {
+        if active >= 4 { return Err(FileError::new("busy", "媒体读取繁忙，请稍后重新加载。")); }
+        match ACTIVE.compare_exchange_weak(active, active+1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => break,
+            Err(actual) => active=actual,
+        }
+    }
+    let _permit = ReadPermit;
+    operate(store.inner().clone(), window.label().into(), move |s| s.read_media_chunk(&token, &expected_version, offset, length).map(tauri::ipc::Response::new)).await
+}
+#[tauri::command]
+pub async fn open_media_default(window: Window, store: State<'_, FileStore>, token: String) -> Result<()> {
+    operate(store.inner().clone(), window.label().into(), move |s| {
+        let path = s.media_path(&token)?;
+        #[cfg(windows)] {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::UI::Shell::ShellExecuteW;
+            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            let result = unsafe { ShellExecuteW(std::ptr::null_mut(), std::ptr::null(), wide.as_ptr(), std::ptr::null(), std::ptr::null(), 1) };
+            if result as isize <= 32 { return Err(FileError::new("open", "系统默认程序无法打开此文件，请检查文件关联。")); }
+        }
+        #[cfg(not(windows))] {
+            let command = if cfg!(target_os="macos") { "open" } else { "xdg-open" };
+            std::process::Command::new(command).arg(&path).spawn().map_err(FileError::io)?;
+        }
+        Ok(())
+    }).await
+}
+
 async fn operate<T: Send + 'static>(store: FileStore, owner: String, action: impl FnOnce(&mut FileService) -> Result<T> + Send + 'static) -> Result<T> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut service = store.lock().map_err(|_| FileError::new("state", "文件服务不可用，编辑内容仍保留。"))?;

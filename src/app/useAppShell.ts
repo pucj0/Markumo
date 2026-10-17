@@ -14,6 +14,7 @@ import { relativeMarkdownLink } from '../editor/markdown/links'
 import { defaultMarkdownTypography } from '../editor/markdown/wysiwyg/contracts'
 import { FileController, fileError } from '../features/files/FileController'
 import { sameFilePath } from '../features/files/pathKey'
+import { isMedia } from '../features/files/media'
 import { AutoSaveController } from '../features/files/AutoSaveController'
 import { tauriFiles } from '../features/files/tauriFiles'
 import type { Encoding, FileOpenEncoding, Preferences } from '../features/files/contracts'
@@ -237,6 +238,7 @@ export function useAppShell() {
   }
   async function reopenEncoding(encoding: FileOpenEncoding, force = false) {
     const doc = manager.activeDocument
+    if (isMedia(doc)) return
     if (!doc?.fileToken) { toast('请先打开真实文件。'); return }
     if (doc.kind === 'javaClass' && encoding !== 'Hex') { toast('请使用“编辑文件字节”切回可编辑内容。'); return }
     if (fileBusy.value || manager.isComposing) { composingHint(); return }
@@ -403,6 +405,7 @@ export function useAppShell() {
   function setMarkdownMode(mode: MarkdownMode) { if (manager.activeId && !manager.setMarkdownMode(manager.activeId, mode) && manager.isComposing) composingHint() }
 
   function openGotoLine() {
+    if (isMedia(manager.activeDocument)) return
     gotoLineRef.value?.open()
   }
 
@@ -482,6 +485,7 @@ export function useAppShell() {
     // Chromium may keep delivering a wheel sequence to its original scroll target.
     const hovered = document.elementFromPoint(event.clientX, event.clientY) || event.target
     if (!(hovered instanceof Element) || !hovered.closest('.pane-body')) return
+    if (hovered.closest('.media-viewer')) return
     if (!event.deltaY || manager.isComposing) return
     if (event.deltaY < 0) zoomIn(); else zoomOut()
   }
@@ -601,13 +605,17 @@ export function useAppShell() {
       { id: 'settings', title: '打开首选项', detail: '设置', category: 'action', action: openSettings },
     ]
     const encodings: Encoding[] = ['UTF-8', 'UTF-16LE', 'UTF-16BE', 'GB18030', 'windows-1252']
+    if (isMedia(activeDoc.value)) {
+      const textCommands = new Set(['save','save-as','save-utf8','cut','paste','replace','undo','redo','uppercase','lowercase','goto-line','delete-line','copy-line-down','move-line-up','move-line-down','comment-line','fold-code','unfold-code'])
+      for (const action of actions) if (textCommands.has(action.id)) action.disabled = true
+    }
     for (const action of actions) if (action.id in shortcuts.value) action.detail = shortcutLabel(shortcuts.value[action.id as ShortcutAction])
     return [...actions,
       { id:'open-file-bytes',title:'以字节方式打开文件',detail:'可编辑十六进制',category:'action' as const,disabled:!desktop||fileBusy.value,action:()=>void openFile('Hex') },
-      { id:'edit-file-bytes',title:'编辑文件字节',detail:'可编辑十六进制',category:'action' as const,disabled:!desktop||!activeDoc.value?.fileToken||fileBusy.value,action:()=>void reopenEncoding('Hex') },
+      { id:'edit-file-bytes',title:'编辑文件字节',detail:'可编辑十六进制',category:'action' as const,disabled:!desktop||!activeDoc.value?.fileToken||fileBusy.value||isMedia(activeDoc.value),action:()=>void reopenEncoding('Hex') },
       { id:'inspect-class',title:'查看 JVM ClassFile 结构',detail:'只读结构信息',category:'action' as const,disabled:!desktop||!activeDoc.value?.fileToken||activeDoc.value.encoding!=='Hex'||fileBusy.value,action:()=>void reopenEncoding('ClassInfo') },
       ...encodings.map(encoding => ({ id: `open-${encoding}`, title: `按 ${encoding} 编码打开文件`, detail: '原生文件选择', category: 'action' as const, disabled: !desktop || fileBusy.value, action: () => void openFile(encoding) })),
-      ...encodings.map(encoding => ({ id: `reopen-${encoding}`, title: `用 ${encoding} 编码重新打开`, detail: '需要先保存修改', category: 'action' as const, disabled: !desktop || !activeDoc.value?.fileToken || fileBusy.value, action: () => void reopenEncoding(encoding) })),
+      ...encodings.map(encoding => ({ id: `reopen-${encoding}`, title: `用 ${encoding} 编码重新打开`, detail: '需要先保存修改', category: 'action' as const, disabled: !desktop || !activeDoc.value?.fileToken || fileBusy.value || isMedia(activeDoc.value), action: () => void reopenEncoding(encoding) })),
       ...workspace.recentWorkspaces.map(path => ({ id: recentWorkspaceCommand(path), title: `打开工作区：${path.split(/[\\/]/).pop()}`, detail: readablePath(path), category: 'action' as const, disabled: !desktop || fileBusy.value, action: () => void workspace.openWorkspacePath(path) })),
       ...(demo ? manager.catalog : manager.openedDocuments).map(doc => ({ id: `file-${doc.id}`, title: doc.name, fileName: doc.name, detail: doc.path || '未命名 · 内存草稿', category: 'file' as const, action: () => handleSelectDoc(doc.id) })),
       ...(paletteRef.value?.visible ? workspace.getAllKnownFiles() : []).map(file => ({
@@ -647,6 +655,10 @@ export function useAppShell() {
     try {
       const element=document.activeElement
       if(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) await inputClipboard(element,operation,textClipboard)
+      else if (manager.activeDocument?.kind === 'pdf') {
+        if(operation==='copy') await textClipboard.writeText(window.getSelection()?.toString() || '')
+        else if(operation==='select-all') { const host=document.querySelector(`[data-pane-id="${manager.activePane}"] .pdf-pages`); if(host){const range=document.createRange();range.selectNodeContents(host);window.getSelection()?.removeAllRanges();window.getSelection()?.addRange(range)} }
+      }
       else {
         const editor=element instanceof HTMLElement ? element.closest<HTMLElement>('.cm-editor') : null
         const view=(editor && EditorView.findFromDOM(editor)) || manager.activeEditorView

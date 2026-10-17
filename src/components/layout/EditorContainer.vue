@@ -101,7 +101,7 @@ function handleOpenWorkspaceFile(payload: { path: string; name: string; paneId: 
 }
 
 const isMarkdownDoc = computed(() => {
-  return props.doc?.kind !== 'javaClass' && /\.(md|markdown)$/i.test(props.doc?.name || '')
+  return (!props.doc?.kind || props.doc.kind === 'text') && /\.(md|markdown)$/i.test(props.doc?.name || '')
 })
 
 const outlineItems = computed<OutlineItem[]>(() => {
