@@ -136,6 +136,7 @@ try {
     await page.locator('.md-prose td').first().click()
 
     const toolbar = page.locator('.md-table-tools')
+    await toolbar.waitFor({ state: 'visible' })
     assert.equal(await toolbar.isVisible(), true, 'Table toolbar must appear when table is focused')
 
     const geoAfter = await getTableGeometry(page)
@@ -227,6 +228,7 @@ try {
 
     // Focus table 1: only toolbar 1 appears
     await table1.locator('td').first().click()
+    await toolbars.nth(0).waitFor({ state: 'visible' })
     assert.equal(await toolbars.nth(0).isVisible(), true, 'Toolbar 1 appears on table 1 focus')
     assert.equal(await toolbars.nth(1).isHidden(), true, 'Toolbar 2 remains hidden')
 
@@ -237,6 +239,7 @@ try {
 
     // Focus table 2: only toolbar 2 appears
     await table2.locator('td').first().click()
+    await toolbars.nth(1).waitFor({ state: 'visible' })
     assert.equal(await toolbars.nth(0).isHidden(), true, 'Toolbar 1 hides when table 2 focused')
     assert.equal(await toolbars.nth(1).isVisible(), true, 'Toolbar 2 appears on table 2 focus')
 
