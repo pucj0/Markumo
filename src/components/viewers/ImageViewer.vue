@@ -15,9 +15,6 @@
         <button aria-label="旋转 90°" title="顺时针旋转 90° (R)" :disabled="!ready" @click="rotate"><ViewerIcon name="rotate" /></button>
         <button aria-label="重置图片视图" title="重置视图 (0)" :disabled="!ready" @click="reset"><ViewerIcon name="reset" /></button>
         <span class="tool-divider" />
-        <button aria-label="透明背景" title="显示透明背景" :aria-pressed="view.checker" @click="view.checker=!view.checker"><ViewerIcon name="checker" /></button>
-        <button aria-label="像素网格" title="显示像素网格（放大至 400% 后可见）" :aria-pressed="view.grid" @click="view.grid=!view.grid"><ViewerIcon name="grid" /></button>
-        <span class="tool-divider" />
         <button aria-label="重新加载图片" title="重新读取磁盘文件" @click="load"><ViewerIcon name="refresh" /></button>
         <button aria-label="使用系统默认程序打开图片" title="使用系统默认程序打开" @click="openDefault"><ViewerIcon name="external" /></button>
       </div>
@@ -29,9 +26,8 @@
     <div v-show="ready" ref="viewport" class="media-viewport image-viewport" :class="{ 'can-pan':canPan, dragging:!!drag }" tabindex="0" aria-label="图片预览，按加减号缩放，拖动平移" @scroll="saveScroll" @pointerdown="startPan" @pointermove="pan" @pointerup="endPan" @pointercancel="endPan" @wheel="wheel" @keydown="keydown" @dblclick="view.scale===1 ? fit('page') : original()">
       <div class="image-canvas" :style="{ width:`${rotatedWidth*view.scale+64}px`, height:`${rotatedHeight*view.scale+64}px` }">
         <div ref="stage" class="image-stage" :style="{ width:`${rotatedWidth*view.scale}px`, height:`${rotatedHeight*view.scale}px` }">
-          <div class="image-surface" :class="{ checker:view.checker }" :style="{ width:`${width*view.scale}px`,height:`${height*view.scale}px`,transform:`translate(-50%,-50%) rotate(${view.rotation}deg)` }">
+          <div class="image-surface" :style="{ width:`${width*view.scale}px`,height:`${height*view.scale}px`,transform:`translate(-50%,-50%) rotate(${view.rotation}deg)` }">
             <img v-if="url" :src="url" :alt="doc.name" decoding="async" draggable="false" />
-            <div v-if="view.grid && view.scale>=4" class="pixel-grid" :style="{backgroundSize:`${view.scale}px ${view.scale}px`}" />
           </div>
         </div>
       </div>
@@ -125,7 +121,7 @@ onMounted(()=>{ observer=new ResizeObserver(()=>{bounds.width=viewport.value?.cl
 onBeforeUnmount(()=>{disposed=true;generation++;observer?.disconnect();saveScroll();release();drag.value=undefined})
 </script>
 <style scoped>
-.image-viewer {container-type:inline-size;--image-canvas:color-mix(in srgb,var(--editor) 84%,var(--soft));--checker-light:#f5f5f5;--checker-dark:#e6e6e6}
+.image-viewer {container-type:inline-size;--image-canvas:color-mix(in srgb,var(--editor) 84%,var(--soft))}
 .image-toolbar { display:flex;align-items:center;gap:16px;min-height:36px;padding:3px 10px;flex:none;border-bottom:1px solid var(--line);background:var(--editor) }
 .image-tools {display:flex;align-items:center;gap:2px;flex:0 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none}
 .image-toolbar button {display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--sub);cursor:pointer;flex:none}
@@ -146,9 +142,7 @@ onBeforeUnmount(()=>{disposed=true;generation++;observer?.disconnect();saveScrol
 .image-canvas {min-width:100%;min-height:100%;box-sizing:border-box;display:grid;place-items:center;padding:32px}
 .image-stage {position:relative;flex:none}
 .image-surface {position:absolute;left:50%;top:50%;background:var(--editor);box-shadow:0 0 0 1px #8883,0 4px 16px #0000000d}
-.checker {background-color:var(--checker-light);background-image:conic-gradient(var(--checker-dark) 25%,transparent 0 50%,var(--checker-dark) 0 75%,transparent 0);background-size:16px 16px}
 img {display:block;width:100%;height:100%;max-width:none;user-select:none;pointer-events:none}
-.pixel-grid {position:absolute;inset:0;background-image:linear-gradient(to right,#8887 1px,transparent 1px),linear-gradient(to bottom,#8887 1px,transparent 1px);pointer-events:none}
 .image-notice {padding:5px 12px;color:var(--ink);font-size:var(--ui-small-font-size)}
 @media(max-width:900px) {.image-file-info{display:none}.image-toolbar{gap:8px}}
 @container(max-width:650px) {.image-details{display:none}}

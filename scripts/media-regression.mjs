@@ -45,7 +45,7 @@ try{
     assert.equal(await page.evaluate(id=>window.mediaTest.manager.getState(id),id),undefined,'Media created EditorState')
     assert.equal(await page.evaluate(id=>window.mediaTest.manager.saveSnapshot(id),id),null)
     if(name==='transparent.png'){
-      // The transparency pattern belongs to the image, not the entire editing surface.
+      // Transparent images use a solid background, including at high zoom.
       const layout=await page.locator('.image-viewport').evaluate(el=>{
         const image=el.querySelector('.image-stage').getBoundingClientRect(),bounds=el.getBoundingClientRect()
         return {background:getComputedStyle(el).backgroundImage,centerX:Math.abs(image.left+image.width/2-bounds.left-bounds.width/2),centerY:Math.abs(image.top+image.height/2-bounds.top-bounds.height/2)}
@@ -53,10 +53,8 @@ try{
       assert.equal(layout.background,'none');assert(layout.centerX<2 && layout.centerY<2)
       await page.screenshot({path:'.markumo-media-test/image-viewer-dark.png'})
       await page.evaluate(()=>document.body.classList.add('light'));await page.screenshot({path:'.markumo-media-test/image-viewer-light.png'})
-      await page.getByRole('button',{name:'透明背景',exact:true}).click();assert.equal(await page.locator('.image-surface.checker').count(),0)
-      await page.getByRole('button',{name:'透明背景',exact:true}).click()
       await page.getByRole('combobox',{name:'图片缩放比例'}).selectOption('4')
-      await page.getByRole('button',{name:'像素网格',exact:true}).click();assert.equal(await page.locator('.pixel-grid').count(),1)
+      assert.equal(await page.locator('.image-surface').evaluate(el=>getComputedStyle(el).backgroundImage),'none')
       await page.getByRole('button',{name:'旋转 90°',exact:true}).click()
       await page.getByRole('button',{name:'重置图片视图',exact:true}).click()
       await page.evaluate(()=>document.body.classList.remove('light'))

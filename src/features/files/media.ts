@@ -12,5 +12,5 @@ export const openMediaDefault = (token: string) => invoke<void>('open_media_defa
 export const mediaSize = (bytes: number) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MiB` : `${(bytes / 1024).toFixed(1)} KiB`
 
 // State contains numbers/strings only. Decoder/PDF resources belong to the mounted viewer.
-export interface MediaViewState { scale: number; fit: string; rotation: number; left: number; top: number; page: number; continuous: boolean; query: string; checker: boolean; grid: boolean }
-export const newMediaViewState = (): MediaViewState => ({ scale: 1, fit: 'page', rotation: 0, left: 0, top: 0, page: 1, continuous: true, query: '', checker: true, grid: false })
+export interface MediaViewState { scale: number; fit: string; rotation: number; left: number; top: number; page: number; continuous: boolean; query: string }
+export const newMediaViewState = (): MediaViewState => ({ scale: 1, fit: 'page', rotation: 0, left: 0, top: 0, page: 1, continuous: true, query: '' })

@@ -11,8 +11,6 @@ const paths = {
   width: 'M3 3v14M17 3v14M5 10h10M8 7l-3 3 3 3M12 7l3 3-3 3',
   rotate: 'M4 7a6.5 6.5 0 1 1-.5 5M4 3v4h4M8 8h5v5H8Z',
   reset: 'M4 7a6.5 6.5 0 1 1-.5 5M4 3v4h4M10 6v4l3 2',
-  checker: 'M3 3h14v14H3ZM3 10h14M10 3v14M3 3h7v7H3M10 10h7v7h-7',
-  grid: 'M3 3h14v14H3ZM3 8h14M3 12h14M8 3v14M12 3v14',
   external: 'M11 3h6v6M17 3l-8 8M8 4H4v12h12v-4',
   refresh: 'M16 8a6 6 0 0 0-10-3L3 8M3 4v4h4M4 12a6 6 0 0 0 10 3l3-3M17 16v-4h-4',
 } as const
