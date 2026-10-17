@@ -40,6 +40,13 @@ for name, pages in (("single.pdf", 1), ("long.pdf", 550)):
         c.drawString(72, 690, "Search needle: preview lifecycle")
         c.showPage()
     c.save()
+c = Canvas(str(root / "mixed.pdf"))
+for n, size in enumerate([(595,842),(842,595),(420,595),(595,842)],1):
+    c.setPageSize(size)
+    c.drawString(60,size[1]-80,f"Mixed size page {n}")
+    c.drawString(60,size[1]-110,"Selection and rotation fixture")
+    c.showPage()
+c.save()
 writer = PdfWriter()
 writer.append(str(root / "single.pdf"))
 writer.encrypt("markumo-test")

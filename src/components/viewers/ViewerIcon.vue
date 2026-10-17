@@ -13,6 +13,15 @@ const paths = {
   reset: 'M4 7a6.5 6.5 0 1 1-.5 5M4 3v4h4M10 6v4l3 2',
   external: 'M11 3h6v6M17 3l-8 8M8 4H4v12h12v-4',
   refresh: 'M16 8a6 6 0 0 0-10-3L3 8M3 4v4h4M4 12a6 6 0 0 0 10 3l3-3M17 16v-4h-4',
+  previous: 'M12 4l-6 6 6 6',
+  next: 'M8 4l6 6-6 6',
+  first: 'M4 4v12M14 4l-6 6 6 6',
+  last: 'M16 4v12M6 4l6 6-6 6',
+  search: 'M8.5 3a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM12.5 12.5 17 17',
+  close: 'M5 5l10 10M15 5 5 15',
+  pages: 'M6 2h9v12H6ZM3 6v11h9',
+  more: 'M4 10h.01M10 10h.01M16 10h.01',
+  hand: 'M7 10V5a1.25 1.25 0 0 1 2.5 0v4-5a1.25 1.25 0 0 1 2.5 0v5-4a1.25 1.25 0 0 1 2.5 0v5-2a1.25 1.25 0 0 1 2.5 0v4c0 4-2 6-5.5 6-2 0-3.5-1-4.5-2.5L4 12a1.2 1.2 0 0 1 1.5-1.8L7 11',
 } as const
 defineProps<{ name: keyof typeof paths }>()
 </script>

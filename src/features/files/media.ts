@@ -11,6 +11,10 @@ export const readMediaChunk = async (token: string, expectedVersion: string, off
 export const openMediaDefault = (token: string) => invoke<void>('open_media_default', { token })
 export const mediaSize = (bytes: number) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MiB` : `${(bytes / 1024).toFixed(1)} KiB`
 
-// State contains numbers/strings only. Decoder/PDF resources belong to the mounted viewer.
-export interface MediaViewState { scale: number; fit: string; rotation: number; left: number; top: number; page: number; continuous: boolean; query: string }
-export const newMediaViewState = (): MediaViewState => ({ scale: 1, fit: 'page', rotation: 0, left: 0, top: 0, page: 1, continuous: true, query: '' })
+// State contains only lightweight values. Decoder/PDF resources belong to the mounted viewer.
+export interface MediaViewState {
+  scale: number; fit: string; rotation: number; left: number; top: number; page: number; continuous: boolean; query: string
+  pdfAnchor?: { page: number; x: number; y: number }
+  pdfSearchOpen?: boolean
+}
+export const newMediaViewState = (kind?: string): MediaViewState => ({ scale: 1, fit: kind === 'pdf' ? 'width' : 'page', rotation: 0, left: 0, top: 0, page: 1, continuous: true, query: '' })
