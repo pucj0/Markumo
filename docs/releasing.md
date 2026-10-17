@@ -13,7 +13,7 @@
 
 公钥写在 `src-tauri/tauri.conf.json`。同一产品后续版本必须沿用同一密钥，不能每次 CI 临时生成；私钥及密码不得提交到仓库或放进构建产物。初次配置已在本机用户目录 `.tauri/markumo/` 保存恢复副本，请单独安全备份。
 
-Release 包含安装包、`.sig`、`SHA256SUMS` 和合并后的 `latest.json`。更新地址固定为 `https://github.com/pucj0/Markumo/releases/latest/download/latest.json`，使用 HTTPS 和 Tauri 原生签名验证。Windows 使用 NSIS；Linux 的应用内更新适用于 AppImage，deb 用户安装新版 deb；macOS 使用 `.app.tar.gz` 更新，`.dmg` 用于首次安装。
+Release 包含安装包、`SHA256SUMS` 和合并后的 `latest.json`，不单独上传 `.sig` 附件。CI 构建仍生成并传递 `.sig`，发布脚本读取签名并嵌入 `latest.json` 的各平台 `signature` 字段；缺失签名仍会阻止发布。`SHA256SUMS` 只列出公开附件。更新地址固定为 `https://github.com/pucj0/Markumo/releases/latest/download/latest.json`，使用 HTTPS 和 Tauri 原生签名验证。Windows 使用 NSIS；Linux 的应用内更新适用于 AppImage，deb 用户安装新版 deb；macOS 使用 `.app.tar.gz` 更新，`.dmg` 用于首次安装。
 
 应用启动后延迟 10 秒检查版本，此后每 4 小时再检查。发现更新显示标记，点击才下载。安装前重新检查当前窗口无未保存修改、输入法组合或文件操作，并要求其他 Markumo 窗口关闭；安装期间阻止编辑，先持久化会话，再安装和重启。开发模式不执行安装。网络失败可重试或通过 GitHub 发布页手动下载。
 

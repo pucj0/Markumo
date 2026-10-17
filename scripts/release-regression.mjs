@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {pathToFileURL} from 'node:url'
 import {createServer} from 'vite'
+import {createHash} from 'node:crypto'
 import {collect,platforms,validate} from './release.mjs'
 
 assert.equal(validate('v1.0.0'),'1.0.0')
@@ -18,7 +19,13 @@ try{
     }
   }
   const result=collect(folder,'1.0.0','v1.0.0','pucj0/Markumo')
-  assert.equal(result.assets.length,13)
+  assert.equal(result.assets.length,9)
+  assert.equal(result.assets.some(asset=>asset.name.endsWith('.sig')),false)
+  assert.deepEqual(JSON.parse(result.assets.find(asset=>asset.name==='latest.json').bytes),result.manifest)
+  const checksums=result.assets.find(asset=>asset.name==='SHA256SUMS').bytes.toString()
+  assert.equal(checksums.includes('.sig'),false)
+  for(const asset of result.assets.filter(asset=>asset.name!=='SHA256SUMS'))assert.ok(checksums.includes(`${createHash('sha256').update(asset.bytes).digest('hex')}  ${asset.name}\n`))
+  for(const platform of platforms)assert.equal(result.manifest.platforms[platform.key].signature,Buffer.from('signature fixture').toString('base64'))
   assert.deepEqual(Object.keys(result.manifest.platforms),platforms.map(p=>p.key))
   assert.match(result.manifest.platforms['darwin-aarch64'].url,/v1\.0\.0\/Markumo_1\.0\.0_macos_aarch64\.app\.tar\.gz$/)
   const signature=path.join(folder,`bundles-${platforms[0].target}`,'fixture.exe.sig')

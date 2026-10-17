@@ -30,7 +30,8 @@ export function collect(folder,version,tag,repository){
       if(extension===platform.update){
         const signature=fs.readFileSync(file+'.sig','utf8').trim()
         if(!signature||!/^[A-Za-z\d+/=\r\n]+$/.test(signature))throw Error(`Missing or invalid update signature: ${file}`)
-        assets.push({name:name+'.sig',bytes:Buffer.from(signature+'\n')})
+        // The updater consumes this inline signature. Keep .sig files as CI
+        // inputs, without publishing duplicate signature-only attachments.
         manifest.platforms[platform.key]={url:`https://github.com/${repository}/releases/download/${tag}/${name}`,signature}
       }
     }
@@ -55,6 +56,8 @@ async function publish(){
   if(release&&!release.draft)throw Error(`${tag} is already published; release a new version instead of replacing installers.`)
   if(!release)release=await api(endpoint,'POST',{tag_name:tag,name:`Markumo ${version}`,body,draft:true,prerelease:false})
   const existing=await api(`${endpoint}/${release.id}/assets?per_page=100`)
+  // A retried draft may contain attachments from an older publishing script.
+  for(const old of existing.filter(asset=>asset.name.endsWith('.sig')))await api(`https://api.github.com/repos/${repository}/releases/assets/${old.id}`,'DELETE')
   for(const asset of assets){
     const old=existing.find(item=>item.name===asset.name);if(old)await api(`https://api.github.com/repos/${repository}/releases/assets/${old.id}`,'DELETE')
     await api(release.upload_url.replace(/\{.*$/,'')+'?name='+encodeURIComponent(asset.name),'POST',asset.bytes,true)
