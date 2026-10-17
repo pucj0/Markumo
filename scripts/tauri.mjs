@@ -17,7 +17,7 @@ if (options.directories.length) {
 
 try {
   await run(options.args, 'tauri')
-  if(process.platform==='win32'&&options.args[0]==='build'){
+  if(process.platform==='win32'&&['build','bundle'].includes(options.args[0])&&!options.args.some(arg=>arg==='--help'||arg==='-h')){
     const metadata=JSON.parse(execFileSync('cargo',['metadata','--no-deps','--format-version','1','--manifest-path','src-tauri/Cargo.toml'],{cwd:project,encoding:'utf8',windowsHide:true}))
     const config=JSON.parse(readFileSync(join(project,'src-tauri/tauri.conf.json'),'utf8'))
     normalizeWindowsArtifacts(metadata.target_directory,config.mainBinaryName||'markumo')
