@@ -1,5 +1,5 @@
 import MarkdownIt from 'markdown-it'
-import { classHighlighter, highlightTree } from '@lezer/highlight'
+import { syntaxSpans } from '../core/syntaxSpans'
 import { LanguageSupport } from '@codemirror/language'
 import { fenceLanguage, loadLanguage, type LanguageName } from '../languages'
 import { parser } from '@lezer/markdown'
@@ -18,7 +18,7 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
   const pending = new Set<LanguageName>()
   md.options.highlight = (code, info) => {
     const language = fenceLanguage(info)
-    if (code.length > 64 * 1024 || ['Markdown','Plain Text','CSV','Log'].includes(language)) return ''
+    if (code.length > 64 * 1024 || language === 'Plain Text') return ''
     if (!languages.has(language) && !pending.has(language)) {
       pending.add(language)
       void loadLanguage(language,'fence').then(support => { languages.set(language,support instanceof LanguageSupport ? support : null) },()=>languages.set(language,null)).finally(()=>{pending.delete(language);onLanguageReady()})
@@ -26,9 +26,9 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
     const support = languages.get(language)
     if (!support) return ''
     let result = '', position = 0
-    highlightTree(support.language.parser.parse(code), classHighlighter, (from,to,classes) => {
+    for (const {from, to, classes} of syntaxSpans(code, support)) {
       result += md.utils.escapeHtml(code.slice(position,from)) + `<span class="${classes}">${md.utils.escapeHtml(code.slice(from,to))}</span>`; position = to
-    })
+    }
     return result + md.utils.escapeHtml(code.slice(position))
   }
   md.core.ruler.after('inline','markumo-semantics', state => {

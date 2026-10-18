@@ -1,24 +1,9 @@
 import type { PdfOptions } from './contracts'
-import { markumoHighlight } from '../../editor/core/syntaxTheme'
+import syntaxCss from '../../styles/syntax.css?raw'
 import { exportAppearance, type ExportAppearance } from './ExportAppearance'
 
 export function getHighlightCss(): string {
-  return `
-${markumoHighlight.module?.getRules() || ''}
-/* Syntax highlighting */
-.tok-keyword { color: #d73a49; font-weight: 600; }
-.tok-string { color: #032f62; }
-.tok-comment { color: #6a737d; font-style: italic; }
-.tok-variableName { color: #24292e; }
-.tok-propertyName { color: #005cc5; }
-.tok-number { color: #005cc5; }
-.tok-operator { color: #d73a49; }
-.tok-punctuation { color: #24292e; }
-.tok-typeName { color: #6f42c1; }
-.tok-definition { color: #24292e; font-weight: 600; }
-.tok-tag { color: #22863a; }
-.tok-attributeName { color: #6f42c1; }
-`
+  return syntaxCss
 }
 
 export function getDocumentCss(codeWrap = true, appearance:ExportAppearance=exportAppearance()): string {
@@ -186,7 +171,7 @@ ${getAppearanceCss(appearance,codeWrap)}
 function getAppearanceCss({typography:t,colors:c}:ExportAppearance,wrap:boolean){
   const font=t.fontFamily==='serif'?'Georgia, "Noto Serif CJK SC", "SimSun", serif':t.fontFamily==='mono'?'"JetBrains Mono", "Cascadia Code", Consolas, monospace':'-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", system-ui, sans-serif'
   return `
-:root { ${Object.entries(c).map(([name,value])=>`--${name}:${value};`).join('')} --text:var(--ink); --bg:var(--editor); --code-bg:var(--md-code-bg); --border:var(--line); --table-border:var(--line); --quote-text:var(--muted); }
+:root,body { ${Object.entries(c).map(([name,value])=>`--${name}:${value};`).join('')} --text:var(--ink); --bg:var(--editor); --code-bg:var(--md-code-bg); --border:var(--line); --table-border:var(--line); --quote-text:var(--muted); }
 body { padding:30px; font-family:${font}; font-size:${t.fontSize}px; line-height:${t.lineHeight}; }
 .markumo-document { max-width:${t.width}px; }
 h1,h2,h3,h4,h5,h6 { color:var(--text); margin:1rem 0; line-height:1.4; }

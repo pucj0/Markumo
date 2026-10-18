@@ -1,0 +1,226 @@
+/* Original Markumo syntax palettes, independent of UI accents.
+   Light palettes are designed for white paper, not inverted dark colors. */
+:root, body {
+  --syntax-foreground:#d7dce5;
+  --syntax-muted:#9ba5b4;
+  --syntax-keyword:#c5a4cd;
+  --syntax-control:#d4a1b0;
+  --syntax-string:#a1bea4;
+  --syntax-number:#d2b393;
+  --syntax-boolean:#c3a8d8;
+  --syntax-null:#b3a8ce;
+  --syntax-comment:#929daa;
+  --syntax-doc-comment:#9daab5;
+  --syntax-type:#9dbbd0;
+  --syntax-class:#a5c4c8;
+  --syntax-function:#b6bb91;
+  --syntax-method:#b6c49e;
+  --syntax-property:#c3b89e;
+  --syntax-parameter:#c2b2a5;
+  --syntax-variable:#d7dce5;
+  --syntax-constant:#c9a9bc;
+  --syntax-operator:#b6bfcd;
+  --syntax-punctuation:#aab3c0;
+  --syntax-tag:#a4b5d0;
+  --syntax-attribute:#c2b398;
+  --syntax-annotation:#bda4cc;
+  --syntax-regexp:#b9bf9b;
+  --syntax-invalid:#e5a0a5;
+  --syntax-inserted:#99c3a8;
+  --syntax-deleted:#dba1ac;
+  --syntax-heading:#b4afd5;
+  --syntax-link:#9ebbd8;
+}
+body.light {
+  --syntax-foreground:#353e4c;
+  --syntax-muted:#697482;
+  --syntax-keyword:#805586;
+  --syntax-control:#95586c;
+  --syntax-string:#467251;
+  --syntax-number:#866139;
+  --syntax-boolean:#805b94;
+  --syntax-null:#756286;
+  --syntax-comment:#697482;
+  --syntax-doc-comment:#5e707c;
+  --syntax-type:#466e8c;
+  --syntax-class:#3d7175;
+  --syntax-function:#686c37;
+  --syntax-method:#57713e;
+  --syntax-property:#7c6846;
+  --syntax-parameter:#7f6451;
+  --syntax-variable:#353e4c;
+  --syntax-constant:#88596e;
+  --syntax-operator:#596778;
+  --syntax-punctuation:#687585;
+  --syntax-tag:#526d95;
+  --syntax-attribute:#7d663f;
+  --syntax-annotation:#805e8c;
+  --syntax-regexp:#69703b;
+  --syntax-invalid:#ad424f;
+  --syntax-inserted:#39764e;
+  --syntax-deleted:#aa4f60;
+  --syntax-heading:#655c98;
+  --syntax-link:#436f9b;
+}
+body[data-syntax-style="standard"] {
+  --syntax-foreground:#dce2eb;
+  --syntax-muted:#a1acba;
+  --syntax-keyword:#c6a0e7;
+  --syntax-control:#e1a0bb;
+  --syntax-string:#92c9a0;
+  --syntax-number:#e1b17c;
+  --syntax-boolean:#c5a2e9;
+  --syntax-null:#b7a2d4;
+  --syntax-comment:#9aa5b2;
+  --syntax-doc-comment:#a6b5c0;
+  --syntax-type:#8bbfe1;
+  --syntax-class:#7fc9cd;
+  --syntax-function:#d1c18a;
+  --syntax-method:#b5c994;
+  --syntax-property:#d9b399;
+  --syntax-parameter:#cbb29d;
+  --syntax-variable:#dce2eb;
+  --syntax-constant:#d6a0c1;
+  --syntax-operator:#bfc9d8;
+  --syntax-punctuation:#aab8c9;
+  --syntax-tag:#91b9e5;
+  --syntax-attribute:#d2bd86;
+  --syntax-annotation:#c2a5df;
+  --syntax-regexp:#bdce91;
+  --syntax-invalid:#f0a0a7;
+  --syntax-inserted:#8dceaa;
+  --syntax-deleted:#e9a0b2;
+  --syntax-heading:#bfade8;
+  --syntax-link:#8dbfe8;
+}
+body.light[data-syntax-style="standard"] {
+  --syntax-foreground:#303a48;
+  --syntax-muted:#647180;
+  --syntax-keyword:#774a9e;
+  --syntax-control:#a04771;
+  --syntax-string:#2d774c;
+  --syntax-number:#995e23;
+  --syntax-boolean:#7c4fa7;
+  --syntax-null:#71528b;
+  --syntax-comment:#657181;
+  --syntax-doc-comment:#526d7b;
+  --syntax-type:#2c6c9d;
+  --syntax-class:#236e78;
+  --syntax-function:#806322;
+  --syntax-method:#4c732f;
+  --syntax-property:#96633f;
+  --syntax-parameter:#8b614b;
+  --syntax-variable:#303a48;
+  --syntax-constant:#9c4977;
+  --syntax-operator:#4e6075;
+  --syntax-punctuation:#637287;
+  --syntax-tag:#38689f;
+  --syntax-attribute:#866820;
+  --syntax-annotation:#78539d;
+  --syntax-regexp:#5c7326;
+  --syntax-invalid:#ba3449;
+  --syntax-inserted:#27744c;
+  --syntax-deleted:#b84260;
+  --syntax-heading:#6d4da4;
+  --syntax-link:#2b6da9;
+}
+body[data-syntax-style="vivid"] {
+  --syntax-foreground:#e1e3e9;
+  --syntax-muted:#a6acb7;
+  --syntax-keyword:#e7a0c3;
+  --syntax-control:#f0a8a9;
+  --syntax-string:#accc8a;
+  --syntax-number:#eab178;
+  --syntax-boolean:#c7a5ee;
+  --syntax-null:#bca4da;
+  --syntax-comment:#9fa5b0;
+  --syntax-doc-comment:#adb5c1;
+  --syntax-type:#83c5d9;
+  --syntax-class:#82cdbb;
+  --syntax-function:#d5ce8b;
+  --syntax-method:#bdd58a;
+  --syntax-property:#e0b89b;
+  --syntax-parameter:#d7b398;
+  --syntax-variable:#e1e3e9;
+  --syntax-constant:#c9a7e7;
+  --syntax-operator:#d1b0cb;
+  --syntax-punctuation:#b2b9c5;
+  --syntax-tag:#96b9e6;
+  --syntax-attribute:#d6c58d;
+  --syntax-annotation:#c7a7e1;
+  --syntax-regexp:#b4d2a2;
+  --syntax-invalid:#f29aa8;
+  --syntax-inserted:#9bd0a5;
+  --syntax-deleted:#ef9eaf;
+  --syntax-heading:#c8adea;
+  --syntax-link:#8dc9e8;
+}
+body.light[data-syntax-style="vivid"] {
+  --syntax-foreground:#383b49;
+  --syntax-muted:#6b6e7b;
+  --syntax-keyword:#a23c78;
+  --syntax-control:#b14358;
+  --syntax-string:#527b29;
+  --syntax-number:#a75d22;
+  --syntax-boolean:#8450b7;
+  --syntax-null:#795795;
+  --syntax-comment:#6d7080;
+  --syntax-doc-comment:#5e6c7d;
+  --syntax-type:#217589;
+  --syntax-class:#217660;
+  --syntax-function:#85701e;
+  --syntax-method:#567d20;
+  --syntax-property:#a16534;
+  --syntax-parameter:#99613e;
+  --syntax-variable:#383b49;
+  --syntax-constant:#9053af;
+  --syntax-operator:#845c7d;
+  --syntax-punctuation:#6c7384;
+  --syntax-tag:#3f6fa8;
+  --syntax-attribute:#897121;
+  --syntax-annotation:#8354a4;
+  --syntax-regexp:#4b792c;
+  --syntax-invalid:#bd354e;
+  --syntax-inserted:#36763f;
+  --syntax-deleted:#bb3e5a;
+  --syntax-heading:#8450b0;
+  --syntax-link:#2178a0;
+}
+
+/* Shared stable classes for CodeMirror, Markdown previews and exports. */
+.mk-syntax-foreground { color:var(--syntax-foreground, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-muted { color:var(--syntax-muted, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-keyword { color:var(--syntax-keyword, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-control { color:var(--syntax-control, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-string { color:var(--syntax-string, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-number { color:var(--syntax-number, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-boolean { color:var(--syntax-boolean, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-null { color:var(--syntax-null, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-comment { color:var(--syntax-comment, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-doc-comment { color:var(--syntax-doc-comment, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-type { color:var(--syntax-type, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-class { color:var(--syntax-class, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-function { color:var(--syntax-function, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-method { color:var(--syntax-method, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-property { color:var(--syntax-property, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-parameter { color:var(--syntax-parameter, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-variable { color:var(--syntax-variable, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-constant { color:var(--syntax-constant, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-operator { color:var(--syntax-operator, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-punctuation { color:var(--syntax-punctuation, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-tag { color:var(--syntax-tag, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-attribute { color:var(--syntax-attribute, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-annotation { color:var(--syntax-annotation, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-regexp { color:var(--syntax-regexp, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-invalid { color:var(--syntax-invalid, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-inserted { color:var(--syntax-inserted, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-deleted { color:var(--syntax-deleted, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-heading { color:var(--syntax-heading, var(--syntax-foreground, #353e4c)) }
+.mk-syntax-link { color:var(--syntax-link, var(--syntax-foreground, #353e4c)) }
+
+.mk-syntax-comment, .mk-syntax-doc-comment { font-style:normal;font-weight:400 }
+.mk-syntax-heading, .mk-syntax-strong { font-weight:600 }
+.mk-syntax-emphasis { font-style:italic }
+.mk-syntax-strike { text-decoration:line-through }
+.mk-syntax-link { text-decoration:underline }
+.cm-content, .md-preview-fence code { color:var(--syntax-foreground, inherit) }

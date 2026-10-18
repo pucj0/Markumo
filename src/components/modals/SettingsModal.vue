@@ -17,6 +17,7 @@
             <section id="settings-appearance" class="settings-section">
               <h3>外观</h3>
               <div class="settingrow"><span class="setting-label">颜色主题</span><SegmentedControl id="settings-theme" label="颜色主题" :model-value="theme" :options="[{value:'light',label:'浅色'},{value:'dark',label:'深色'},{value:'system',label:'跟随系统'}]" @update:model-value="emit('update:theme', $event as ThemePreference)" /></div>
+              <div class="settingrow"><span class="setting-label">语法高亮风格</span><SegmentedControl id="settings-syntax-style" label="语法高亮风格" :model-value="syntaxStyle || 'soft'" :options="[{value:'soft',label:'柔和'},{value:'standard',label:'标准'},{value:'vivid',label:'鲜明'}]" @update:model-value="emit('update:syntaxStyle', $event as EditorSettings['syntaxStyle'])" /></div>
               <div class="settingrow"><label for="settings-ui-size">界面字号</label><div class="number-control"><input id="settings-ui-size" type="number" min="12" max="20" step="1" :value="uiFontDraft" :aria-invalid="!!uiFontError" aria-describedby="ui-font-hint" @input="updateUiFont" @blur="finishUiFont" @keydown.enter.prevent="finishUiFont" /><span>px</span><button class="reset-font" title="恢复默认界面字号 14px" aria-label="恢复默认界面字号" @click="emit('update:uiFontSize', 14)">恢复默认</button></div></div>
               <p v-if="uiFontError" class="field-error" role="alert">{{ uiFontError }}</p>
               <p id="ui-font-hint" class="setting-hint">仅调整界面文字；编辑器与 Markdown 正文字号分别设置。</p>
@@ -264,6 +265,7 @@ const props = defineProps<{
   uiFontSize: number
   fontSize: number
   caretAnimation: EditorSettings['caretAnimation']
+  syntaxStyle?: EditorSettings['syntaxStyle']
   wordWrap: boolean
   showOutline: boolean
   defaultMdMode: MarkdownMode
@@ -291,6 +293,7 @@ const emit = defineEmits<{
   (e: 'update:uiFontSize', val: number): void
   (e: 'update:fontSize', val: number): void
   (e: 'update:caretAnimation', val: EditorSettings['caretAnimation']): void
+  (e: 'update:syntaxStyle', val: EditorSettings['syntaxStyle']): void
   (e: 'update:wordWrap', val: boolean): void
   (e: 'update:showOutline', val: boolean): void
   (e: 'update:defaultMdMode', val: MarkdownMode): void

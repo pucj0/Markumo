@@ -2,8 +2,7 @@ import { createMarkdownRenderer } from '../../editor/markdown/rendering'
 import { imageDestination, type MarkdownResources } from '../../editor/markdown/images'
 import { sanitizeHtml } from '../../editor/markdown/html/SafeHtmlRenderer'
 import { LanguageSupport } from '@codemirror/language'
-import { highlightTree } from '@lezer/highlight'
-import { markumoHighlight } from '../../editor/core/syntaxTheme'
+import { syntaxSpans } from '../../editor/core/syntaxSpans'
 import { fenceLanguage, loadLanguage } from '../../editor/languages'
 
 export interface RenderResult {
@@ -48,9 +47,9 @@ export async function renderMarkdownForExport(
     const support=supports.get(fenceLanguage(info))
     if(!support)return renderer.utils.escapeHtml(code)
     let result='',position=0
-    highlightTree(support.language.parser.parse(code),markumoHighlight,(from,to,classes)=>{
+    for(const {from,to,classes} of syntaxSpans(code,support)){
       result+=renderer.utils.escapeHtml(code.slice(position,from))+`<span class="${classes}">${renderer.utils.escapeHtml(code.slice(from,to)).split('\n').join(`</span>\n<span class="${classes}">`)}</span>`;position=to
-    })
+    }
     return result+renderer.utils.escapeHtml(code.slice(position))
   }
   // Static formats have no working clipboard controls. Use semantic <pre>

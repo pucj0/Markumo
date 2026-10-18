@@ -12,6 +12,7 @@ pub struct EditorSettings {
     font_family: String,
     word_wrap: bool,
     caret_animation: String,
+    syntax_style: String,
     show_outline: bool,
     outline_width: u16,
     indent_size: u8,
@@ -72,6 +73,7 @@ impl Default for EditorSettings {
             font_family: "system".into(),
             word_wrap: false,
             caret_animation: "smooth".into(),
+            syntax_style: "soft".into(),
             show_outline: false,
             outline_width: 240,
             indent_size: 2,
@@ -110,6 +112,9 @@ fn deserialize_keymap_preset<'de, D: serde::Deserializer<'de>>(deserializer: D) 
     Ok(if value == "lightedit" { "markumo".into() } else { value })
 }
 fn validate(settings: &EditorSettings) -> Result<(), String> {
+    if !["soft", "standard", "vivid"].contains(&settings.syntax_style.as_str()) {
+        return Err("不支持的语法高亮风格".into());
+    }
     let md = &settings.markdown_typography;
     if !(480..=1400).contains(&md.width) || !(12..=28).contains(&md.font_size)
         || !md.line_height.is_finite() || !(1.2..=2.4).contains(&md.line_height)
@@ -204,6 +209,20 @@ pub async fn save_editor_settings(
 #[cfg(test)]
 mod branding_tests {
     use super::*;
+    #[test]
+    fn syntax_style_defaults_validation_and_disk_round_trip() {
+        let old: EditorSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.syntax_style, "soft");
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        for style in ["soft", "standard", "vivid"] {
+            let settings: EditorSettings = serde_json::from_value(serde_json::json!({"syntaxStyle": style})).unwrap();
+            save(&path, &settings).unwrap();
+            assert_eq!(load(&path).unwrap().syntax_style, style);
+        }
+        let bad: EditorSettings = serde_json::from_str(r#"{"syntaxStyle":"unknown"}"#).unwrap();
+        assert!(validate(&bad).is_err());
+    }
     #[test]
     fn workspace_preferences_default_legacy_and_round_trip() {
         let old: EditorSettings = serde_json::from_str("{}").unwrap();

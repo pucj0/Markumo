@@ -23,8 +23,6 @@
   --change-inserted: #4bc28b;
   --yellow: #e2b77a;
   --pink: #e6a1c6;
-  --syntax-comment: #9ba3b3;
-  --syntax-operator: #b8c0cf;
   --shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
   --sidebar-width: 254px;
   --ui-font-size: 14px;
@@ -65,8 +63,6 @@ body.light {
   --change-inserted: #26945d;
   --yellow: #9b6a34;
   --pink: #a33e73;
-  --syntax-comment: #626c7c;
-  --syntax-operator: #536175;
   --shadow: 0 24px 60px rgba(24, 32, 49, 0.15);
 }
 

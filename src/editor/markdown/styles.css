@@ -184,15 +184,6 @@
 .md-image-path { display:block;max-width:100%;margin-top:6px;padding:0;overflow-wrap:anywhere;text-align:left;text-decoration:underline }
 .md-image-action { margin-left:8px }
 .md-image-action[hidden] { display:none }
-.tok-keyword,.tok-modifier { color:var(--pink) }
-.tok-string { color:var(--green) }
-.tok-comment { color:var(--syntax-comment, var(--muted)); font-style:italic }
-.tok-number,.tok-bool,.tok-null { color:var(--yellow) }
-.tok-typeName,.tok-className,.tok-tagName,.tok-namespace { color:var(--blue) }
-.tok-propertyName,.tok-attributeName,.tok-labelName { color:var(--yellow) }
-.tok-variableName,.tok-name { color:var(--ink) }
-.tok-variableName.tok-function,.tok-propertyName.tok-function { color:var(--blue) }
-.tok-operator,.tok-punctuation { color:var(--syntax-operator, var(--sub)) }
 .md-preview-fence-header { display:flex;align-items:center;justify-content:space-between;padding:4px 8px;border:1px solid var(--line);border-bottom:0;background:var(--soft);border-radius:6px 6px 0 0;color:var(--muted);font:12px var(--font-sans) }
 .md-preview-fence-header button { font:inherit;color:var(--sub);background:transparent;cursor:pointer }
 
