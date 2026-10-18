@@ -22,6 +22,11 @@ const paths = {
   pages: 'M6 2h9v12H6ZM3 6v11h9',
   more: 'M4 10h.01M10 10h.01M16 10h.01',
   hand: 'M7 10V5a1.25 1.25 0 0 1 2.5 0v4-5a1.25 1.25 0 0 1 2.5 0v5-4a1.25 1.25 0 0 1 2.5 0v5-2a1.25 1.25 0 0 1 2.5 0v4c0 4-2 6-5.5 6-2 0-3.5-1-4.5-2.5L4 12a1.2 1.2 0 0 1 1.5-1.8L7 11',
+  sidebar: 'M3 4h14v12H3ZM8 4v12',
+  thumbnails: 'M4 4h4v4H4ZM12 4h4v4h-4ZM4 12h4v4H4ZM12 12h4v4h-4Z',
+  outline: 'M4 5h2v2H4ZM8 6h8M4 9h2v2H4ZM8 10h8M4 13h2v2H4ZM8 14h8',
+  'chevron-down': 'M6 8l4 4 4-4',
+  'chevron-right': 'M8 6l4 4-4 4',
 } as const
 defineProps<{ name: keyof typeof paths }>()
 </script>

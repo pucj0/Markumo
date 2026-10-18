@@ -8,6 +8,9 @@ import {createServer} from 'vite'
 const {chromium}=await import(process.env.MARKUMO_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MARKUMO_PLAYWRIGHT_MODULE).href : 'playwright')
 const root=path.resolve('.markumo-media-test/fixtures')
 const mime={png:'image/png',apng:'image/png',jpg:'image/jpeg',jfif:'image/jpeg',gif:'image/gif',webp:'image/webp',bmp:'image/bmp',ico:'image/x-icon',cur:'image/x-icon',avif:'image/avif',svg:'image/svg+xml',pdf:'application/pdf',txt:'image/png'}
+if (!fs.existsSync(path.join(root, 'bookmark.pdf'))) {
+  await import('./generate-bookmark-pdf.mjs')
+}
 const server=await createServer({server:{port:1421,strictPort:true},plugins:[{name:'test-fixtures',configureServer(server){server.middlewares.use('/test-media/',async(req,res)=>{
   try{
     const url=new URL(req.url,'http://localhost'),name=decodeURIComponent(url.pathname.slice(1))
@@ -38,6 +41,14 @@ try{
   assert(!resources.some(x=>/pdfjs-dist|PdfViewer|ImageViewer/.test(x)),'Text-only host loaded a media module')
   const textId=await page.evaluate(()=>window.mediaTest.manager.activeId)
   const textHeap=await heap()
+  const flush=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
+  const readingPoint=(x=.5,y=.5)=>page.locator('.pdf-viewport').evaluate((host,{x,y})=>{
+    const box=host.getBoundingClientRect(),px=box.left+host.clientWidth*x,py=box.top+host.clientHeight*y
+    const page=Array.from(host.querySelectorAll('.pdf-page')).find(el=>{const r=el.getBoundingClientRect();return py>=r.top&&py<=r.bottom})
+    if(!page)return {page:1,x:0,y:0}
+    const rect=page.getBoundingClientRect()
+    return {page:Number(page.getAttribute('aria-label').match(/\d+/)[0]),x:(px-rect.left)/rect.width,y:(py-rect.top)/rect.height}
+  },{x,y})
   for(const name of ['transparent.png','sample.jpg','sample.bmp','sample.webp','animated.gif','safe.svg','wrong-extension.txt','sample.ico','sample.cur','sample.avif','sample.jfif','animated.apng']){
     console.log('Image',name)
     const id=await page.evaluate(name=>window.mediaTest.open(name),name)
@@ -68,7 +79,97 @@ try{
   assert.equal(await page.getByRole('combobox',{name:'PDF 缩放比例'}).inputValue(),'page')
   assert.equal(await page.getByRole('button',{name:'连续滚动',exact:true}).getAttribute('aria-pressed'),'true')
   await page.screenshot({path:'.markumo-media-test/pdf-reader-edge.png'})
+  // 5. Test empty outline on single.pdf
+  await page.getByRole('button',{name:'显示/隐藏 PDF 导航'}).click();await flush()
+  assert.equal(await page.getByRole('button',{name:'显示/隐藏 PDF 导航'}).getAttribute('aria-pressed'),'true')
+  await page.getByRole('tab',{name:'文档大纲'}).click();await flush()
+  assert.equal(await page.locator('.pdf-outline-empty').innerText(),'此 PDF 不包含文档目录')
   await page.evaluate(()=>window.mediaTest.close());await page.waitForFunction(()=>window.mediaTest.workers.size===0)
+
+  // 1-8. Test bookmark.pdf: thumbnails, outlines, destination jump, collapse/expand, resizer
+  console.log('PDF bookmark & navigation')
+  await page.evaluate(()=>window.mediaTest.open('bookmark.pdf'))
+  await page.waitForFunction(()=>document.querySelectorAll('.pdf-page .textLayer span').length>0,{timeout:30000})
+  const navBtn=page.getByRole('button',{name:'显示/隐藏 PDF 导航'})
+  assert.equal(await navBtn.getAttribute('aria-pressed'),'false')
+  await navBtn.click();await flush()
+  assert.equal(await navBtn.getAttribute('aria-pressed'),'true')
+  assert.equal(await page.locator('.pdf-navigation').isVisible(),true)
+  assert.equal(await page.getByRole('tab',{name:'页面缩略图'}).getAttribute('aria-selected'),'true')
+
+  // Thumbnails generation & click to jump
+  await page.waitForFunction(()=>document.querySelector('.pdf-thumbnail-item[data-page-number="1"] img'))
+  assert.equal(await page.locator('.pdf-thumbnail-item').count(),4)
+  assert.equal(await page.locator('.pdf-thumbnail-item.active').getAttribute('data-page-number'),'1')
+
+  const pageBox=page.getByRole('textbox',{name:'页码',exact:true})
+  // Click thumbnail 3 to jump
+  await page.locator('.pdf-thumbnail-item[data-page-number="3"]').click();await flush()
+  assert.equal(await pageBox.inputValue(),'3')
+  assert.equal(await page.locator('.pdf-thumbnail-item.active').getAttribute('data-page-number'),'3')
+
+  // Outline / bookmarks navigation
+  await page.getByRole('tab',{name:'文档大纲'}).click();await flush()
+  await page.waitForFunction(()=>document.querySelectorAll('.pdf-outline-node').length>=2)
+  const outlineTitles=await page.locator('.pdf-outline-title').allInnerTexts()
+  assert.ok(outlineTitles.includes('Chapter 1'))
+  assert.ok(outlineTitles.includes('Section 1.1'))
+  assert.ok(outlineTitles.includes('Chapter 2'))
+
+  // Click Section 1.1 (dest points to page 2)
+  await page.locator('.pdf-outline-title:has-text("Section 1.1")').click();await flush()
+  assert.equal(await pageBox.inputValue(),'2')
+
+  // Click Chapter 2 (dest points to page 3)
+  await page.locator('.pdf-outline-title:has-text("Chapter 2")').click();await flush()
+  assert.equal(await pageBox.inputValue(),'3')
+
+  // Multi-level bookmark expand/collapse
+  const twisty=page.locator('.pdf-outline-node:has-text("Chapter 1") .pdf-outline-twisty').first()
+  await twisty.click();await flush()
+  assert.equal(await page.locator('.pdf-outline-title:has-text("Section 1.1")').count(),0)
+  await twisty.click();await flush()
+  assert.equal(await page.locator('.pdf-outline-title:has-text("Section 1.1")').count(),1)
+
+  // Toggle sidebar preserves reading anchor
+  const beforeNavClose=await readingPoint()
+  await navBtn.click();await flush()
+  assert.equal(await page.locator('.pdf-navigation').count(),0)
+  const afterNavClose=await readingPoint()
+  assert.equal(afterNavClose.page,beforeNavClose.page)
+  assert(Math.abs(afterNavClose.y-beforeNavClose.y)<.01)
+  await navBtn.click();await flush()
+  assert.equal(await page.locator('.pdf-navigation').isVisible(),true)
+  assert.equal((await readingPoint()).page,beforeNavClose.page)
+
+  // Resizer & theme screenshot
+  const resizer=page.locator('.pdf-nav-resizer')
+  const initialWidth=await page.locator('.pdf-navigation').evaluate(el=>el.getBoundingClientRect().width)
+  assert.ok(initialWidth>=140&&initialWidth<=320)
+  const resizerBox=await resizer.boundingBox()
+  await page.mouse.move(resizerBox.x+resizerBox.width/2,resizerBox.y+100)
+  await page.mouse.down()
+  await page.mouse.move(resizerBox.x+50,resizerBox.y+100)
+  await page.mouse.up();await flush()
+  const resizedWidth=await page.locator('.pdf-navigation').evaluate(el=>el.getBoundingClientRect().width)
+  assert.ok(resizedWidth>initialWidth)
+
+  // Screenshots of outline in dark and light
+  await page.screenshot({path:'.markumo-media-test/pdf-outline-dark.png'})
+  await page.evaluate(()=>document.body.classList.add('light'))
+  await page.screenshot({path:'.markumo-media-test/pdf-outline-light.png'})
+  await page.evaluate(()=>document.body.classList.remove('light'))
+
+  // Screenshots of thumbnails in dark and light
+  await page.getByRole('tab',{name:'页面缩略图'}).click();await flush()
+  await page.waitForFunction(()=>document.querySelector('.pdf-thumbnail-item[data-page-number="1"] img'))
+  await page.screenshot({path:'.markumo-media-test/pdf-thumbnails-dark.png'})
+  await page.evaluate(()=>document.body.classList.add('light'))
+  await page.screenshot({path:'.markumo-media-test/pdf-thumbnails-light.png'})
+  await page.evaluate(()=>document.body.classList.remove('light'))
+
+  await page.evaluate(()=>window.mediaTest.close());await page.waitForFunction(()=>window.mediaTest.workers.size===0)
+
   await page.evaluate(()=>window.mediaTest.open('long.pdf'))
   await page.waitForFunction(()=>document.querySelectorAll('.pdf-page .textLayer span').length>0)
   await page.getByRole('button',{name:'末页',exact:true}).click()
@@ -80,13 +181,6 @@ try{
   const pageNumber=page.getByRole('textbox',{name:'页码',exact:true})
   for(const n of [1,400,3,549,200]){await pageNumber.fill(String(n));await pageNumber.press('Enter');await pageNumber.blur()}
   await page.waitForFunction(()=>document.querySelector('[aria-label="第 200 页"] .textLayer span'))
-  const flush=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
-  const readingPoint=(x=.5,y=.5)=>page.locator('.pdf-viewport').evaluate((host,{x,y})=>{
-    const box=host.getBoundingClientRect(),px=box.left+host.clientWidth*x,py=box.top+host.clientHeight*y
-    const page=Array.from(host.querySelectorAll('.pdf-page')).find(el=>{const r=el.getBoundingClientRect();return py>=r.top&&py<=r.bottom})
-    const rect=page.getBoundingClientRect()
-    return {page:Number(page.getAttribute('aria-label').match(/\d+/)[0]),x:(px-rect.left)/rect.width,y:(py-rect.top)/rect.height}
-  },{x,y})
   await page.locator('.pdf-viewport').evaluate(host=>{
     const paper=host.querySelector('[aria-label="第 200 页"]');host.scrollTop=paper.offsetTop+paper.offsetHeight*.4-host.clientHeight/2
   });await flush()
@@ -133,6 +227,20 @@ try{
   const beforePageDown=await page.locator('.pdf-viewport').evaluate(host=>host.scrollTop)
   await page.locator('.pdf-viewport').press('PageDown');await flush()
   assert(await page.locator('.pdf-viewport').evaluate(host=>host.scrollTop)>beforePageDown)
+
+  // 11-12. Test 550 pages lazy thumbnail loading and LRU cache
+  await page.getByRole('button',{name:'显示/隐藏 PDF 导航'}).click();await flush()
+  assert.equal(await page.locator('.pdf-thumbnail-item').count(),550)
+  await page.waitForTimeout(200)
+  const renderedThumbs=await page.locator('.pdf-thumbnail-img').count()
+  assert.ok(renderedThumbs<=15,'Thumbnail lazy loading should render only visible items, rendered: '+renderedThumbs)
+  // Scroll thumbnail container down
+  await page.locator('.pdf-thumbnails-container').evaluate(el=>{el.scrollTop=4000});await flush()
+  await page.waitForTimeout(300)
+  const scrolledThumbs=await page.locator('.pdf-thumbnail-img').count()
+  assert.ok(scrolledThumbs<=48,'Thumbnail LRU cache must be strictly bounded <= 48, count: '+scrolledThumbs)
+  await page.getByRole('button',{name:'显示/隐藏 PDF 导航'}).click();await flush()
+
   await page.evaluate(()=>window.mediaTest.close());await page.waitForFunction(()=>window.mediaTest.workers.size===0)
   await page.evaluate(()=>window.mediaTest.open('mixed.pdf'));await page.waitForFunction(()=>document.querySelector('.pdf-page .textLayer span'))
   await page.getByRole('combobox',{name:'PDF 缩放比例'}).selectOption('width')
@@ -211,6 +319,33 @@ try{
   await page.waitForFunction(()=>document.querySelector('[data-pane-id="main"] .markdown-live'))
   assert.equal(await page.locator('[data-pane-id="main"] .pane-mode-control').count(),1)
   assert.equal(await page.locator('.image-viewer .cm-editor,.image-viewer .pane-mode-control').count(),0)
+
+  // 15. Verify multi-pane independent navigation state between two PDF panes
+  const { leftPane, rightPane } = await page.evaluate(async()=>{
+    const m=window.mediaTest.manager
+    m.close(m.activeId,true)
+    const p1=m.activePane
+    await window.mediaTest.open('bookmark.pdf')
+    const p2=m.splitPane('right')
+    await window.mediaTest.open('single.pdf')
+    return { leftPane:p1, rightPane:p2 }
+  })
+  await page.waitForFunction(()=>document.querySelectorAll('.pdf-viewport').length===2)
+  await page.locator(`[data-pane-id="${leftPane}"] [aria-label="显示/隐藏 PDF 导航"]`).click();await flush()
+  assert.equal(await page.locator(`[data-pane-id="${leftPane}"] .pdf-navigation`).isVisible(),true)
+  assert.equal(await page.locator(`[data-pane-id="${rightPane}"] .pdf-navigation`).count(),0)
+  const paneStates=await page.evaluate(({ leftPane, rightPane })=>{
+    const m=window.mediaTest.manager
+    const id1=m.layout.getPane(leftPane).group.activeId
+    const id2=m.layout.getPane(rightPane).group.activeId
+    return {
+      mainOpen: m.mediaViewState(id1, leftPane).pdfNavigationOpen,
+      rightOpen: m.mediaViewState(id2, rightPane).pdfNavigationOpen,
+    }
+  }, { leftPane, rightPane })
+  assert.equal(paneStates.mainOpen,true)
+  assert.equal(paneStates.rightOpen,false)
+
   assert.deepEqual(errors,[])
   report.splitLayout=true
   fs.writeFileSync('.markumo-media-test/browser-metrics.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2))

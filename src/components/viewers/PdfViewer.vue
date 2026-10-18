@@ -2,6 +2,8 @@
   <section class="media-viewer pdf-viewer" aria-label="PDF 查看器" @keydown="onKeydown">
     <div class="pdf-toolbar" role="toolbar" aria-label="PDF 工具栏">
       <div class="pdf-tools">
+        <button class="pdf-nav-toggle" aria-label="显示/隐藏 PDF 导航" :title="view.pdfNavigationOpen ? '隐藏 PDF 导航' : '显示 PDF 导航'" :aria-pressed="!!view.pdfNavigationOpen" :disabled="!pdf" @click="toggleNavigation"><ViewerIcon name="sidebar" /></button>
+        <span class="pdf-divider" />
         <button class="edge-nav" aria-label="首页" title="首页 (Home)" :disabled="!pdf || page<=1" @click="jump(1)"><ViewerIcon name="first" /></button>
         <button aria-label="上一页" title="上一页" :disabled="!pdf || page<=1" @click="jump(page-1)"><ViewerIcon name="previous" /></button>
         <form class="page-control" @submit.prevent="commitPage(true)">
@@ -30,6 +32,7 @@
       <details ref="moreMenu" class="pdf-more">
         <summary aria-label="更多 PDF 操作" title="更多操作"><ViewerIcon name="more" /></summary>
         <div class="pdf-menu">
+          <button class="compact-only" :disabled="!pdf" @click="toggleNavigation();closeMenu()"><ViewerIcon name="sidebar" />{{ view.pdfNavigationOpen ? '隐藏 PDF 导航' : '显示 PDF 导航' }}</button>
           <button class="narrow-only" :disabled="!pdf" @click="jump(1);closeMenu()"><ViewerIcon name="first" />首页</button>
           <button class="narrow-only" :disabled="!pdf" @click="jump(total);closeMenu()"><ViewerIcon name="last" />末页</button>
           <button class="compact-only" :disabled="!pdf" @click="toggleContinuous();closeMenu()"><ViewerIcon name="pages" />{{ view.continuous ? '切换到单页浏览' : '切换到连续滚动' }}</button>
@@ -52,21 +55,49 @@
       <button type="button" class="close-search" aria-label="关闭查找" title="关闭查找 (Esc)" @click="closeSearch"><ViewerIcon name="close" /></button>
       <span v-if="searchError" class="search-error">{{ searchError }}</span>
     </form>
-    <div v-if="passwordNeeded" class="password-container">
-      <form class="password-form" @submit.prevent="submitPassword">
-        <strong>此 PDF 需要密码</strong><span>{{ doc.name }}</span>
-        <label :for="`pdf-password-${pane}`">{{ passwordWrong ? '密码不正确，请重试' : '输入打开文档的密码' }}</label>
-        <input :id="`pdf-password-${pane}`" ref="passwordInput" v-model="password" type="password" autocomplete="off" aria-label="PDF 密码" />
-        <div><button type="button" @click="cancelPassword">取消</button><button class="primary" type="submit">打开</button></div>
-      </form>
-    </div>
-    <MediaEmpty v-else-if="!pdf" :error="error" :token="doc.fileToken" @retry="load" />
-    <div v-show="pdf" ref="viewport" class="media-viewport pdf-viewport" :class="{ 'hand-mode':handMode,dragging:!!drag }" tabindex="0" aria-label="PDF 阅读区域" @scroll.passive="onScroll" @wheel="onWheel" @pointerdown="startPan" @pointermove="pan" @pointerup="endPan" @pointercancel="endPan">
-      <div class="pdf-pages" :style="{height:`${contentHeight}px`,width:`${contentWidth}px`}">
-        <PdfPage v-for="number in visiblePages" :key="number" :pdf="pdf!" :api="api!" :number="number" :scale="scale" :rotation="view.rotation" :pixel-budget="Math.floor(64*1024*1024/4/Math.max(3,visiblePages.length)/2)" :query="searchOpen ? activeQuery : ''" :match="selected?.page===number ? selected.index : undefined" :match-request="matchRequest" :style="{top:`${pageTop(number)}px`,left:`${pageLeft(number)}px`}" @size="rememberSize" @match-location="revealMatch" />
+    <div class="pdf-body">
+      <PdfNavigation
+        v-if="view.pdfNavigationOpen && pdf"
+        :style="{ width: `${view.pdfNavigationWidth || 200}px` }"
+        :pdf="pdf"
+        :total="total"
+        :current-page="page"
+        :rotation="view.rotation"
+        :mode="view.pdfNavigationMode || 'thumbnails'"
+        :explicit-jump-seq="explicitJumpSeq"
+        :sizes="sizes"
+        :fallback-size="fallback"
+        @update:mode="view.pdfNavigationMode = $event"
+        @jump="jump($event)"
+        @navigate-dest="handleNavigateDest"
+        @open-url="openUrl"
+      />
+      <div
+        v-if="view.pdfNavigationOpen && pdf"
+        class="pdf-nav-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整 PDF 导航栏宽度"
+        @pointerdown="startResizeNav"
+      />
+      <div class="pdf-main-area">
+        <div v-if="passwordNeeded" class="password-container">
+          <form class="password-form" @submit.prevent="submitPassword">
+            <strong>此 PDF 需要密码</strong><span>{{ doc.name }}</span>
+            <label :for="`pdf-password-${pane}`">{{ passwordWrong ? '密码不正确，请重试' : '输入打开文档的密码' }}</label>
+            <input :id="`pdf-password-${pane}`" ref="passwordInput" v-model="password" type="password" autocomplete="off" aria-label="PDF 密码" />
+            <div><button type="button" @click="cancelPassword">取消</button><button class="primary" type="submit">打开</button></div>
+          </form>
+        </div>
+        <MediaEmpty v-else-if="!pdf" :error="error" :token="doc.fileToken" @retry="load" />
+        <div v-show="pdf" ref="viewport" class="media-viewport pdf-viewport" :class="{ 'hand-mode':handMode,dragging:!!drag }" tabindex="0" aria-label="PDF 阅读区域" @scroll.passive="onScroll" @wheel="onWheel" @pointerdown="startPan" @pointermove="pan" @pointerup="endPan" @pointercancel="endPan">
+          <div class="pdf-pages" :style="{height:`${contentHeight}px`,width:`${contentWidth}px`}">
+            <PdfPage v-for="number in visiblePages" :key="number" :pdf="pdf!" :api="api!" :number="number" :scale="scale" :rotation="view.rotation" :pixel-budget="Math.floor(64*1024*1024/4/Math.max(3,visiblePages.length)/2)" :query="searchOpen ? activeQuery : ''" :match="selected?.page===number ? selected.index : undefined" :match-request="matchRequest" :style="{top:`${pageTop(number)}px`,left:`${pageLeft(number)}px`}" @size="rememberSize" @match-location="revealMatch" />
+          </div>
+        </div>
+        <div v-if="error && pdf" class="pdf-notice" role="alert">{{ error }} <button @click="load">重新加载</button></div>
       </div>
     </div>
-    <div v-if="error && pdf" class="pdf-notice" role="alert">{{ error }} <button @click="load">重新加载</button></div>
   </section>
 </template>
 <script setup lang="ts">
@@ -77,6 +108,7 @@ import type { MediaMetadata } from '../../features/files/contracts'
 import { MEDIA_CHUNK, mediaMetadata, mediaSize, openMediaDefault, readMediaChunk, type MediaViewState } from '../../features/files/media'
 import { fileError } from '../../features/files/FileController'
 import PdfPage from './PdfPage.vue'
+import PdfNavigation from './PdfNavigation.vue'
 import MediaEmpty from './MediaEmpty.vue'
 import ViewerIcon from './ViewerIcon.vue'
 import './viewer.css'
@@ -85,7 +117,7 @@ const props=defineProps<{doc:EditorDocument;pane:string;state:MediaViewState}>()
 const emit=defineEmits<{(e:'metadata',media:MediaMetadata,version:string):void}>()
 const view=reactive(props.state),pdf=shallowRef<PDFJS.PDFDocumentProxy>(),api=shallowRef<typeof PDFJS>(),meta=ref<MediaMetadata>()
 const viewport=ref<HTMLElement>(),error=ref(''),total=ref(0),page=ref(view.page),scale=ref(view.scale)
-const viewportWidth=ref(0),viewportHeight=ref(800),handMode=ref(false)
+const viewportWidth=ref(0),viewportHeight=ref(800),handMode=ref(false),explicitJumpSeq=ref(0)
 const pageInput=ref<HTMLInputElement>(),pageDraft=ref(String(view.page)),pageEditing=ref(false)
 const moreMenu=ref<HTMLDetailsElement>()
 const sizes=reactive(new Map<number,{width:number;height:number}>()),fallback=reactive({width:612,height:792})
@@ -186,10 +218,86 @@ function zoom(factor:number,point?:{x:number;y:number}){const anchor=point?captu
 function chooseZoom(value:string){if(value==='width'||value==='page')setFit(value);else{view.fit='manual';changeScale(Number(value))}}
 function jump(value:number){
   if(!pdf.value||!Number.isFinite(value))return
+  explicitJumpSeq.value++
   const number=Math.max(1,Math.min(total.value,Math.round(value))),anchor=captureAnchor()
   page.value=number;view.page=number
   positionAt({page:number,x:anchor?.x??.5,y:0,clientX:(viewport.value?.clientWidth||0)/2,clientY:PADDING})
   updateFit(pendingAnchor)
+}
+function toggleNavigation(){
+  const anchor=captureAnchor()
+  view.pdfNavigationOpen=!view.pdfNavigationOpen
+  void nextTick(()=>{
+    measureViewport()
+    updateFit(anchor)
+    if(anchor)positionAt(anchor)
+  })
+}
+function startResizeNav(event:PointerEvent){
+  event.preventDefault()
+  const startX=event.clientX
+  const startWidth=view.pdfNavigationWidth||200
+  const anchor=captureAnchor()
+  function onPointerMove(e:PointerEvent){
+    const dx=e.clientX-startX
+    const hostWidth=viewport.value?.parentElement?.clientWidth||800
+    const maxAllowed=Math.min(320,hostWidth-180)
+    const minAllowed=140
+    view.pdfNavigationWidth=Math.max(minAllowed,Math.min(maxAllowed,startWidth+dx))
+    measureViewport()
+    updateFit(anchor)
+    if(anchor)positionAt(anchor)
+  }
+  function onPointerUp(){
+    window.removeEventListener('pointermove',onPointerMove)
+    window.removeEventListener('pointerup',onPointerUp)
+    void nextTick(()=>{
+      measureViewport()
+      updateFit(anchor)
+      if(anchor)positionAt(anchor)
+    })
+  }
+  window.addEventListener('pointermove',onPointerMove)
+  window.addEventListener('pointerup',onPointerUp)
+}
+async function resolveDestination(docProxy:PDFJS.PDFDocumentProxy,dest:any){
+  if(!dest)return null
+  let explicitDest=dest
+  if(typeof dest==='string')explicitDest=await docProxy.getDestination(dest)
+  if(!Array.isArray(explicitDest)||!explicitDest.length)return null
+  const [pageRef,mode,...args]=explicitDest
+  let pageIndex=-1
+  if(typeof pageRef==='number')pageIndex=pageRef
+  else if(pageRef&&typeof pageRef==='object')pageIndex=await docProxy.getPageIndex(pageRef)
+  if(pageIndex<0||pageIndex>=docProxy.numPages)return null
+  const pageNumber=pageIndex+1
+  let top:number|undefined,left:number|undefined
+  if(mode&&typeof mode==='object'){
+    if(mode.name==='XYZ'){left=typeof args[0]==='number'?args[0]:undefined;top=typeof args[1]==='number'?args[1]:undefined}
+    else if(mode.name==='FitH'||mode.name==='FitBH')top=typeof args[0]==='number'?args[0]:undefined
+    else if(mode.name==='FitV'||mode.name==='FitBV')left=typeof args[0]==='number'?args[0]:undefined
+  }
+  return {pageNumber,top,left}
+}
+async function handleNavigateDest(dest:any){
+  if(!pdf.value)return
+  try{
+    const target=await resolveDestination(pdf.value,dest)
+    if(!target)return
+    explicitJumpSeq.value++
+    if(target.top!==undefined&&Number.isFinite(target.top)){
+      const pHeight=dimensions(target.pageNumber).height
+      const yInPage=Math.max(0,(pHeight-target.top)*scale.value)
+      const targetY=pageTop(target.pageNumber)+yInPage
+      page.value=target.pageNumber
+      view.page=target.pageNumber
+      viewport.value?.scrollTo({top:targetY,left:pageLeft(target.pageNumber)})
+      syncPosition()
+    }else jump(target.pageNumber)
+  }catch(e){console.warn('Failed to resolve bookmark destination',e)}
+}
+function openUrl(url:string){
+  if(/^https?:\/\//i.test(url))window.open(url,'_blank','noopener,noreferrer')
 }
 function toggleContinuous(){const anchor=captureAnchor();view.continuous=!view.continuous;if(anchor){page.value=anchor.page;positionAt(anchor)}}
 function rotate(){

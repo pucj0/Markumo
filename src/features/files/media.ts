@@ -16,5 +16,11 @@ export interface MediaViewState {
   scale: number; fit: string; rotation: number; left: number; top: number; page: number; continuous: boolean; query: string
   pdfAnchor?: { page: number; x: number; y: number }
   pdfSearchOpen?: boolean
+  pdfNavigationOpen?: boolean
+  pdfNavigationMode?: 'thumbnails' | 'outline'
+  pdfNavigationWidth?: number
 }
-export const newMediaViewState = (): MediaViewState => ({ scale: 1, fit: 'page', rotation: 0, left: 0, top: 0, page: 1, continuous: true, query: '' })
+export const newMediaViewState = (): MediaViewState => ({
+  scale: 1, fit: 'page', rotation: 0, left: 0, top: 0, page: 1, continuous: true, query: '',
+  pdfNavigationOpen: false, pdfNavigationMode: 'thumbnails', pdfNavigationWidth: 200,
+})
