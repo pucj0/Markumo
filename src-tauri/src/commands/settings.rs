@@ -27,6 +27,8 @@ pub struct EditorSettings {
     auto_save_delay: u32,
     tree_click_mode: String,
     auto_follow_active_file: bool,
+    smart_expand: bool,
+    compact_folders: bool,
     #[serde(deserialize_with = "deserialize_keymap_preset")]
     keymap_preset: String,
     image_rules: ImageRules,
@@ -89,6 +91,8 @@ impl Default for EditorSettings {
             auto_save_delay: 1500,
             tree_click_mode: "single".into(),
             auto_follow_active_file: false,
+            smart_expand: true,
+            compact_folders: false,
             keymap_preset: "markumo".into(),
             image_rules: ImageRules::default(),
             document_image_rules: BTreeMap::new(),
@@ -247,20 +251,26 @@ mod branding_tests {
         let old: EditorSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(old.tree_click_mode, "single");
         assert!(!old.auto_follow_active_file);
+        assert!(old.smart_expand);
+        assert!(!old.compact_folders);
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         for mode in ["single", "double"] {
             let settings: EditorSettings = serde_json::from_value(serde_json::json!({
-                "treeClickMode": mode, "autoFollowActiveFile": true
+                "treeClickMode": mode, "autoFollowActiveFile": true, "smartExpand": false, "compactFolders": true
             })).unwrap();
             save(&path, &settings).unwrap();
             let loaded = load(&path).unwrap();
             assert_eq!(loaded.tree_click_mode, mode);
             assert!(loaded.auto_follow_active_file);
+            assert!(!loaded.smart_expand);
+            assert!(loaded.compact_folders);
         }
         let legacy: EditorSettings = serde_json::from_str(r#"{"treeClickMode":"double"}"#).unwrap();
         assert_eq!(legacy.tree_click_mode, "double");
         assert!(!legacy.auto_follow_active_file);
+        assert!(legacy.smart_expand);
+        assert!(!legacy.compact_folders);
     }
     #[test]
     fn background_update_preferences_default_and_disk_round_trip(){
