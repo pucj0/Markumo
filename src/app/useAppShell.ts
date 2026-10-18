@@ -53,7 +53,7 @@ export function useAppShell() {
   systemTheme.addEventListener('change', updateSystemTheme)
   const uiFontSize = ref(14)
   const fontSize = ref(14), wordWrap = ref(false), showOutline = ref(false), defaultMdMode = ref<MarkdownMode>('live')
-  const fontFamily = ref<EditorSettings['fontFamily']>('system'), indentSize = ref(2), useTabs = ref(false)
+  const fontFamily = ref<EditorSettings['fontFamily']>('system'), indentSize = ref(4), useTabs = ref(false)
   const autoCheckUpdates = ref(true), autoDownloadUpdates = ref(false)
   const autoSave = ref(false), autoSaveDelay = ref(1500)
   const treeClickMode = ref<'double' | 'single'>('single')

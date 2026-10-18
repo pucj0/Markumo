@@ -78,7 +78,7 @@ impl Default for EditorSettings {
             bracket_mode: "matching".into(),
             show_outline: false,
             outline_width: 240,
-            indent_size: 2,
+            indent_size: 4,
             use_tabs: false,
             default_md_mode: "live".into(),
             markdown_typography: MarkdownTypography::default(),

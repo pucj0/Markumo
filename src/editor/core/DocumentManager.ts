@@ -74,7 +74,7 @@ export class DocumentManager {
   private wordWrap = false
   private theme: Theme = 'dark'
   private defaultMarkdownMode: MarkdownMode = 'live'
-  private indentSize = 2
+  private indentSize = 4
   private useTabs = false
   private applying = false
   private fileModes: Record<string, MarkdownMode> = {}
