@@ -44,6 +44,9 @@ export class WorkspaceController {
   }>()
   private folderLoads = new Map<WorkspaceNode,Promise<boolean>>()
   expanding = false
+  smartExpand = true
+  compactFolders = false
+  private smartExpandSequence = 0
 
   // 全文搜索状态
   searchId = ''
@@ -230,14 +233,126 @@ export class WorkspaceController {
     })()
     this.folderLoads.set(node,load);return load
   }
-  async toggleFolder(node: WorkspaceNode) {
-    if(!node.isDirectory || node.isSymlink)return
+  async toggleFolder(node: WorkspaceNode, options?: { smart?: boolean }) {
+    if (!node.isDirectory || node.isSymlink) return
     this.cancelExpand(); this.cancelReveal()
-    node.isExpanded=!node.isExpanded;this.emit()
-    if(node.isExpanded && !await this.loadFolder(node))node.isExpanded=false
+    const wasExpanded = !!node.isExpanded
+    node.isExpanded = !wasExpanded
+    this.emit()
+    if (!node.isExpanded) return
+    const loaded = await this.loadFolder(node)
+    if (!loaded || !node.isExpanded || this.disposed) {
+      node.isExpanded = false
+      this.emit()
+      return
+    }
+    const useSmart = options?.smart ?? this.smartExpand
+    if (useSmart) {
+      await this.smartExpandChain(node)
+    } else if (this.compactFolders) {
+      await this.resolveCompactChain(node)
+    }
     this.emit()
   }
-  cancelExpand() {this.expandSequence++;this.expanding=false;this.emit()}
+  cancelExpand() {
+    this.expandSequence++
+    this.smartExpandSequence++
+    this.expanding = false
+    this.emit()
+  }
+  async smartExpandChain(startNode: WorkspaceNode) {
+    const sequence = ++this.smartExpandSequence
+    const started = Date.now()
+    const maxDepth = 48
+    const maxTimeout = 3000
+    let current = startNode
+    let depth = 0
+
+    while (
+      !this.disposed &&
+      sequence === this.smartExpandSequence &&
+      startNode.isExpanded &&
+      current.isExpanded &&
+      depth < maxDepth &&
+      Date.now() - started < maxTimeout
+    ) {
+      const children = current.children
+      if (!children || children.length !== 1) break
+      const soleChild = children[0]
+      if (!soleChild.isDirectory || soleChild.isSymlink) break
+
+      soleChild.isExpanded = true
+      this.emit()
+
+      const loaded = await this.loadFolder(soleChild)
+      if (
+        this.disposed ||
+        sequence !== this.smartExpandSequence ||
+        !startNode.isExpanded ||
+        !soleChild.isExpanded
+      ) {
+        if (!loaded && soleChild.isExpanded) soleChild.isExpanded = false
+        break
+      }
+      if (!loaded) {
+        soleChild.isExpanded = false
+        break
+      }
+
+      current = soleChild
+      depth++
+    }
+  }
+  async resolveCompactChain(node: WorkspaceNode) {
+    if (!this.compactFolders || !node.isDirectory || node.isSymlink) return [node]
+    const chain: WorkspaceNode[] = [node]
+    let current = node
+    let depth = 0
+    const maxDepth = 48
+
+    while (depth < maxDepth && !this.disposed) {
+      if (!current.children && current.hasChildren) {
+        const loaded = await this.loadFolder(current)
+        if (!loaded || this.disposed) break
+      }
+      const children = current.children
+      if (!children || children.length !== 1) break
+      const soleChild = children[0]
+      if (!soleChild.isDirectory || soleChild.isSymlink) break
+      chain.push(soleChild)
+      current = soleChild
+      depth++
+    }
+    return chain
+  }
+  collapseCompactChain(chain: WorkspaceNode[]) {
+    this.cancelExpand()
+    for (const item of chain) {
+      item.isExpanded = false
+    }
+    this.emit()
+  }
+  async expandCompactChain(chain: WorkspaceNode[], options?: { smart?: boolean }) {
+    this.cancelExpand(); this.cancelReveal()
+    for (const item of chain) {
+      item.isExpanded = true
+    }
+    this.emit()
+    const tail = chain[chain.length - 1]
+    const loaded = await this.loadFolder(tail)
+    if (!loaded || !tail.isExpanded || this.disposed) {
+      if (!loaded) tail.isExpanded = false
+      this.emit()
+      return
+    }
+    const useSmart = options?.smart ?? this.smartExpand
+    if (useSmart) {
+      await this.smartExpandChain(tail)
+    } else if (this.compactFolders) {
+      await this.resolveCompactChain(tail)
+    }
+    this.emit()
+  }
   collapseAll() {
     this.cancelExpand();this.revealSequence++
     const stack=this.roots.flatMap(root=>root.entries)

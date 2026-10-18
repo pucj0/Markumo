@@ -8,14 +8,15 @@
         { 'active-file': isNodeActive, selected: isNodeSelected, 'locate-highlight': highlighted }
       ]"
       :style="{ paddingLeft: `${Math.min(depth, 10) * 12 + 10}px` }"
-      :title="`${node.name}\n${readablePath(node.path)}`"
+      :title="compactTitle"
       role="treeitem"
       :data-tree-path="node.path"
+      :data-compact-paths="isCompact ? compactChain!.map(n => n.path).join(';') : undefined"
       :aria-level="depth + 1"
       :aria-selected="isNodeSelected"
       :aria-current="isNodeActive ? 'page' : undefined"
-      :aria-label="node.name"
-      :aria-expanded="node.isDirectory ? !!node.isExpanded : undefined"
+      :aria-label="compactAriaLabel"
+      :aria-expanded="node.isDirectory ? isExpanded : undefined"
       :draggable="!node.isDirectory"
       @dragstart="handleDragStart"
       :tabindex="tabStop ? 0 : -1"
@@ -27,11 +28,27 @@
     >
       <template v-if="node.isDirectory">
         <span class="twisty" @click.stop="handleTwistyClick" @dblclick.stop>
-          <span v-if="node.isLoading" class="loading-spin">⟳</span>
-          <span v-else>{{ node.isExpanded ? '▾' : '▸' }}</span>
+          <span v-if="isLoading" class="loading-spin">⟳</span>
+          <span v-else>{{ isExpanded ? '▾' : '▸' }}</span>
         </span>
         <Icon name="folder" size="small" />
-        <span class="label">{{ node.name }}</span>
+        <span v-if="isCompact" class="label compact-chain">
+          <template v-for="(item, idx) in compactChain" :key="item.path">
+            <span
+              class="compact-segment"
+              :class="{
+                'segment-selected': isSegmentSelected(item.path)
+              }"
+              :data-segment-path="item.path"
+              :title="`${item.name}\n${readablePath(item.path)}`"
+              @click.stop="handleSegmentClick($event, item)"
+              @dblclick.stop="handleSegmentDblClick($event, item)"
+              @contextmenu.prevent.stop="openSegmentMenu($event, item)"
+            >{{ item.name }}</span>
+            <span v-if="idx < compactChain!.length - 1" class="compact-separator">/</span>
+          </template>
+        </span>
+        <span v-else class="label">{{ node.name }}</span>
       </template>
 
       <template v-else>
@@ -42,9 +59,9 @@
     </div>
 
     <!-- 子目录递归展开 -->
-    <div v-if="!flat && node.isDirectory && node.isExpanded && node.children">
+    <div v-if="!flat && node.isDirectory && isExpanded && (compactTail.children || node.children)">
       <TreeNodeItem
-        v-for="child in node.children"
+        v-for="child in (compactTail.children || node.children)"
         :key="child.path"
         :node="child"
         :depth="depth + 1"
@@ -58,6 +75,7 @@
         @select-file="$emit('select-file', $event)"
         @pin-file="$emit('pin-file', $event)"
         @toggle-folder="$emit('toggle-folder', $event)"
+        @toggle-compact="$emit('toggle-compact', $event)"
         @create-file="$emit('create-file', $event)"
         @rename-node="$emit('rename-node', $event)"
         @delete-node="$emit('delete-node', $event)"
@@ -82,6 +100,7 @@ import { readablePath, displayPathKey } from '../../features/shell/pathDisplay'
 const props = withDefaults(defineProps<{
   node: WorkspaceNode
   depth: number
+  compactChain?: WorkspaceNode[]
   activeFilePath?: string
   selectedTreePath?: string | null
   treeClickMode?: 'double' | 'single'
@@ -100,6 +119,7 @@ const emit = defineEmits<{
   (e: 'open-file', node: WorkspaceNode): void
   (e: 'pin-file', node: WorkspaceNode): void
   (e: 'toggle-folder', node: WorkspaceNode): void
+  (e: 'toggle-compact', chain: WorkspaceNode[]): void
   (e: 'create-file', parentDir: string): void
   (e: 'rename-node', node: WorkspaceNode): void
   (e: 'delete-node', node: WorkspaceNode): void
@@ -108,11 +128,55 @@ const emit = defineEmits<{
   (e: 'reveal-node', path: string): void
 }>()
 
+const isCompact = computed(() => !!(props.compactChain && props.compactChain.length > 1))
+const compactTail = computed(() => isCompact.value ? props.compactChain![props.compactChain!.length - 1] : props.node)
+
+const isExpanded = computed(() => {
+  if (isCompact.value) {
+    return props.compactChain!.some(item => item.isExpanded)
+  }
+  return !!props.node.isExpanded
+})
+
+const isLoading = computed(() => {
+  if (isCompact.value) {
+    return props.compactChain!.some(item => item.isLoading)
+  }
+  return !!props.node.isLoading
+})
+
+const compactTitle = computed(() => {
+  if (isCompact.value) {
+    const chainNames = props.compactChain!.map(n => n.name).join('/')
+    return `${chainNames}\n${readablePath(compactTail.value.path)}`
+  }
+  return `${props.node.name}\n${readablePath(props.node.path)}`
+})
+
+const compactAriaLabel = computed(() => {
+  if (isCompact.value) {
+    return props.compactChain!.map(n => n.name).join('/')
+  }
+  return props.node.name
+})
+
 const isDirty = computed(() => {
   return props.dirtyPaths?.some(path => displayPathKey(path) === displayPathKey(props.node.path)) ?? false
 })
 
-const isNodeSelected = computed(() => !!props.selectedTreePath && displayPathKey(props.selectedTreePath) === displayPathKey(props.node.path))
+const isNodeSelected = computed(() => {
+  if (!props.selectedTreePath) return false
+  const target = displayPathKey(props.selectedTreePath)
+  if (displayPathKey(props.node.path) === target) return true
+  if (props.compactChain?.some(item => displayPathKey(item.path) === target)) return true
+  return false
+})
+
+function isSegmentSelected(path: string) {
+  if (!props.selectedTreePath) return false
+  return displayPathKey(props.selectedTreePath) === displayPathKey(path)
+}
+
 const isNodeActive = computed(() => !props.node.isDirectory && !!props.activeFilePath && displayPathKey(props.activeFilePath) === displayPathKey(props.node.path))
 
 function handleDragStart(event: DragEvent) {
@@ -122,6 +186,16 @@ function handleDragStart(event: DragEvent) {
 }
 
 function handleClick(event: MouseEvent) {
+  if (isCompact.value) {
+    const segElement = (event.target as HTMLElement).closest<HTMLElement>('[data-segment-path]')
+    if (segElement) return
+    emit('locate-node', props.node)
+    if (event.detail > 1) return
+    if (props.treeClickMode === 'single') {
+      emit('toggle-compact', props.compactChain!)
+    }
+    return
+  }
   emit('locate-node', props.node)
   if (event.detail > 1) return
   if (props.node.isDirectory) {
@@ -129,24 +203,51 @@ function handleClick(event: MouseEvent) {
       emit('toggle-folder', props.node)
     }
   } else {
-    // 文件无论何种模式，单击均打开临时预览 (Preview Tab)
     emit('select-file', props.node)
   }
 }
 
-function handleDblClick() {
+function handleDblClick(event: MouseEvent) {
+  if (isCompact.value) {
+    const segElement = (event.target as HTMLElement).closest<HTMLElement>('[data-segment-path]')
+    if (segElement) return
+    emit('locate-node', props.node)
+    if (props.treeClickMode === 'double') {
+      emit('toggle-compact', props.compactChain!)
+    }
+    return
+  }
   emit('locate-node', props.node)
   if (props.node.isDirectory) {
     if (props.treeClickMode === 'double') {
       emit('toggle-folder', props.node)
     }
   } else {
-    // 文件双击固定为永久标签 (Permanent Tab)
     emit('pin-file', props.node)
   }
 }
 
+function handleSegmentClick(_event: MouseEvent, item: WorkspaceNode) {
+  emit('locate-node', item)
+}
+
+function handleSegmentDblClick(_event: MouseEvent, item: WorkspaceNode) {
+  emit('locate-node', item)
+  if (props.treeClickMode === 'double') {
+    if (isCompact.value) {
+      emit('toggle-compact', props.compactChain!)
+    } else {
+      emit('toggle-folder', item)
+    }
+  }
+}
+
 function handleTwistyClick(event: MouseEvent) {
+  if (isCompact.value) {
+    emit('locate-node', props.node)
+    emit('toggle-compact', props.compactChain!)
+    return
+  }
   emit('locate-node', props.node)
   if (props.node.isDirectory && event.detail <= 1) {
     emit('toggle-folder', props.node)
@@ -154,18 +255,42 @@ function handleTwistyClick(event: MouseEvent) {
 }
 
 const contextMenu = ref<InstanceType<typeof ContextMenu> | null>(null)
+
+function openSegmentMenu(event: MouseEvent | KeyboardEvent, item: WorkspaceNode) {
+  emit('locate-node', item)
+  openMenuForNode(event, item)
+}
+
 function openMenu(event: MouseEvent | KeyboardEvent) {
+  if (isCompact.value) {
+    const segElement = (event.target as HTMLElement).closest<HTMLElement>('[data-segment-path]')
+    const segPath = segElement?.dataset.segmentPath
+    let target: WorkspaceNode | undefined
+    if (props.selectedTreePath) {
+      target = props.compactChain!.find(n => displayPathKey(n.path) === displayPathKey(props.selectedTreePath!))
+    }
+    if (!target && segPath) {
+      target = props.compactChain!.find(n => displayPathKey(n.path) === displayPathKey(segPath))
+    }
+    if (!target) target = compactTail.value
+    emit('locate-node', target)
+    openMenuForNode(event, target)
+    return
+  }
   emit('locate-node', props.node)
-  const node = props.node
+  openMenuForNode(event, props.node)
+}
+
+function openMenuForNode(event: MouseEvent | KeyboardEvent, target: WorkspaceNode) {
   const registry = new CommandRegistry([
-    { id:'node-new-file',title:'新建文件…',enabled:node.isDirectory,run:()=>emit('create-file',node.path) },
-    { id:'node-rename',title:'重命名…',enabled:true,run:()=>emit('rename-node',node) },
-    { id:'node-move',title:'移动到…',enabled:true,run:()=>emit('move-node',node) },
-    { id:'node-delete',title:'删除…',enabled:true,run:()=>emit('delete-node',node) },
-    { id:'node-copy-path',title:'复制文件路径',enabled:true,run:()=>emit('copy-path',node.path) },
-    { id:'node-reveal',title:'在文件管理器中显示',enabled:!!props.desktop,run:()=>emit('reveal-node',node.path) },
+    { id:'node-new-file',title:'新建文件…',enabled:target.isDirectory,run:()=>emit('create-file',target.path) },
+    { id:'node-rename',title:'重命名…',enabled:true,run:()=>emit('rename-node',target) },
+    { id:'node-move',title:'移动到…',enabled:true,run:()=>emit('move-node',target) },
+    { id:'node-delete',title:'删除…',enabled:true,run:()=>emit('delete-node',target) },
+    { id:'node-copy-path',title:'复制文件路径',enabled:true,run:()=>emit('copy-path',target.path) },
+    { id:'node-reveal',title:'在文件管理器中显示',enabled:!!props.desktop,run:()=>emit('reveal-node',target.path) },
   ])
-  contextMenu.value?.open(event,[...(node.isDirectory ? [cmd('node-new-file'),separator('node-create-section')] : []),cmd('node-rename'),cmd('node-move'),cmd('node-delete'),separator('node-path-section'),cmd('node-copy-path'),cmd('node-reveal')],registry,'文件与目录操作')
+  contextMenu.value?.open(event,[...(target.isDirectory ? [cmd('node-new-file'),separator('node-create-section')] : []),cmd('node-rename'),cmd('node-move'),cmd('node-delete'),separator('node-path-section'),cmd('node-copy-path'),cmd('node-reveal')],registry,'文件与目录操作')
 }
 </script>
 
@@ -231,6 +356,39 @@ function openMenu(event: MouseEvent | KeyboardEvent) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.compact-chain {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-segment {
+  cursor: pointer;
+  border-radius: 2px;
+  padding: 0 2px;
+  transition: background 0.1s, color 0.1s;
+}
+
+.compact-segment:hover {
+  background: var(--hover);
+  text-decoration: underline;
+}
+
+.compact-segment.segment-selected {
+  background: var(--accentbg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.compact-separator {
+  color: var(--muted);
+  margin: 0 1px;
+  user-select: none;
 }
 
 .dirty-dot {

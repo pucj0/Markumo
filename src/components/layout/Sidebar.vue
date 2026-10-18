@@ -37,6 +37,7 @@
                 :key="row.node.path"
                 :node="row.node"
                 :depth="row.depth"
+                :compact-chain="row.compactChain"
                 flat
                 :active-file-path="activeFilePath"
                 :selected-tree-path="selectedTreePath"
@@ -50,6 +51,7 @@
                 @open-file="handleFileOpen"
                 @pin-file="handleFileOpen"
                 @toggle-folder="handleToggleFolder"
+                @toggle-compact="handleToggleCompact"
                 @create-file="handleCreateFile"
                 @rename-node="handleRenameNode"
                 @delete-node="handleDeleteNode"
@@ -225,7 +227,7 @@ import type { SidebarPanel, EditorDocument } from '../../types'
 import type { WorkspaceController } from '../../features/workspace/WorkspaceController'
 import type { WorkspaceNode, WorkspaceInfo } from '../../features/workspace/contracts'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
-import { treeWindow } from '../../features/workspace/virtualTree'
+import { treeWindow, buildFlatTree, type TreeRow } from '../../features/workspace/virtualTree'
 import { readablePath, displayPathKey } from '../../features/shell/pathDisplay'
 import ContextMenu from '../common/ContextMenu.vue'
 import { CommandRegistry, menuCommand as cmd, separator } from '../../features/shell/menuModel'
@@ -243,10 +245,17 @@ const props = withDefaults(defineProps<{
   manager?: DocumentManager
   treeClickMode?: 'double' | 'single'
   autoFollowActiveFile?: boolean
+  smartExpand?: boolean
+  compactFolders?: boolean
 }>(), {
   treeClickMode: 'single',
   autoFollowActiveFile: false,
+  smartExpand: true,
+  compactFolders: false,
 })
+
+watch(() => props.smartExpand, v => { props.workspace.smartExpand = v ?? true }, { immediate: true })
+watch(() => props.compactFolders, v => { props.workspace.compactFolders = v ?? false }, { immediate: true })
 
 const emit = defineEmits<{
   (e: 'update:width', w: number): void
@@ -315,7 +324,14 @@ function cancelLocation() { locationSequence++; props.workspace.cancelReveal() }
 function treeInteraction() { cancelLocation(); userTreeUntil = performance.now() + 800 }
 function selectTreePath(path: string) { treeInteraction(); selectedTreePath.value = path }
 function isTreeSelected(path: string) { return !!selectedTreePath.value && displayPathKey(selectedTreePath.value) === displayPathKey(path) }
-const treeTabStopPath = computed(() => (visibleTree.value.find(row => isTreeSelected(row.node.path)) || visibleTree.value[0])?.node.path)
+function isRowSelected(row: TreeRow) {
+  if (!selectedTreePath.value) return false
+  const target = displayPathKey(selectedTreePath.value)
+  if (displayPathKey(row.node.path) === target) return true
+  if (row.compactChain?.some(n => displayPathKey(n.path) === target)) return true
+  return false
+}
+const treeTabStopPath = computed(() => (visibleTree.value.find(row => isRowSelected(row)) || visibleTree.value[0])?.node.path)
 function isTabStop(path: string) {
   return displayPathKey(treeTabStopPath.value || '') === displayPathKey(path)
 }
@@ -326,7 +342,12 @@ function onTreeScroll(event: Event) {
   treeScrollTop.value = top
 }
 function scrollPathIntoView(path: string, center = false) {
-  const element = treeContainer.value, index = flatTree.value.findIndex(row => displayPathKey(row.node.path) === displayPathKey(path))
+  const element = treeContainer.value, target = displayPathKey(path)
+  const index = flatTree.value.findIndex(row => {
+    if (displayPathKey(row.node.path) === target) return true
+    if (row.compactChain?.some(n => displayPathKey(n.path) === target)) return true
+    return false
+  })
   if (!element || index < 0) return
   const top = index * rowHeight.value, bottom = top + rowHeight.value
   if (top >= element.scrollTop && bottom <= element.scrollTop + element.clientHeight) return
@@ -369,18 +390,7 @@ watch(treeContainer, element => {
 const collapsedRoots = ref<string[]>([])
 function toggleRoot(path: string) { treeInteraction();props.workspace.cancelExpand();selectedTreePath.value=path;collapsedRoots.value = collapsedRoots.value.includes(path) ? collapsedRoots.value.filter(item => item !== path) : [...collapsedRoots.value, path] }
 const flatTree = computed(() => {
-  const rows: { node: WorkspaceNode; depth: number; root?: WorkspaceInfo }[] = []
-  const visit = (nodes: WorkspaceNode[], depth: number) => {
-    for (const node of nodes) {
-      rows.push({ node, depth })
-      if (node.isDirectory && node.isExpanded && node.children) visit(node.children, depth + 1)
-    }
-  }
-  for (const root of props.workspace.roots) {
-    rows.push({ root, depth: 0, node: { id: root.rootPath, name: root.name, path: root.rootPath, relativePath: '', isDirectory: true, isSymlink: false, isReadOnly: false, size: 0, mtime: null, hasChildren: true } })
-    if (!collapsedRoots.value.includes(root.rootPath)) visit(root.entries, 1)
-  }
-  return rows
+  return buildFlatTree(props.workspace.roots, collapsedRoots.value, props.compactFolders ?? false)
 })
 const rowHeight = ref((props.uiFontSize ?? 14) + 14)
 async function measureTreeRows() {
@@ -434,16 +444,25 @@ async function focusTreeRow(index: number) {
   selectedTreePath.value = row.node.path
   scrollPathIntoView(row.node.path)
   await nextTick()
-  const target = Array.from(treeContainer.value?.querySelectorAll<HTMLElement>('[data-tree-path]') || [])
-    .find(element => displayPathKey(element.dataset.treePath!) === displayPathKey(row.node.path))
+  const target = Array.from(treeContainer.value?.querySelectorAll<HTMLElement>('[data-tree-path], [data-segment-path]') || [])
+    .find(element => {
+      const p = element.dataset.treePath || element.dataset.segmentPath
+      return p && (displayPathKey(p) === displayPathKey(row.node.path) || (row.compactChain && row.compactChain.some(n => displayPathKey(n.path) === displayPathKey(p))))
+    })
   target?.focus({preventScroll:true})
 }
 async function handleTreeKeydown(event: KeyboardEvent) {
   if ((event.target as HTMLElement).closest('button,[role=menu]') || event.altKey || event.ctrlKey || event.metaKey) return
   if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End','Enter',' '].includes(event.key)) return
   event.preventDefault(); event.stopPropagation(); treeInteraction()
-  const element = (event.target as HTMLElement).closest<HTMLElement>('[data-tree-path]')
-  const index = flatTree.value.findIndex(row => displayPathKey(row.node.path) === displayPathKey(element?.dataset.treePath || selectedTreePath.value || ''))
+  const element = (event.target as HTMLElement).closest<HTMLElement>('[data-tree-path], [data-segment-path]')
+  const path = element?.dataset.segmentPath || element?.dataset.treePath || selectedTreePath.value || ''
+  const target = displayPathKey(path)
+  const index = flatTree.value.findIndex(row => {
+    if (displayPathKey(row.node.path) === target) return true
+    if (row.compactChain?.some(n => displayPathKey(n.path) === target)) return true
+    return false
+  })
   const row = flatTree.value[index]
   if (!row) { await focusTreeRow(0); return }
   selectedTreePath.value = row.node.path
@@ -451,8 +470,13 @@ async function handleTreeKeydown(event: KeyboardEvent) {
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? flatTree.value.length - 1 : Math.max(0, Math.min(flatTree.value.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
     await focusTreeRow(next); return
   }
-  const expanded = row.root ? !collapsedRoots.value.includes(row.root.rootPath) : !!row.node.isExpanded
-  const toggle = async () => { if (row.root) toggleRoot(row.root.rootPath); else await props.workspace.toggleFolder(row.node) }
+  const isCompact = !!(row.compactChain && row.compactChain.length > 1)
+  const expanded = row.root ? !collapsedRoots.value.includes(row.root.rootPath) : (isCompact ? row.compactChain!.some(n => n.isExpanded) : !!row.node.isExpanded)
+  const toggle = async () => {
+    if (row.root) toggleRoot(row.root.rootPath)
+    else if (isCompact) handleToggleCompact(row.compactChain!)
+    else await props.workspace.toggleFolder(row.node)
+  }
   if (event.key === 'ArrowRight') {
     if (row.node.isDirectory && !expanded) await toggle()
     else if (row.node.isDirectory && flatTree.value[index + 1]?.depth > row.depth) await focusTreeRow(index + 1)
@@ -489,6 +513,16 @@ function handleFileOpen(node: WorkspaceNode) {
 function handleToggleFolder(node: WorkspaceNode) {
   selectTreePath(node.path)
   void props.workspace.toggleFolder(node)
+}
+
+function handleToggleCompact(chain: WorkspaceNode[]) {
+  treeInteraction()
+  const isExpanded = chain.some(item => item.isExpanded)
+  if (isExpanded) {
+    props.workspace.collapseCompactChain(chain)
+  } else {
+    void props.workspace.expandCompactChain(chain)
+  }
 }
 
 function handleRootClick(event: MouseEvent, rootPath: string) {

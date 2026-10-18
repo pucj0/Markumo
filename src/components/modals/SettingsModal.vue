@@ -43,6 +43,10 @@
               <p class="setting-hint">默认单击文件夹整行展开或收起；箭头始终单击切换。文件单击预览，双击固定；修改后自动固定标签。</p>
               <div class="settingrow"><span class="setting-label">自动跟随当前文件</span><SegmentedControl id="settings-auto-follow" label="自动跟随当前文件" :model-value="autoFollowActiveFile ? 'on' : 'off'" :options="[{value:'off',label:'关闭（默认）'},{value:'on',label:'开启'}]" @update:model-value="emit('update:autoFollowActiveFile', $event === 'on')" /></div>
               <p class="setting-hint">关闭时，切换标签保留目录树的浏览位置。点击“定位当前文件”可主动展开并定位；开启后仅在必要时滚动。</p>
+              <div class="settingrow"><span class="setting-label">智能展开单子目录</span><SegmentedControl id="settings-smart-expand" label="智能展开单子目录" :model-value="smartExpand ? 'on' : 'off'" :options="[{value:'on',label:'开启（默认）'},{value:'off',label:'关闭'}]" @update:model-value="emit('update:smartExpand', $event === 'on')" /></div>
+              <p class="setting-hint">展开文件夹时自动打开连续的单子目录。</p>
+              <div class="settingrow"><span class="setting-label">紧凑文件夹</span><SegmentedControl id="settings-compact-folders" label="紧凑文件夹" :model-value="compactFolders ? 'on' : 'off'" :options="[{value:'off',label:'关闭（默认）'},{value:'on',label:'开启'}]" @update:model-value="emit('update:compactFolders', $event === 'on')" /></div>
+              <p class="setting-hint">将连续单子目录合并为一行。</p>
             </section>
 
             <section id="settings-updates" class="settings-section">
@@ -280,6 +284,8 @@ const props = defineProps<{
   autoSaveDelay: number
   treeClickMode?: 'double' | 'single'
   autoFollowActiveFile?: boolean
+  smartExpand?: boolean
+  compactFolders?: boolean
   imageRules: ImageRules
   documentImageRules: ImageRules | null
   markdownPath?: string
@@ -305,6 +311,8 @@ const emit = defineEmits<{
   (e: 'update:useTabs', val: boolean): void
   (e: 'update:treeClickMode', val: 'double' | 'single'): void
   (e: 'update:autoFollowActiveFile', val: boolean): void
+  (e: 'update:smartExpand', val: boolean): void
+  (e: 'update:compactFolders', val: boolean): void
   (e: 'update:keymap', val: {preset:KeymapPresetId;bindings:Record<string,string>}): void
   (e: 'update:shortcuts', val: Record<string, string>): void
   (e: 'update:autoSave', val: boolean): void
