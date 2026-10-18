@@ -331,16 +331,16 @@ try {
     const app=await browser.newPage();app.on('pageerror',error=>errors.push(error.message))
     await app.goto('http://localhost:1431/')
     await app.getByTitle('设置',{exact:true}).click()
-    const select=app.locator('#settings-caret-animation');await select.scrollIntoViewIfNeeded()
-    assert.equal(await select.inputValue(),'smooth')
-    for(const mode of ['off','quick','smooth']){
-      await select.selectOption(mode)
+    const control=app.getByRole('radiogroup',{name:'光标动画',exact:true});await control.scrollIntoViewIfNeeded()
+    assert.equal(await control.getByRole('radio',{name:'平滑滑动',exact:true}).getAttribute('aria-checked'),'true')
+    for(const [mode,label] of [['off','关闭'],['quick','快速跟手'],['smooth','平滑滑动']]){
+      await control.getByRole('radio',{name:label,exact:true}).click()
       await app.waitForFunction(mode=>JSON.parse(localStorage.getItem('markumo.settings.v1')||'{}').caretAnimation===mode,mode)
     }
-    await select.selectOption('quick')
+    await control.getByRole('radio',{name:'快速跟手',exact:true}).click()
     await app.waitForFunction(()=>JSON.parse(localStorage.getItem('markumo.settings.v1')||'{}').caretAnimation==='quick')
     await app.reload();await app.getByTitle('设置',{exact:true}).click()
-    assert.equal(await app.locator('#settings-caret-animation').inputValue(),'quick')
+    assert.equal(await app.getByRole('radiogroup',{name:'光标动画',exact:true}).getByRole('radio',{name:'快速跟手',exact:true}).getAttribute('aria-checked'),'true')
     await app.close()
   })
   assert.deepEqual(errors,[])
