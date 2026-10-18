@@ -1,7 +1,7 @@
 import { EditorState, type Extension } from '@codemirror/state'
 import { EditorView, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, dropCursor, rectangularSelection, crosshairCursor, highlightActiveLine, keymap } from '@codemirror/view'
 import { history, historyKeymap, defaultKeymap, indentWithTab } from '@codemirror/commands'
-import { bracketMatching, foldGutter, foldKeymap, indentOnInput } from '@codemirror/language'
+import { foldGutter, foldKeymap, indentOnInput } from '@codemirror/language'
 import { search, searchKeymap } from '@codemirror/search'
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete'
 import { markumoSyntax } from './syntaxTheme'
@@ -14,7 +14,7 @@ export const coreExtensions: Extension = [
   drawSelection(), dropCursor(), rectangularSelection(), crosshairCursor(), highlightActiveLine(),
   EditorState.allowMultipleSelections.of(true),
   EditorState.phrases.of({ 'Find': '查找', 'Replace': '替换', 'next': '下一个', 'previous': '上一个', 'all': '全部', 'match case': '区分大小写', 'regexp': '正则', 'by word': '全词', 'replace': '替换', 'replace all': '全部替换', 'close': '关闭' }),
-  indentOnInput(), bracketMatching(), foldGutter({ markerDOM(open) {
+  indentOnInput(), foldGutter({ markerDOM(open) {
     const element = document.createElement('span'); element.className = 'cm-fold-chevron' + (open ? ' open' : '')
     element.setAttribute('aria-label', open ? '折叠代码' : '展开代码'); return element
   } }), markumoSyntax,

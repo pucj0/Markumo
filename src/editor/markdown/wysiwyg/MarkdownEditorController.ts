@@ -32,6 +32,7 @@ import { shortcutLabel } from '../../../features/shell/editorSettings'
 import { textClipboard } from '../../../features/shell/clipboard'
 import { cancelSmoothScroll, smoothScrollTo } from '../../core/smoothScroll'
 import { createSmoothCaretPlugin } from './plugins/SmoothCaret'
+import type { BracketMode } from '../../core/brackets'
 import type { CaretAnimation } from '../../core/caretMotion'
 import type { MarkdownFormat } from '../formatCommands'
 import type { LiveEditor, LiveOptions, MarkdownTypography } from './contracts'
@@ -69,6 +70,7 @@ export class MarkdownEditorController implements LiveEditor {
   }
   private settings: MarkdownTypography
   private caretMode: CaretAnimation
+  private brackets: BracketMode
   private disposed = false
   private copySettings = defaultMarkdownClipboard()
   private liveClipboard!: LiveClipboard
@@ -94,6 +96,7 @@ export class MarkdownEditorController implements LiveEditor {
   constructor(parent: HTMLElement, private options: LiveOptions, sharedBridge?: MarkdownSourceBridge) {
     this.settings = options.typography
     this.caretMode = options.caretAnimation ?? 'smooth'
+    this.brackets = options.bracketMode ?? 'matching'
     this.copySettings = { ...defaultMarkdownClipboard(), ...options.clipboard }
     // Panes must start from the same immutable PM document and source IDs.
     // Independent parses look equal on screen but force full-document syncs,
@@ -378,7 +381,8 @@ export class MarkdownEditorController implements LiveEditor {
             options.history,
             replace => this.find(replace),
             forward => forward ? this.findNext() : this.findPrevious(),
-            this.caretMode
+            this.caretMode,
+            this.brackets
           )
           this.codeViews.add(code)
           const destroy = code.destroy.bind(code)
@@ -701,6 +705,12 @@ export class MarkdownEditorController implements LiveEditor {
     }
   }
 
+  bracketMode(mode: BracketMode) {
+    this.brackets = mode
+    for (const code of this.codeViews) code.bracketMode(mode)
+    for (const html of this.htmlViews) html.bracketMode(mode)
+  }
+
   caretAnimation(mode: CaretAnimation) {
     this.caretMode = mode
     this.view.updateState(this.view.state)
@@ -764,6 +774,7 @@ export class MarkdownEditorController implements LiveEditor {
       history:forward=>this.options.history(forward),readOnly:()=>!!this.options.readOnly?.(),
       settled:()=>{if(!this.disposed&&this.pendingSource!==null&&!this.composing){const source=this.pendingSource;this.pendingSource=null;this.sync(source)}},
     })
+    html.bracketMode(this.brackets)
     this.htmlViews.add(html)
     const destroy=html.destroy.bind(html)
     html.destroy=()=>{this.htmlViews.delete(html);destroy()}

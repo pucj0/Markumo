@@ -29,6 +29,7 @@
             <!-- 2. 编辑 -->
             <section id="settings-editor" class="settings-section">
               <h3>编辑</h3>
+              <div class="settingrow"><span class="setting-label">括号高亮</span><SegmentedControl id="settings-bracket-mode" label="括号高亮" :model-value="bracketMode || 'matching'" :options="[{value:'off',label:'关闭'},{value:'matching',label:'仅匹配'},{value:'rainbow',label:'彩虹括号'}]" @update:model-value="emit('update:bracketMode', $event as EditorSettings['bracketMode'])" /></div>
               <div class="settingrow"><label for="settings-caret-animation">光标动画</label><select id="settings-caret-animation" :value="caretAnimation" @change="emit('update:caretAnimation', ($event.target as HTMLSelectElement).value as EditorSettings['caretAnimation'])"><option value="off">关闭</option><option value="quick">快速跟手</option><option value="smooth">平滑滑动</option></select></div>
               <div class="settingrow"><label for="settings-wrap">自动软换行</label><input id="settings-wrap" class="setting-switch" type="checkbox" :checked="wordWrap" @change="$emit('update:wordWrap', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><label for="settings-outline">显示文档大纲</label><input id="settings-outline" class="setting-switch" type="checkbox" :checked="showOutline" @change="$emit('update:showOutline', ($event.target as HTMLInputElement).checked)" /></div>
@@ -266,6 +267,7 @@ const props = defineProps<{
   fontSize: number
   caretAnimation: EditorSettings['caretAnimation']
   syntaxStyle?: EditorSettings['syntaxStyle']
+  bracketMode?: EditorSettings['bracketMode']
   wordWrap: boolean
   showOutline: boolean
   defaultMdMode: MarkdownMode
@@ -294,6 +296,7 @@ const emit = defineEmits<{
   (e: 'update:fontSize', val: number): void
   (e: 'update:caretAnimation', val: EditorSettings['caretAnimation']): void
   (e: 'update:syntaxStyle', val: EditorSettings['syntaxStyle']): void
+  (e: 'update:bracketMode', val: EditorSettings['bracketMode']): void
   (e: 'update:wordWrap', val: boolean): void
   (e: 'update:showOutline', val: boolean): void
   (e: 'update:defaultMdMode', val: MarkdownMode): void

@@ -13,6 +13,7 @@ pub struct EditorSettings {
     word_wrap: bool,
     caret_animation: String,
     syntax_style: String,
+    bracket_mode: String,
     show_outline: bool,
     outline_width: u16,
     indent_size: u8,
@@ -74,6 +75,7 @@ impl Default for EditorSettings {
             word_wrap: false,
             caret_animation: "smooth".into(),
             syntax_style: "soft".into(),
+            bracket_mode: "matching".into(),
             show_outline: false,
             outline_width: 240,
             indent_size: 2,
@@ -112,6 +114,9 @@ fn deserialize_keymap_preset<'de, D: serde::Deserializer<'de>>(deserializer: D) 
     Ok(if value == "lightedit" { "markumo".into() } else { value })
 }
 fn validate(settings: &EditorSettings) -> Result<(), String> {
+    if !["off", "matching", "rainbow"].contains(&settings.bracket_mode.as_str()) {
+        return Err("不支持的括号高亮模式".into());
+    }
     if !["soft", "standard", "vivid"].contains(&settings.syntax_style.as_str()) {
         return Err("不支持的语法高亮风格".into());
     }
@@ -209,6 +214,20 @@ pub async fn save_editor_settings(
 #[cfg(test)]
 mod branding_tests {
     use super::*;
+    #[test]
+    fn bracket_mode_defaults_validation_and_disk_round_trip() {
+        let old: EditorSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.bracket_mode, "matching");
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        for mode in ["off", "matching", "rainbow"] {
+            let settings: EditorSettings = serde_json::from_value(serde_json::json!({"bracketMode": mode})).unwrap();
+            save(&path, &settings).unwrap();
+            assert_eq!(load(&path).unwrap().bracket_mode, mode);
+        }
+        let bad: EditorSettings = serde_json::from_str(r#"{"bracketMode":"unknown"}"#).unwrap();
+        assert!(validate(&bad).is_err());
+    }
     #[test]
     fn syntax_style_defaults_validation_and_disk_round_trip() {
         let old: EditorSettings = serde_json::from_str("{}").unwrap();

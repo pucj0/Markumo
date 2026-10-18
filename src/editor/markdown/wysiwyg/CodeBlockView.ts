@@ -3,6 +3,7 @@ import { EditorView as CMView, drawSelection, keymap, lineNumbers, Decoration, W
 import { smoothCaret } from '../../core/smoothCaret'
 import type { CaretAnimation } from '../../core/caretMotion'
 import { defaultKeymap, indentWithTab, indentLess } from '@codemirror/commands'
+import { bracketHighlight, type BracketMode } from '../../core/brackets'
 import { markumoSyntax } from '../../core/syntaxTheme'
 import { LanguageSelector } from './LanguageSelector'
 import { copyStatusIcon } from '../../../components/common/iconPaths'
@@ -47,6 +48,7 @@ export class CodeBlockView implements NodeView {
   private numbers = new Compartment()
   private wrap = new Compartment()
   private caret = new Compartment()
+  private brackets = new Compartment()
   private updating = false
   private dead = false
   private generation = 0
@@ -78,7 +80,8 @@ export class CodeBlockView implements NodeView {
     private history: (forward: boolean) => void,
     private onSearchRequest?: (replace: boolean) => void,
     private onSearchNavigate?: (forward: boolean) => void,
-    caretAnimation: CaretAnimation = 'smooth'
+    caretAnimation: CaretAnimation = 'smooth',
+    bracketMode: BracketMode = 'matching'
   ) {
     this.isMermaid = /^mermaid(?:\s|$)/i.test(node.attrs.params)
     this.dom.className = 'md-code-block md-code-block-container'
@@ -157,6 +160,7 @@ export class CodeBlockView implements NodeView {
           this.numbers.of(settings.codeLineNumbers ? lineNumbers() : []),
           this.wrap.of(settings.codeWrap ? CMView.lineWrapping : []),
           markumoSyntax,
+          this.brackets.of(bracketHighlight(bracketMode)),
           codeSearchDecorations,
           CMView.contentAttributes.of({ 'aria-label': '代码块编辑器' }),
           Prec.highest(
@@ -432,6 +436,10 @@ export class CodeBlockView implements NodeView {
         this.wrap.reconfigure(settings.codeWrap ? CMView.lineWrapping : []),
       ],
     })
+  }
+
+  bracketMode(mode: BracketMode) {
+    this.cm.dispatch({ effects: this.brackets.reconfigure(bracketHighlight(mode)) })
   }
 
   caretAnimation(mode: CaretAnimation) {

@@ -3,6 +3,7 @@ import type { MarkdownMode, ThemePreference } from '../../types'
 import type { CaretAnimation } from '../../editor/core/caretMotion'
 import { defaultUpdatePreferences, type UpdatePreferences } from './updater/UpdatePreferences'
 import { defaultImageRules, imageRulesFrom, type ImageRules } from '../../editor/markdown/imageImport'
+import { bracketModes, type BracketMode } from '../../editor/core/brackets'
 import { syntaxStyles, type SyntaxStyle } from '../../editor/core/syntaxTheme'
 import { defaultMarkdownTypography, defaultMarkdownClipboard, type MarkdownClipboardSettings, type MarkdownTypography } from '../../editor/markdown/wysiwyg/contracts'
 import {
@@ -23,6 +24,7 @@ export const currentShortcutVersion = 4
 export const currentSettingsVersion = 5
 export interface EditorSettings extends UpdatePreferences {
   syntaxStyle: SyntaxStyle
+  bracketMode: BracketMode
   caretAnimation: CaretAnimation
   outlineWidth: number
   markdownClipboard:MarkdownClipboardSettings
@@ -45,7 +47,7 @@ export interface EditorSettings extends UpdatePreferences {
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
 export function defaultSettings(): EditorSettings {
   const markdownClipboard = defaultMarkdownClipboard(), outlineWidth = 240
-  return { syntaxStyle: 'soft', ...defaultUpdatePreferences(), caretAnimation: 'smooth', outlineWidth, markdownClipboard, markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, treeClickMode: 'single', autoFollowActiveFile: false, keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: currentShortcutVersion, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
+  return { bracketMode: 'matching', syntaxStyle: 'soft', ...defaultUpdatePreferences(), caretAnimation: 'smooth', outlineWidth, markdownClipboard, markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 2, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, treeClickMode: 'single', autoFollowActiveFile: false, keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: currentShortcutVersion, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
 }
 /** Drop the transient migration notice before writing preferences to disk. */
 export function persistedSettings(settings: EditorSettings) {
@@ -71,6 +73,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
   const defaults = defaultSettings()
   if (!raw || typeof raw !== 'object') return defaults
   const s = raw as Partial<EditorSettings>
+  if (bracketModes.includes(s.bracketMode as BracketMode)) defaults.bracketMode = s.bracketMode!
   if (syntaxStyles.includes(s.syntaxStyle as SyntaxStyle)) defaults.syntaxStyle = s.syntaxStyle!
   if (s.caretAnimation === 'off' || s.caretAnimation === 'quick' || s.caretAnimation === 'smooth') defaults.caretAnimation = s.caretAnimation
   if (Number.isInteger(s.outlineWidth) && s.outlineWidth! >= 160 && s.outlineWidth! <= 520) defaults.outlineWidth = s.outlineWidth!

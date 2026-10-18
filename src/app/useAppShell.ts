@@ -59,6 +59,7 @@ export function useAppShell() {
   const treeClickMode = ref<'double' | 'single'>('single')
   const autoFollowActiveFile = ref(false)
   const syntaxStyle = ref<EditorSettings['syntaxStyle']>('soft')
+  const bracketMode = ref<EditorSettings['bracketMode']>('matching')
   const keymapPreset = ref<KeymapPresetId>('markumo')
   const caretAnimation = ref<EditorSettings['caretAnimation']>('smooth')
   const markdownTypography=ref(defaultMarkdownTypography())
@@ -846,6 +847,7 @@ export function useAppShell() {
   watch(wordWrap, value => manager.setWrap(value), { immediate: true })
   watch(defaultMdMode, value => manager.setDefaultMarkdownMode(value), { immediate: true })
   watch(syntaxStyle, value => applySyntaxStyle(value), { immediate: true, flush: 'sync' })
+  watch(bracketMode, value => manager.setBracketMode(value), { immediate: true })
   watch(caretAnimation, value => manager.setCaretAnimation(value), { immediate: true })
   watch(markdownTypography,value=>manager.setMarkdownTypography(value),{immediate:true,deep:true})
   watch(markdownClipboard,value=>manager.setMarkdownClipboard(value),{immediate:true,deep:true})
@@ -854,7 +856,7 @@ export function useAppShell() {
   watch(fontFamily, value => { document.documentElement.style.setProperty('--font-mono', fontFamilies[value]); manager.refreshTypography() }, { immediate: true })
   watch([indentSize,useTabs], () => manager.setIndent(indentSize.value,useTabs.value), { immediate: true })
   function settingsSnapshot(): EditorSettings {
-    return { autoCheckUpdates:autoCheckUpdates.value,autoDownloadUpdates:autoDownloadUpdates.value,caretAnimation:caretAnimation.value,outlineWidth:outlineWidth.value,markdownClipboard:{...markdownClipboard.value},markdownTypography:{...markdownTypography.value},theme: theme.value, uiFontSize: uiFontSize.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value, treeClickMode: treeClickMode.value, autoFollowActiveFile: autoFollowActiveFile.value, syntaxStyle: syntaxStyle.value, keymapPreset: keymapPreset.value,
+    return { autoCheckUpdates:autoCheckUpdates.value,autoDownloadUpdates:autoDownloadUpdates.value,caretAnimation:caretAnimation.value,outlineWidth:outlineWidth.value,markdownClipboard:{...markdownClipboard.value},markdownTypography:{...markdownTypography.value},theme: theme.value, uiFontSize: uiFontSize.value, fontSize: fontSize.value, fontFamily: fontFamily.value, wordWrap: wordWrap.value, showOutline: showOutline.value, autoSave: autoSave.value, autoSaveDelay: autoSaveDelay.value, treeClickMode: treeClickMode.value, autoFollowActiveFile: autoFollowActiveFile.value, syntaxStyle: syntaxStyle.value, bracketMode: bracketMode.value, keymapPreset: keymapPreset.value,
       defaultMdMode: defaultMdMode.value, indentSize: indentSize.value, useTabs: useTabs.value, imageRules:{...imageRules.value},documentImageRules:{...documentImageRules.value}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: currentShortcutVersion, customShortcuts:[...customShortcuts.value], shortcuts: { ...shortcuts.value }, fileModes: { ...fileModes.value } }
   }
   function flushSettings(strict=false) {
@@ -880,7 +882,7 @@ export function useAppShell() {
     updateShortcuts(value.bindings)
   }
   watch([autoSave, autoSaveDelay], () => autoSaver.configure(desktop && settingsReady && autoSave.value, autoSaveDelay.value))
-  watch([autoCheckUpdates,autoDownloadUpdates,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,theme,uiFontSize,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,treeClickMode,autoFollowActiveFile,syntaxStyle,keymapPreset,imageRules,documentImageRules], () => {
+  watch([autoCheckUpdates,autoDownloadUpdates,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,theme,uiFontSize,fontSize,fontFamily,wordWrap,showOutline,defaultMdMode,indentSize,useTabs,shortcuts,fileModes,autoSave,autoSaveDelay,treeClickMode,autoFollowActiveFile,syntaxStyle,bracketMode,keymapPreset,imageRules,documentImageRules], () => {
     if (!settingsReady) return
     if (settingsTimer) clearTimeout(settingsTimer)
     settingsTimer = setTimeout(() => void flushSettings(),250)
@@ -925,6 +927,7 @@ export function useAppShell() {
       treeClickMode.value = settings.treeClickMode
       autoFollowActiveFile.value = settings.autoFollowActiveFile
       syntaxStyle.value = settings.syntaxStyle
+      bracketMode.value = settings.bracketMode
       keymapPreset.value = settings.keymapPreset || 'markumo'
       shortcuts.value = settings.shortcuts; fileModes.value = settings.fileModes; manager.setFileModes(settings.fileModes)
       customShortcuts.value=settings.customShortcuts
@@ -1017,7 +1020,7 @@ export function useAppShell() {
     sessionWriter?.dispose()
     autoSaver.dispose(); files.dispose(); workspace.destroy(); unsubscribeWorkspace(); unsubscribe(); manager.dispose()
   })
-  return { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts,updateKeymap, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, syntaxStyle, imageRules,currentDocumentImageRules,updateDocumentImageRules,
+  return { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts,updateKeymap, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, syntaxStyle, bracketMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
     paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, mainOpenedDocuments, mainActiveId, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
     setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, selectDocById, handleSelectDoc,
     pinDocById, createNewDoc, closeDocById,closeOtherTabs,cancelPendingClose, discardPending, savePending, setLanguage, setMarkdownMode,

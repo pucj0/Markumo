@@ -1,3 +1,4 @@
+import type { BracketMode } from '../../core/brackets'
 import type { MarkdownFormat } from '../formatCommands'
 import type { MarkdownResources } from '../images'
 import type { CaretAnimation } from '../../core/caretMotion'
@@ -14,6 +15,7 @@ export interface LiveEditor {
   format(format:MarkdownFormat):boolean
   typography(settings:MarkdownTypography):void
   caretAnimation(mode:CaretAnimation):void
+  bracketMode(mode:BracketMode):void
   clipboardSettings(settings:MarkdownClipboardSettings):void
   shortcut(event:KeyboardEvent):boolean
   clipboard(operation:'copy'|'cut'|'paste'|'select-all'):Promise<void>
@@ -27,6 +29,7 @@ export interface LiveEditor {
 export interface LiveOptions {
   shortcutLabel?(id:string):string|undefined
   caretAnimation?:CaretAnimation
+  bracketMode?:BracketMode
   source:string; anchor:number; head:number; resources:MarkdownResources; typography:MarkdownTypography; clipboard?:MarkdownClipboardSettings
   publish(expected:string,patch:{from:number;to:number;insert:string},update:unknown,isolated:boolean):boolean
   selected(anchor:number,head:number):void

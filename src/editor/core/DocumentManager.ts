@@ -5,6 +5,7 @@ import { findNext, findPrevious } from '@codemirror/search'
 import { showEditorSearch } from './searchPanel'
 import { createSearchQuery, expandReplacement } from './searchQuery'
 import { indentUnit, foldCode, unfoldCode } from '@codemirror/language'
+import { bracketHighlight, type BracketMode } from './brackets'
 import { coreExtensions, editorTheme } from './extensions'
 import { detectLanguage, loadLanguage, type LanguageName } from '../languages'
 import { TabGroup } from '../../features/tabs/TabGroup'
@@ -41,6 +42,7 @@ interface CachedDocument {
   markdownMode: Compartment
   indent: Compartment
   caret: Compartment
+  brackets: Compartment
   languageGeneration: number
   readyLanguageGeneration: number | null
   scroll: { top: number; left: number }
@@ -57,6 +59,7 @@ export class DocumentManager {
   private markdownTypography = defaultMarkdownTypography()
   private markdownClipboard = defaultMarkdownClipboard()
   private caretAnimation: CaretAnimation = 'smooth'
+  private bracketMode: BracketMode = 'matching'
   private shortcutLabels: Record<string,string> = {}
   setShortcutLabels(labels:Record<string,string>) {this.shortcutLabels={...labels}}
   private readonly records = new Map<string, CachedDocument>()
@@ -175,10 +178,12 @@ export class DocumentManager {
     const isMd = !binary && !byteEditor && /\.(md|markdown)$/i.test(seed.name)
     const initialMdMode: MarkdownMode | undefined = isMd ? (seed.mode || this.defaultMarkdownMode) : undefined
 
+    const brackets = new Compartment()
     const state = EditorState.create({
       doc: seed.text,
       extensions: [
         coreExtensions,
+        brackets.of(bracketHighlight(binary || byteEditor ? 'off' : this.bracketMode)),
         caret.of(smoothCaret(this.caretAnimation)),
         imageImportBookmarks,
         markdownResources.of(createMarkdownResources(() => this.records.get(seed.id)?.meta.fileToken,()=>{const meta=this.records.get(seed.id)?.meta;return `${meta?.fileToken||''}|${meta?.path||''}`})),
@@ -229,7 +234,7 @@ export class DocumentManager {
         encoding: seed.encoding || 'UTF-8', eol: /\r\n/.test(seed.text) ? 'CRLF' : 'LF', bom: false, readOnly: false, lastDiskVersion: null,
         charCount: state.doc.length, line: 1, column: 1, mode: initialMdMode,
       },
-      state, baseline: state.doc, baselineEndings: endings.snapshot(state), endings, language, wrap, theme, markdownMode, indent, caret, languageGeneration: 0, readyLanguageGeneration: null, scroll: { top: 0, left: 0 },
+      state, baseline: state.doc, baselineEndings: endings.snapshot(state), endings, language, wrap, theme, markdownMode, indent, caret, brackets, languageGeneration: 0, readyLanguageGeneration: null, scroll: { top: 0, left: 0 },
       panes: { main: { selection: state.selection, top: 0, left: 0 }, secondary: { selection: state.selection, top: 0, left: 0 } },
     }
     this.records.set(seed.id, record)
@@ -542,7 +547,7 @@ export class DocumentManager {
         const sibling=[...this.liveViews.values()].find(live=>live.id===record.meta.id)?.editor
         const editor=new MarkdownEditorController(parent,{
           shortcutLabel:id=>this.shortcutLabels[id],
-          source,anchor:saved.selection.main.anchor,head:saved.selection.main.head,resources:record.state.facet(markdownResources),typography:this.markdownTypography,clipboard:this.markdownClipboard,caretAnimation:this.caretAnimation,
+          source,anchor:saved.selection.main.anchor,head:saved.selection.main.head,resources:record.state.facet(markdownResources),typography:this.markdownTypography,clipboard:this.markdownClipboard,caretAnimation:this.caretAnimation,bracketMode:this.bracketMode,
           publish:(expected,patch,update,isolated)=>{
             if(this.records.get(record.meta.id)!==record||record.state.doc.toString()!==expected||record.state.readOnly)return false
             this.liveOrigin={pane:resolved,update}
@@ -1044,6 +1049,11 @@ export class DocumentManager {
     for (const record of this.records.values()) this.effects(record, [record.theme.reconfigure(editorTheme(theme))])
   }
   refreshTypography() { this.setTheme(this.theme) }
+  setBracketMode(mode: BracketMode) {
+    this.bracketMode = mode
+    for (const record of this.records.values()) this.effects(record, [record.brackets.reconfigure(bracketHighlight(record.meta.kind === 'javaClass' || record.meta.encoding === 'Hex' ? 'off' : mode))])
+    for (const live of this.liveViews.values()) live.editor.bracketMode(mode)
+  }
   setCaretAnimation(mode: CaretAnimation) {
     this.caretAnimation = mode
     for (const record of this.records.values()) this.effects(record, [record.caret.reconfigure(smoothCaret(mode))])

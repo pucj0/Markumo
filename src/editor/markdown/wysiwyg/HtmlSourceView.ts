@@ -1,4 +1,4 @@
-import { EditorState as CMState, EditorSelection } from '@codemirror/state'
+import { EditorState as CMState, EditorSelection, Compartment } from '@codemirror/state'
 import { EditorView as CMView, keymap } from '@codemirror/view'
 import { defaultKeymap, indentWithTab } from '@codemirror/commands'
 import { html, htmlLanguage } from '@codemirror/lang-html'
@@ -6,6 +6,7 @@ import { Selection } from 'prosemirror-state'
 import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorView, NodeView } from 'prosemirror-view'
 import { markumoSyntax } from '../../core/syntaxTheme'
+import { bracketHighlight, type BracketMode } from '../../core/brackets'
 import { renderSafeHtml, hasUnsupportedHtml, mountHtmlImages, type MountedImageHandle } from '../html/SafeHtmlRenderer'
 import type { MarkdownResources } from '../images'
 
@@ -32,6 +33,8 @@ export class HtmlSourceView implements NodeView {
   private applying=false
   private dead=false
   private generation=0
+  private brackets=new Compartment()
+  private bracketPreference:BracketMode='matching'
   constructor(private node:PMNode,private view:EditorView,readonly getPos:()=>number|undefined,
     private inline:boolean,private resources:MarkdownResources|undefined,private editing:HtmlEditing) {
     this.dom=document.createElement(inline?'span':'div')
@@ -61,6 +64,10 @@ export class HtmlSourceView implements NodeView {
     this.render()
   }
   get composing(){return !!this.cm?.compositionStarted}
+  bracketMode(mode:BracketMode){
+    this.bracketPreference=mode
+    this.cm?.dispatch({effects:this.brackets.reconfigure(bracketHighlight(mode))})
+  }
   get sourceSelection(){
     const pos=this.getPos(),range=pos===undefined?null:this.editing.range(this.node,pos)
     const selection=this.cm?.state.selection.main
@@ -91,7 +98,7 @@ export class HtmlSourceView implements NodeView {
     this.preview.hidden=true;this.editButton.hidden=true;this.editorHost.hidden=false;this.doneButton.hidden=false
     this.dom.classList.add('md-html-editing')
     this.cm=new CMView({parent:this.editorHost,state:CMState.create({doc:source,selection:EditorSelection.cursor(Math.max(0,Math.min(source.length,offset??source.length))),extensions:[
-      html(),markumoSyntax,CMView.lineWrapping,
+      html(),markumoSyntax,this.brackets.of(bracketHighlight(this.bracketPreference)),CMView.lineWrapping,
       CMView.editorAttributes.of({style:'height:auto;min-height:0;width:100%'}),
       CMView.contentAttributes.of({'aria-label':'HTML 局部源码'}),
       keymap.of([
