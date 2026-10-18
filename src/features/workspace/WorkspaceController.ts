@@ -1,7 +1,7 @@
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { FileController } from '../files/FileController'
-import { displayPathKey } from '../shell/pathDisplay'
-import { sameFilePath } from '../files/pathKey'
+import { displayPathKey, readablePath } from '../shell/pathDisplay'
+import type { EditorPaneModel } from '../../editor/layout/types'
 import type {
   SearchDonePayload,
   SearchMatch,
@@ -24,6 +24,7 @@ export class WorkspaceController {
   entries: WorkspaceNode[] = []
   roots: WorkspaceInfo[] = []
   openRevision = 0
+  selectedTreePath: string | null = null
   recentWorkspaces: string[] = []
   showIgnored = false
   quickFiles: { name: string; path: string; relativePath: string }[] = []
@@ -35,7 +36,12 @@ export class WorkspaceController {
   private expandSequence = 0
   private openFileSeq = 0
   private latestPaneSeq = new Map<string, number>()
-  private inFlightOpens = new Map<string, { seq: number; preview: boolean; promise: Promise<void> }>()
+  private openEpoch = 0
+  private inFlightOpens = new Map<string, {
+    requestId: number
+    consumers: Map<string, { seq: number; preview: boolean; navigation: number; pane: EditorPaneModel }>
+    promise: Promise<void>
+  }>()
   private folderLoads = new Map<WorkspaceNode,Promise<boolean>>()
   expanding = false
 
@@ -78,6 +84,10 @@ export class WorkspaceController {
   private emit() {
     for (const fn of this.listeners) fn()
   }
+
+  selectTreePath(path: string | null) { this.selectedTreePath = path; this.emit() }
+  cancelReveal() { this.revealSequence++ }
+  private cancelOpens() { this.openEpoch++; this.inFlightOpens.clear(); this.latestPaneSeq.clear() }
 
   async loadRecents() {
     try {
@@ -127,6 +137,7 @@ export class WorkspaceController {
   }
 
   private addWorkspace(info: WorkspaceInfo) {
+    this.cancelOpens(); this.cancelReveal()
     this.cancelExpand()
     this.openRevision++
     if (!this.roots.some(root => root.rootPath === info.rootPath)) this.roots.push(info)
@@ -142,6 +153,8 @@ export class WorkspaceController {
     this.cancelSearch(); this.quickGeneration++
     try {
       await this.gateway.removeWorkspaceFolder(path)
+      this.cancelOpens(); this.openRevision++
+      if (this.selectedTreePath && this.isWithin(this.selectedTreePath, path)) this.selectedTreePath = null
       this.roots = this.roots.filter(root => root.rootPath !== path)
       const first = this.roots[0]
       this.rootPath = first?.rootPath || null; this.rootName = first?.name || ''; this.entries = first?.entries || []
@@ -180,6 +193,7 @@ export class WorkspaceController {
   }
 
   private applyWorkspace(info: WorkspaceInfo) {
+    this.cancelOpens(); this.selectedTreePath = null
     this.cancelExpand();this.revealSequence++
     this.openRevision++
     this.cancelSearch()
@@ -218,7 +232,7 @@ export class WorkspaceController {
   }
   async toggleFolder(node: WorkspaceNode) {
     if(!node.isDirectory || node.isSymlink)return
-    this.cancelExpand()
+    this.cancelExpand(); this.cancelReveal()
     node.isExpanded=!node.isExpanded;this.emit()
     if(node.isExpanded && !await this.loadFolder(node))node.isExpanded=false
     this.emit()
@@ -256,34 +270,44 @@ export class WorkspaceController {
       return {count,directories,limited,canceled:sequence!==this.expandSequence}
     }finally{if(sequence===this.expandSequence)this.expanding=false;this.emit()}
   }
-  private preserveFolders(previous:WorkspaceNode[],fresh:WorkspaceNode[]) {
-    const known=new Map(previous.map(node=>[displayPathKey(node.path),node]))
-    return fresh.map(node=>{const old=known.get(displayPathKey(node.path));return old?.isDirectory&&node.isDirectory?Object.assign(old,node):node})
-  }
-  async revealFileInTree(path: string, refreshTarget=false) {
+  async revealFileInTree(path: string) {
     this.cancelExpand()
     const sequence = ++this.revealSequence
     const root = this.roots.find(root => root.rootPath === this.rootForPath(path))
     if (!root) return false
-    const normalized = displayPathKey
-    const target = normalized(path)
-    let nodes = root.entries, parent:WorkspaceNode|undefined
+    if (this.gateway.isVisibleFile) {
+      try { if (!await this.gateway.isVisibleFile(path)) return false }
+      catch { return false }
+      if (sequence !== this.revealSequence || this.disposed || !this.roots.includes(root)) return false
+    }
+    const target = displayPathKey(path), parents: WorkspaceNode[] = []
+    let nodes = root.entries, owner: WorkspaceNode | undefined, refreshed = false
     for (let depth = 0; depth < 256 && !this.disposed && sequence === this.revealSequence; depth++) {
-      if(refreshTarget){
-        try {
-          const fresh=await this.gateway.readDirectory(parent?.path||root.rootPath)
-          if(sequence!==this.revealSequence||this.disposed||!this.roots.includes(root))return false
-          nodes=this.preserveFolders(nodes,fresh)
-          if(parent)parent.children=nodes
-          else {root.entries=nodes;if(this.roots[0]===root)this.entries=nodes}
-        }catch(error){this.notify(`定位文件失败：${String(error)}`);return false}
+      if (nodes.some(node => !node.isDirectory && !node.isSymlink && displayPathKey(node.path) === target)) {
+        // Commit expansion only after finding the target. A missing/ignored path
+        // or a canceled request must not disturb the user's browsing position.
+        for (const parent of parents) parent.isExpanded = true
+        this.emit(); return true
       }
-      if (nodes.some(node => !node.isDirectory && normalized(node.path) === target)) {this.emit();return true}
-      parent = nodes.find(node => node.isDirectory && !node.isSymlink && target.startsWith(normalized(node.path) + '/'))
-      if (!parent || !await this.loadFolder(parent)) return false
+      const parent = nodes.find(node => node.isDirectory && !node.isSymlink && this.isWithin(path, node.path))
+      if (!parent) {
+        if (refreshed) return false
+        // A file opened outside the tree may have appeared since this directory
+        // was cached. Refresh only this missing level, never the whole path.
+        try {
+          const fresh = await this.gateway.readDirectory(owner?.path || root.rootPath)
+          if (sequence !== this.revealSequence || this.disposed || !this.roots.includes(root)) return false
+          nodes = this.mergeDirectory(nodes, fresh)
+          if (owner) { owner.children = nodes; owner.hasChildren = !!nodes.length }
+          else { root.entries = nodes; if (this.roots[0] === root) this.entries = nodes }
+          refreshed = true
+          continue
+        } catch { return false }
+      }
+      if (!await this.loadFolder(parent)) return false
       if (sequence !== this.revealSequence || !this.roots.includes(root)) return false
-      parent.isExpanded=true;this.emit()
-      nodes = parent.children || []
+      parents.push(parent)
+      owner = parent; nodes = parent.children || []; refreshed = false
     }
     return false
   }
@@ -292,19 +316,52 @@ export class WorkspaceController {
     try {await this.gateway.revealNode(path)}catch(error){this.notify(`在文件管理器中显示失败：${String(error)}`)}
   }
 
+  private mergeDirectory(previous: WorkspaceNode[], fresh: WorkspaceNode[]) {
+    const known = new Map(previous.map(node => [displayPathKey(node.path), node]))
+    return fresh.map(node => {
+      const old = known.get(displayPathKey(node.path))
+      if (!old?.isDirectory || !node.isDirectory || !node.hasChildren) return node
+      return Object.assign(old, node, {children: old.children, isExpanded: old.isExpanded})
+    })
+  }
+
+  private reconcileTreeSelection() {
+    const path = this.selectedTreePath
+    if (!path) return
+    const root = this.roots.find(root => this.isWithin(path, root.rootPath))
+    if (!root) { this.selectedTreePath = null; return }
+    let nodes = root.entries
+    for (let depth = 0; depth < 256; depth++) {
+      if (displayPathKey(path) === displayPathKey(root.rootPath) || nodes.some(node => displayPathKey(node.path) === displayPathKey(path))) return
+      const parent = nodes.find(node => node.isDirectory && this.isWithin(path, node.path))
+      if (!parent) { this.selectedTreePath = null; return }
+      if (!parent.children || (parent.hasChildren && !parent.children.length)) return
+      nodes = parent.children
+    }
+  }
+
   async refreshDirectory(node?: WorkspaceNode) {
     this.cancelExpand();this.revealSequence++
     if (!this.rootPath) return
+    const revision = this.openRevision
     try {
       if (!node) {
-        for (const root of this.roots) root.entries = await this.gateway.readDirectory(root.rootPath)
+        for (const root of [...this.roots]) {
+          const fresh = await this.gateway.readDirectory(root.rootPath)
+          if (this.disposed || revision !== this.openRevision) return
+          root.entries = this.mergeDirectory(root.entries, fresh)
+        }
         this.entries = this.roots[0]?.entries || []
       } else if (node.isDirectory) {
         node.isLoading = true
         this.emit()
-        node.children = await this.gateway.readDirectory(node.path)
+        const fresh = await this.gateway.readDirectory(node.path)
+        if (this.disposed || revision !== this.openRevision) return
+        node.children = this.mergeDirectory(node.children || [], fresh)
+        node.hasChildren = !!node.children.length
         node.isLoading = false
       }
+      this.reconcileTreeSelection()
       this.emit()
     } catch (e) {
       this.notify(String(e))
@@ -315,78 +372,65 @@ export class WorkspaceController {
   }
 
   async openFile(node: WorkspaceNode, preview = true) {
-    if (node.isDirectory || this.documentManager.isComposing) return
-
-    const targetPane = this.documentManager.activePaneId
-    const targetPath = node.path
-
-    // 1. 若目标文件已打开：直接激活聚焦；若为双击(preview=false)则固定
-    const existingDoc = this.documentManager.openedDocuments.find(
-      doc => doc.path && sameFilePath(doc.path, targetPath)
-    )
+    if (this.disposed || this.operationBusy || node.isDirectory || node.isSymlink || this.documentManager.isComposing) return
+    const manager = this.documentManager, targetPane = manager.activePaneId, targetPath = node.path
+    const pane = manager.layout.getPane(targetPane)
+    if (!pane) return
+    // Every intent counts, including an existing tab and A -> B -> pending A.
+    const seq = ++this.openFileSeq, epoch = this.openEpoch, key = displayPathKey(targetPath)
+    this.latestPaneSeq.set(targetPane, seq)
+    const existingDoc = manager.openedDocuments.find(doc => doc.path && displayPathKey(doc.path) === key)
     if (existingDoc) {
-      if (!preview) {
-        this.documentManager.pin(existingDoc.id)
-      }
-      this.documentManager.select(existingDoc.id, targetPane)
+      manager.open(existingDoc.id, preview, targetPane, false)
       return
     }
-
-    // 2. 若同一文件已有正在进行中的异步请求（如快速双击事件）：合并固定标记
-    const inFlight = this.inFlightOpens.get(targetPath)
+    const inFlight = this.inFlightOpens.get(key)
+    const consumer = { seq, preview: preview && (inFlight?.consumers.get(targetPane)?.preview ?? true), navigation: manager.navigationRevision(targetPane), pane }
     if (inFlight) {
-      if (!preview) {
-        inFlight.preview = false
-      }
+      inFlight.consumers.set(targetPane, consumer)
       return inFlight.promise
     }
-
-    const seq = ++this.openFileSeq
-    this.latestPaneSeq.set(targetPane, seq)
-
-    const requestInfo = { seq, preview, promise: Promise.resolve() }
-
-    const promise = (async () => {
+    const request = { requestId: seq, consumers: new Map([[targetPane, consumer]]), promise: Promise.resolve() }
+    const valid = (id: string, intent: typeof consumer) => !this.disposed && epoch === this.openEpoch &&
+      this.latestPaneSeq.get(id) === intent.seq && manager.layout.getPane(id) === intent.pane &&
+      manager.navigationRevision(id) === intent.navigation
+    request.promise = (async () => {
       try {
-        const openFile = await this.gateway.openWorkspaceFile(targetPath)
-
-        // 3. 过期检查：如果在等待读取期间同 Pane 发起了更新的打开请求（如 A->B->C）
-        const latestSeq = this.latestPaneSeq.get(targetPane) || 0
-        if (seq < latestSeq) {
-          // 当前响应已过期，释放其文件 token，避免泄漏
-          const alreadyOpen = this.documentManager.openedDocuments.some(
-            doc => doc.fileToken === openFile.token
-          )
-          if (!alreadyOpen) {
-            void this.fileController.gateway.release(openFile.token).catch(() => {})
-          }
+        const file = await this.gateway.openWorkspaceFile(targetPath)
+        const consumers = [...request.consumers].filter(([id, intent]) => valid(id, intent))
+        if (!consumers.length) {
+          if (!manager.openedDocuments.some(doc => doc.fileToken === file.token))
+            void this.fileController.gateway.release(file.token).catch(() => {})
           return
         }
-
-        // 4. 正常接收并展示（使用最终的 preview 标记）
-        this.fileController.accept(openFile, requestInfo.preview)
+        // Import once, then share the document with each still-valid pane.
+        // Completion never changes the currently focused pane.
+        const [firstPane, first] = consumers[0]
+        if (!this.fileController.accept(file, first.preview, firstPane, false)) return
+        const doc = manager.openedDocuments.find(doc => doc.fileToken === file.token || displayPathKey(doc.path) === displayPathKey(file.path))
+        if (doc) for (const [id, intent] of consumers.slice(1)) if (valid(id, intent)) manager.open(doc.id, intent.preview, id, false)
       } catch (e) {
-        this.notify(`打开工作区文件失败: ${e}`)
+        if ([...request.consumers].some(([id, intent]) => valid(id, intent))) this.notify(`打开工作区文件失败: ${e}`)
       } finally {
-        this.inFlightOpens.delete(targetPath)
+        if (this.inFlightOpens.get(key)?.requestId === request.requestId) this.inFlightOpens.delete(key)
       }
     })()
-
-    requestInfo.promise = promise
-    this.inFlightOpens.set(targetPath, requestInfo)
-    return promise
+    this.inFlightOpens.set(key, request)
+    return request.promise
   }
 
   async createFile(parentDir: string, name: string) {
     if (!this.beginMutation()) return
+    let created: WorkspaceNode | undefined
     try {
       const newNode = await this.gateway.createFile(parentDir, name)
       await this.insertNode(parentDir, newNode)
-      await this.openFile(newNode)
+      created = newNode
       this.notify(`已创建文件: ${name}`)
     } catch (e) {
       this.notify(`创建文件失败: ${e}`)
     } finally { this.operationBusy = false; this.fileController.workspaceBusy = false }
+    if (created) await this.openFile(created)
   }
 
   async createDirectory(parentDir: string, name: string) {
@@ -435,6 +479,7 @@ export class WorkspaceController {
     }
     this.operationBusy = true
     this.fileController.workspaceBusy = true
+    this.cancelOpens(); this.cancelReveal()
     return true
   }
 
@@ -446,18 +491,24 @@ export class WorkspaceController {
     })?.rootPath || null
   }
 
+  private isWithin(path: string, parent: string) {
+    const key = displayPathKey(path), base = displayPathKey(parent).replace(/\/$/, '')
+    return key === base || key.startsWith(base + '/')
+  }
+
   private absolute(relative: string, root: string) {
     const separator = root.includes('\\') ? '\\' : '/'
-    return `${root}${separator}${relative.replace(/\//g, separator)}`
+    return `${root.replace(/[\\/]+$/, '')}${separator}${relative.replace(/\//g, separator)}`
   }
 
   private relocate(oldRelative: string, newRelative: string, root: string) {
     const old = this.absolute(oldRelative, root), next = this.absolute(newRelative, root)
+    this.cancelOpens(); this.cancelReveal()
+    const movedPath = (path: string) => next + readablePath(path).replace(/\\/g, '/').slice(readablePath(old).replace(/\\/g, '/').length)
+    if (this.selectedTreePath && this.isWithin(this.selectedTreePath, old)) this.selectedTreePath = movedPath(this.selectedTreePath)
     for (const doc of this.documentManager.openedDocuments) {
-      const normalized = doc.path.replace(/\\/g, '/')
-      const source = old.replace(/\\/g, '/')
-      if (normalized === source || normalized.startsWith(source + '/')) {
-        const moved = next + doc.path.slice(old.length)
+      if (this.isWithin(doc.path, old)) {
+        const moved = movedPath(doc.path)
         this.documentManager.renamePath(doc.path, moved, moved.split(/[\\/]/).pop()!)
       }
     }
@@ -482,8 +533,21 @@ export class WorkspaceController {
   async moveNode(node: WorkspaceNode, destination: string) {
     if (!this.beginMutation()) return
     try {
+      const rootPath = this.rootForPath(node.path) || this.rootPath!
       const [oldRelative, newRelative] = await this.gateway.moveNode(node.path, destination)
-      this.relocate(oldRelative, newRelative, this.rootForPath(node.path) || this.rootPath!)
+      this.relocate(oldRelative, newRelative, rootPath)
+      // Relocation changes identity, but cached sibling lists also need to move
+      // the node. Otherwise a loaded destination would never read it again.
+      for (const root of this.roots) this.removeNodeFromTree(root.entries, node.path)
+      const root = this.roots.find(root => displayPathKey(root.rootPath) === displayPathKey(destination))
+      const parent = this.roots.map(root => this.findNodeByPath(root.entries, destination)).find(Boolean)
+      if (root) { root.entries.push(node); this.sortNodes(root.entries) }
+      else if (parent) {
+        if (parent.children && (parent.children.length || !parent.hasChildren)) {
+          parent.children.push(node); this.sortNodes(parent.children)
+        }
+        parent.hasChildren = true
+      }
       await this.refreshDirectory()
       this.notify(`已移动: ${oldRelative} → ${newRelative}`)
     } catch (e) { this.notify(`移动失败: ${e}`) }
@@ -491,13 +555,14 @@ export class WorkspaceController {
   }
 
   async deleteNode(node: WorkspaceNode) {
-    const path = node.path.replace(/\\/g, '/')
-    if (this.documentManager.openedDocuments.some(doc => doc.path.replace(/\\/g, '/') === path || doc.path.replace(/\\/g, '/').startsWith(path + '/'))) {
+    if (this.documentManager.openedDocuments.some(doc => this.isWithin(doc.path, node.path))) {
       this.notify('请先保存并关闭此条目内的已打开文件，再删除。'); return
     }
     if (!this.beginMutation()) return
     try {
       const rel = await this.gateway.deleteNode(node.path)
+      this.cancelOpens(); this.cancelReveal()
+      if (this.selectedTreePath && this.isWithin(this.selectedTreePath, node.path)) this.selectedTreePath = null
       for (const root of this.roots) this.removeNodeFromTree(root.entries, node.path)
       this.cancelSearch()
       this.searchResults = []; this.searchTotal = 0; this.searchQuery = ''
@@ -510,13 +575,14 @@ export class WorkspaceController {
   }
 
   private removeNodeFromTree(list: WorkspaceNode[], path: string): boolean {
-    const idx = list.findIndex(n => n.path === path)
+    const idx = list.findIndex(n => displayPathKey(n.path) === displayPathKey(path))
     if (idx !== -1) {
       list.splice(idx, 1)
       return true
     }
     for (const item of list) {
       if (item.children && this.removeNodeFromTree(item.children, path)) {
+        item.hasChildren = !!item.children.length
         return true
       }
     }
@@ -525,7 +591,7 @@ export class WorkspaceController {
 
   private findNodeByPath(list: WorkspaceNode[], path: string): WorkspaceNode | null {
     for (const item of list) {
-      if (item.path === path) return item
+      if (displayPathKey(item.path) === displayPathKey(path)) return item
       if (item.children) {
         const found = this.findNodeByPath(item.children, path)
         if (found) return found
@@ -633,10 +699,13 @@ export class WorkspaceController {
 
   async locateMatch(match: SearchMatch) {
     try {
-      const openFile = await this.gateway.openWorkspaceFile(match.path)
-      this.fileController.accept(openFile)
-      const doc = this.documentManager.openedDocuments.find(d => d.path === match.path)
-      if (doc && !this.documentManager.isComposing) {
+      const node = this.roots.map(root => this.findNodeByPath(root.entries, match.path)).find(Boolean) || {
+        id: match.path, path: match.path, name: match.path.split(/[\\/]/).pop() || '', relativePath: match.relative_path,
+        isDirectory: false, isSymlink: false, isReadOnly: false, size: 0, mtime: null, hasChildren: false,
+      }
+      await this.openFile(node, false)
+      const doc = this.documentManager.activeDocument
+      if (doc && displayPathKey(doc.path) === displayPathKey(match.path) && !this.documentManager.isComposing) {
         this.documentManager.revealPosition(doc.id, match.line_number, match.column_number)
       }
     } catch (e) {
@@ -686,6 +755,7 @@ export class WorkspaceController {
   }
 
   destroy() {
+    this.cancelOpens()
     this.cancelExpand();this.revealSequence++
     this.disposed = true
     this.quickGeneration++

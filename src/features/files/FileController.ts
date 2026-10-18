@@ -21,10 +21,10 @@ export class FileController {
     this.stopRelease = manager.onFileRelease(token => { void gateway.release(token).catch(error => notify(fileError(error))) })
   }
 
-  accept(file: OpenFile, preview = false) {
+  accept(file: OpenFile, preview = false, pane = this.manager.activePane, activatePane = true) {
     if (this.disposed) { void this.gateway.release(file.token).catch(() => {}); return false }
     const existing = this.manager.openedDocuments.find(doc => doc.fileToken && sameFilePath(doc.path, file.path))
-    if (!this.manager.openFile(file, preview)) {
+    if (!this.manager.openFile(file, preview, pane, activatePane)) {
       if (file.token !== existing?.fileToken) void this.gateway.release(file.token).catch(() => {})
       this.notify('请先完成输入法输入，再重新打开文件。')
       return false

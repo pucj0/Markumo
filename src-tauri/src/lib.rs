@@ -191,6 +191,7 @@ pub fn run() {
             commands::workspace::open_workspace_path,
             commands::workspace::open_workspace_file,
             commands::workspace::read_directory,
+            commands::workspace::workspace_file_visible,
             commands::workspace::create_workspace_file,
             commands::workspace::create_workspace_directory,
             commands::workspace::rename_workspace_node,

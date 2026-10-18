@@ -67,6 +67,7 @@ function subscribe<T>(name: string, listener: (payload: T) => void): () => void 
 }
 
 export const tauriWorkspace: WorkspaceGateway = {
+  async isVisibleFile(path) { return invoke<boolean>('workspace_file_visible', { path }) },
   async openWorkspaceDialog(add = false): Promise<WorkspaceInfo | null> {
     const raw = await invoke<RawWorkspaceInfo | null>('open_workspace_dialog', { add })
     return raw ? mapInfo(raw) : null

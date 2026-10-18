@@ -48,6 +48,8 @@
         :manager="manager"
         :desktop="desktop"
         :tree-click-mode="treeClickMode"
+        :auto-follow-active-file="autoFollowActiveFile"
+        :ui-font-size="uiFontSize"
         @open-recent="openRecent"
         @toggle-side="toggleSidebar"
         @new-doc="createNewDoc"
@@ -136,6 +138,7 @@
       v-model:auto-save="autoSave"
       v-model:auto-save-delay="autoSaveDelay"
       v-model:tree-click-mode="treeClickMode"
+      v-model:auto-follow-active-file="autoFollowActiveFile"
       :keymap-preset="keymapPreset"
       @update:keymap="updateKeymap"
       :shortcuts="shortcuts"
@@ -166,7 +169,7 @@ import UpdatePanel from './components/common/UpdatePanel.vue'
 import UpdateConfirm from './components/modals/UpdateConfirm.vue'
 import { computed } from 'vue'
 import { useAppShell } from './app/useAppShell'
-const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
+const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, imageRules,currentDocumentImageRules,updateDocumentImageRules,
   paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
   setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,

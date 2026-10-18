@@ -33,8 +33,14 @@
               <div class="settingrow"><label for="settings-outline">显示文档大纲</label><input id="settings-outline" class="setting-switch" type="checkbox" :checked="showOutline" @change="$emit('update:showOutline', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><label for="settings-indent">缩进宽度</label><div class="indent-control"><SegmentedControl label="常用缩进宽度" :model-value="indentSize" :options="[2,4,8].map(value=>({value,label:String(value)}))" @update:model-value="emit('update:indentSize',Number($event))" /><input id="settings-indent" type="number" min="1" max="8" :value="indentSize" aria-label="缩进宽度 1 至 8" @change="updateIndent" /></div></div>
               <div class="settingrow"><label for="settings-tabs">使用 Tab 缩进</label><input id="settings-tabs" class="setting-switch" type="checkbox" :checked="useTabs" @change="$emit('update:useTabs', ($event.target as HTMLInputElement).checked)" /></div>
-              <div class="settingrow"><span class="setting-label">文件夹展开方式</span><SegmentedControl id="settings-tree-click" label="文件夹展开方式" :model-value="treeClickMode || 'double'" :options="[{value:'single',label:'单击'},{value:'double',label:'双击（默认）'}]" @update:model-value="emit('update:treeClickMode', $event as 'single' | 'double')" /></div>
-              <p class="setting-hint">文件始终单击预览，双击固定；修改文件后自动固定标签。</p>
+            </section>
+
+            <section id="settings-workspace" class="settings-section">
+              <h3>工作区</h3>
+              <div class="settingrow"><span class="setting-label">文件夹展开方式</span><SegmentedControl id="settings-tree-click" label="文件夹展开方式" :model-value="treeClickMode || 'single'" :options="[{value:'single',label:'单击（默认）'},{value:'double',label:'双击'}]" @update:model-value="emit('update:treeClickMode', $event as 'single' | 'double')" /></div>
+              <p class="setting-hint">默认单击文件夹整行展开或收起；箭头始终单击切换。文件单击预览，双击固定；修改后自动固定标签。</p>
+              <div class="settingrow"><span class="setting-label">自动跟随当前文件</span><SegmentedControl id="settings-auto-follow" label="自动跟随当前文件" :model-value="autoFollowActiveFile ? 'on' : 'off'" :options="[{value:'off',label:'关闭（默认）'},{value:'on',label:'开启'}]" @update:model-value="emit('update:autoFollowActiveFile', $event === 'on')" /></div>
+              <p class="setting-hint">关闭时，切换标签保留目录树的浏览位置。点击“定位当前文件”可主动展开并定位；开启后仅在必要时滚动。</p>
             </section>
 
             <section id="settings-updates" class="settings-section">
@@ -269,6 +275,7 @@ const props = defineProps<{
   autoSave: boolean
   autoSaveDelay: number
   treeClickMode?: 'double' | 'single'
+  autoFollowActiveFile?: boolean
   imageRules: ImageRules
   documentImageRules: ImageRules | null
   markdownPath?: string
@@ -291,6 +298,7 @@ const emit = defineEmits<{
   (e: 'update:indentSize', val: number): void
   (e: 'update:useTabs', val: boolean): void
   (e: 'update:treeClickMode', val: 'double' | 'single'): void
+  (e: 'update:autoFollowActiveFile', val: boolean): void
   (e: 'update:keymap', val: {preset:KeymapPresetId;bindings:Record<string,string>}): void
   (e: 'update:shortcuts', val: Record<string, string>): void
   (e: 'update:autoSave', val: boolean): void
@@ -361,6 +369,7 @@ function updatePdf<K extends keyof ConversionSettings['pdf']>(key: K, val: Conve
 const sections = [
   { id: 'appearance', title: '外观', icon: 'sun' },
   { id: 'editor', title: '编辑', icon: 'font' },
+  { id: 'workspace', title: '工作区', icon: 'folder' },
   { id: 'updates', title: '更新', icon: 'download' },
   { id: 'save', title: '保存', icon: 'save' },
   { id: 'markdown', title: 'Markdown', icon: 'files' },

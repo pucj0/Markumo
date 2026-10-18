@@ -5,6 +5,8 @@
  * differences that survive that: case on case-insensitive file systems and the
  * separator style. It is never used for I/O.
  */
+import { readablePath } from '../shell/pathDisplay'
+
 export function usesCaseInsensitivePaths(platform = navigatorPlatform()) {
   return /win/i.test(platform)
 }
@@ -14,7 +16,7 @@ function navigatorPlatform(): string {
 }
 export function filePathKey(path: string, caseInsensitive = usesCaseInsensitivePaths()) {
   // Trailing separators never change which file a path names.
-  const unified = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const unified = readablePath(path).replace(/\\/g, '/').replace(/\/+$/, '') || (path.startsWith('/') ? '/' : '')
   return caseInsensitive ? unified.toLowerCase() : unified
 }
 export function sameFilePath(a: string | null | undefined, b: string | null | undefined, caseInsensitive?: boolean) {

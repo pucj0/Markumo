@@ -22,7 +22,7 @@
       :desktop="desktop"
       :root-path="rootPath"
       @select-tab="manager.select($event, paneId)"
-      @pin-tab="manager.pin($event)"
+      @pin-tab="manager.pin($event, paneId)"
       @unpin-tab="unpinTab($event)"
       @close-tab="$emit('close-tab', { id: $event, pane: paneId })"
       @close-others="closeOthers($event)"
@@ -123,7 +123,10 @@ const paneActiveId = computed(() => { props.revision; return paneModel.value?.gr
 const paneDocs = computed(() => {
   props.revision
   if (!paneModel.value) return []
-  return paneModel.value.group.tabs.map(t => props.manager.metadata(t.documentId)!).filter(Boolean)
+  return paneModel.value.group.tabs.flatMap(tab => {
+    const doc = props.manager.metadata(tab.documentId)
+    return doc ? [{ ...doc, pinned: tab.pinned }] : []
+  })
 })
 const activeDoc = computed(() => {
   props.revision
@@ -145,10 +148,11 @@ function newDocument() {
 }
 
 function unpinTab(id: string) {
+  if (props.manager.metadata(id)?.dirty) return
   const pane = props.manager.layout.getPane(props.paneId)
   const tab = pane?.group.tabs.find(t => t.documentId === id)
   if (tab) {
-    tab.pinned = false
+    pane!.group.unpin(id)
     props.manager.notify()
   }
 }

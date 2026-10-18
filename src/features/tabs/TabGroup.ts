@@ -31,6 +31,11 @@ export class TabGroup {
     if (tab) tab.pinned = true
   }
 
+  unpin(documentId: string) {
+    if (!this.tabs.some(tab => tab.documentId === documentId)) return
+    for (const tab of this.tabs) tab.pinned = tab.documentId !== documentId
+  }
+
   close(documentId: string) {
     const index = this.tabs.findIndex(tab => tab.documentId === documentId)
     if (index < 0) return

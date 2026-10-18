@@ -5,25 +5,28 @@
       :class="[
         node.isDirectory ? 'folder' : 'file',
         `depth-${depth}`,
-        { active: isNodeActive }
+        { 'active-file': isNodeActive, selected: isNodeSelected, 'locate-highlight': highlighted }
       ]"
       :style="{ paddingLeft: `${Math.min(depth, 10) * 12 + 10}px` }"
       :title="`${node.name}\n${readablePath(node.path)}`"
-      role="button"
+      role="treeitem"
+      :data-tree-path="node.path"
+      :aria-level="depth + 1"
+      :aria-selected="isNodeSelected"
+      :aria-current="isNodeActive ? 'page' : undefined"
       :aria-label="node.name"
       :aria-expanded="node.isDirectory ? !!node.isExpanded : undefined"
       :draggable="!node.isDirectory"
       @dragstart="handleDragStart"
-      tabindex="0"
+      :tabindex="tabStop ? 0 : -1"
+      @focus.self="emit('locate-node', node)"
       @click="handleClick"
       @dblclick="handleDblClick"
-      @keydown.enter.self="handleKeydown"
-      @keydown.space.self="handleKeydown"
       @contextmenu.prevent.stop="openMenu"
       @keydown.shift.f10.prevent.stop="openMenu"
     >
       <template v-if="node.isDirectory">
-        <span class="twisty" @click.stop="handleTwistyClick">
+        <span class="twisty" @click.stop="handleTwistyClick" @dblclick.stop>
           <span v-if="node.isLoading" class="loading-spin">⟳</span>
           <span v-else>{{ node.isExpanded ? '▾' : '▸' }}</span>
         </span>
@@ -45,8 +48,8 @@
         :key="child.path"
         :node="child"
         :depth="depth + 1"
-        :active-path="activePath"
-        :selected-path="selectedPath"
+        :active-file-path="activeFilePath"
+        :selected-tree-path="selectedTreePath"
         :tree-click-mode="treeClickMode"
         :dirty-paths="dirtyPaths"
         :desktop="desktop"
@@ -79,14 +82,16 @@ import { readablePath, displayPathKey } from '../../features/shell/pathDisplay'
 const props = withDefaults(defineProps<{
   node: WorkspaceNode
   depth: number
-  activePath?: string
-  selectedPath?: string | null
+  activeFilePath?: string
+  selectedTreePath?: string | null
   treeClickMode?: 'double' | 'single'
   dirtyPaths?: string[]
   flat?: boolean
   desktop?: boolean
+  tabStop?: boolean
+  highlighted?: boolean
 }>(), {
-  treeClickMode: 'double',
+  treeClickMode: 'single',
 })
 
 const emit = defineEmits<{
@@ -104,15 +109,11 @@ const emit = defineEmits<{
 }>()
 
 const isDirty = computed(() => {
-  return props.dirtyPaths?.includes(props.node.path) ?? false
+  return props.dirtyPaths?.some(path => displayPathKey(path) === displayPathKey(props.node.path)) ?? false
 })
 
-const isNodeActive = computed(() => {
-  if (props.selectedPath) {
-    return displayPathKey(props.selectedPath) === displayPathKey(props.node.path)
-  }
-  return !props.node.isDirectory && !!props.activePath && displayPathKey(props.activePath) === displayPathKey(props.node.path)
-})
+const isNodeSelected = computed(() => !!props.selectedTreePath && displayPathKey(props.selectedTreePath) === displayPathKey(props.node.path))
+const isNodeActive = computed(() => !props.node.isDirectory && !!props.activeFilePath && displayPathKey(props.activeFilePath) === displayPathKey(props.node.path))
 
 function handleDragStart(event: DragEvent) {
   if (props.node.isDirectory) return
@@ -120,17 +121,12 @@ function handleDragStart(event: DragEvent) {
   if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove'
 }
 
-let lastFolderClickTime = 0
-
-function handleClick() {
+function handleClick(event: MouseEvent) {
   emit('locate-node', props.node)
+  if (event.detail > 1) return
   if (props.node.isDirectory) {
     if (props.treeClickMode === 'single') {
-      const now = Date.now()
-      if (now - lastFolderClickTime > 250) {
-        lastFolderClickTime = now
-        emit('toggle-folder', props.node)
-      }
+      emit('toggle-folder', props.node)
     }
   } else {
     // 文件无论何种模式，单击均打开临时预览 (Preview Tab)
@@ -150,24 +146,10 @@ function handleDblClick() {
   }
 }
 
-function handleTwistyClick() {
-  if (props.node.isDirectory) {
+function handleTwistyClick(event: MouseEvent) {
+  emit('locate-node', props.node)
+  if (props.node.isDirectory && event.detail <= 1) {
     emit('toggle-folder', props.node)
-  }
-}
-
-function handleKeydown(event: KeyboardEvent) {
-  if (event.key === 'Enter') {
-    event.preventDefault()
-    emit('locate-node', props.node)
-    if (props.node.isDirectory) {
-      emit('toggle-folder', props.node)
-    } else {
-      emit('open-file', props.node)
-    }
-  } else if (event.key === ' ') {
-    event.preventDefault()
-    handleClick()
   }
 }
 
@@ -208,11 +190,16 @@ function openMenu(event: MouseEvent | KeyboardEvent) {
   background: var(--hover);
 }
 
-.treenode.active {
-  background: var(--soft);
+.treenode.selected {
+  background: var(--accentbg);
   color: var(--bright);
-  font-weight: 500;
 }
+.treenode.active-file::before { content:'';position:absolute;left:0;top:4px;bottom:4px;width:2px;border-radius:2px;background:var(--accent) }
+.treenode.active-file { color:var(--bright) }
+.treenode:focus-visible { outline:2px solid var(--accent);outline-offset:-2px }
+.treenode.locate-highlight { animation:locate-pulse 1.2s ease-out }
+@keyframes locate-pulse { from { box-shadow:inset 0 0 0 2px var(--accent);background:var(--accentbg) } to { box-shadow:inset 0 0 0 2px transparent } }
+@media(prefers-reduced-motion:reduce) { .treenode { transition:none }.treenode.locate-highlight { animation:none;box-shadow:inset 0 0 0 2px var(--accent) } }
 
 .twisty {
   flex: none;

@@ -185,6 +185,19 @@ pub async fn open_workspace_file(
 }
 
 #[tauri::command]
+pub async fn workspace_file_visible(
+    window: Window,
+    path: String,
+    store: State<'_, WorkspaceStore>,
+) -> Result<bool, String> {
+    let service = store.for_window(window.label())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let svc = service.lock().map_err(|error| error.to_string())?;
+        Ok(svc.file_visible(std::path::Path::new(&path)))
+    }).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn read_directory(
     window: Window,
     path: String,

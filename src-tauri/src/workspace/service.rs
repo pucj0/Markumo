@@ -301,6 +301,14 @@ impl WorkspaceService {
 
         self.read_directory_internal(&valid_dir)
     }
+    pub fn file_visible(&self, path: &Path) -> bool {
+        let Ok(root) = self.root_for_path(path) else { return false };
+        let Ok(target) = validate_under_root(root, path) else { return false };
+        if !target.is_file() { return false; }
+        let rules = IgnoreRuleSet::new(root, self.show_ignored);
+        !target.ancestors().take_while(|entry| *entry != root)
+            .any(|entry| rules.is_ignored(entry, entry != target))
+    }
     pub fn revealed_path(&self, path: &Path) -> Result<PathBuf,String> {
         let root = self.root_for_path(path)?;
         let target = validate_under_root(root,path).map_err(|error|error.to_string())?;
@@ -553,5 +561,33 @@ impl WorkspaceService {
 
     pub fn recent_workspaces(&self) -> Vec<String> {
         self.preferences.recent_workspaces.clone()
+    }
+}
+
+#[cfg(test)]
+mod reveal_tests {
+    use super::*;
+
+    #[test]
+    fn reveal_visibility_checks_disk_and_ignore_rules_without_loading_the_tree() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        fs::create_dir(root.join("nested")).unwrap();
+        fs::write(root.join("nested/note.txt"), "text").unwrap();
+        let mut workspace = WorkspaceService::default();
+        workspace.open_workspace(root.clone()).unwrap();
+        let target = root.join("nested/note.txt");
+        assert!(workspace.file_visible(&target));
+        assert!(!workspace.file_visible(&root.join("nested")));
+        assert!(!workspace.file_visible(&root.join("missing.txt")));
+        fs::write(root.join(".gitignore"), "nested/\n").unwrap();
+        assert!(!workspace.file_visible(&target));
+        workspace.show_ignored = true;
+        assert!(workspace.file_visible(&target));
+        fs::remove_file(&target).unwrap();
+        assert!(!workspace.file_visible(&target));
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("external.txt"), "text").unwrap();
+        assert!(!workspace.file_visible(&outside.path().join("external.txt")));
     }
 }

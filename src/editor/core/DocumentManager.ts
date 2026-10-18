@@ -76,6 +76,8 @@ export class DocumentManager {
   private applying = false
   private fileModes: Record<string, MarkdownMode> = {}
   private disposed = false
+  private readonly paneNavigation = new Map<string, number>()
+  navigationRevision(pane: string) { return this.paneNavigation.get(pane) || 0 }
 
   constructor(seeds: DocumentSeed[] = [], private readonly languageLoader = loadLanguage) {
     for (const seed of seeds) this.seeds.set(seed.id, seed)
@@ -235,22 +237,22 @@ export class DocumentManager {
     return record
   }
 
-  openFile(file: OpenFile, preview = false) {
-    if (this.disposed || this.isComposing) return null
+  openFile(file: OpenFile, preview = false, pane = this.activePane, activatePane = true) {
+    if (this.disposed || this.isComposing || !this.layout.getPane(pane)) return null
     // A second open must never reload a dirty editor or reset its undo history.
     // The same file may arrive with a different spelling (case, separators) from
     // the shell, so the lookup uses the shared path key rather than exact text.
     const existing = [...this.records.values(), ...this.mediaRecords.values()].find(record => record.meta.fileToken && sameFilePath(record.meta.path, file.path))
-    if (existing) { this.open(existing.meta.id, preview); return existing.meta.id }
+    if (existing) { this.open(existing.meta.id, preview, pane, activatePane); return existing.meta.id }
     const id = `file:${file.token}`
-    if (file.kind === 'image' || file.kind === 'pdf') { this.createMedia(id, file); this.open(id, preview); return id }
+    if (file.kind === 'image' || file.kind === 'pdf') { this.createMedia(id, file); this.open(id, preview, pane, activatePane); return id }
     const seed: DocumentSeed = { id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text, pinned: !preview,
       kind: file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined, encoding: file.encoding }
     this.seeds.set(id, seed)
     const record = this.create(seed)
     this.attachMetadata(record, file)
     this.restoreFileMode(record)
-    this.open(id, preview)
+    this.open(id, preview, pane, activatePane)
     return id
   }
 
@@ -395,15 +397,17 @@ export class DocumentManager {
     return pane
   }
 
-  open(id: string, preview = true, pane: Pane = this.activePane) {
+  open(id: string, preview = true, pane: Pane = this.activePane, activatePane = true) {
     if (this.disposed || this.isComposing) return false
     const targetPane = this.resolvePaneId(pane)
+    if (!this.layout.getPane(targetPane)) return false
     let record = this.records.get(id)
     if (!record && !this.mediaRecords.has(id)) {
       const seed = this.seeds.get(id)
       if (!seed) return false
       record = this.create(seed)
     }
+    this.paneNavigation.set(targetPane, this.navigationRevision(targetPane) + 1)
     this.captureScroll(targetPane)
     const isMarkdown = !!record && /\.(md|markdown)$/i.test(record.meta.name)
     if (record && !record.panes[targetPane]) {
@@ -423,7 +427,7 @@ export class DocumentManager {
     }
     const replaced = group.open(id, preview, canReplace)
     if (replaced) this.release(replaced)
-    this.activePane = targetPane
+    if (activatePane) this.activePane = targetPane
     if (previousId !== id) this.showActive(targetPane)
     this.notify()
     return true
@@ -434,8 +438,8 @@ export class DocumentManager {
     if (!this.paneGroup(targetPane).tabs.some(tab => tab.documentId === id)) return false
     return this.open(id, true, targetPane)
   }
-  pin(id: string) {
-    for (const pane of this.layout.getAllPanes()) pane.group.pin(id)
+  pin(id: string, pane?: Pane) {
+    for (const item of this.layout.getAllPanes()) if (!pane || item.id === pane) item.group.pin(id)
     this.notify()
   }
   createUntitled(extension: 'txt' | 'md' = 'txt') {
@@ -456,6 +460,7 @@ export class DocumentManager {
 
     const isLastRef = !this.layout.getAllPanes().some(p => p.id !== targetPane && p.group.tabs.some(t => t.documentId === id))
     if (isLastRef && this.records.get(id)?.meta.dirty && !discard) return 'dirty'
+    this.paneNavigation.set(targetPane, this.navigationRevision(targetPane) + 1)
 
     this.captureScroll(targetPane)
     const wasActive = group.activeId === id

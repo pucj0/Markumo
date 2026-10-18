@@ -24,6 +24,7 @@ pub struct EditorSettings {
     auto_download_updates: bool,
     auto_save_delay: u32,
     tree_click_mode: String,
+    auto_follow_active_file: bool,
     #[serde(deserialize_with = "deserialize_keymap_preset")]
     keymap_preset: String,
     image_rules: ImageRules,
@@ -82,7 +83,8 @@ impl Default for EditorSettings {
             auto_check_updates: true,
             auto_download_updates: false,
             auto_save_delay: 1500,
-            tree_click_mode: "double".into(),
+            tree_click_mode: "single".into(),
+            auto_follow_active_file: false,
             keymap_preset: "markumo".into(),
             image_rules: ImageRules::default(),
             document_image_rules: BTreeMap::new(),
@@ -202,6 +204,26 @@ pub async fn save_editor_settings(
 #[cfg(test)]
 mod branding_tests {
     use super::*;
+    #[test]
+    fn workspace_preferences_default_legacy_and_round_trip() {
+        let old: EditorSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.tree_click_mode, "single");
+        assert!(!old.auto_follow_active_file);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        for mode in ["single", "double"] {
+            let settings: EditorSettings = serde_json::from_value(serde_json::json!({
+                "treeClickMode": mode, "autoFollowActiveFile": true
+            })).unwrap();
+            save(&path, &settings).unwrap();
+            let loaded = load(&path).unwrap();
+            assert_eq!(loaded.tree_click_mode, mode);
+            assert!(loaded.auto_follow_active_file);
+        }
+        let legacy: EditorSettings = serde_json::from_str(r#"{"treeClickMode":"double"}"#).unwrap();
+        assert_eq!(legacy.tree_click_mode, "double");
+        assert!(!legacy.auto_follow_active_file);
+    }
     #[test]
     fn background_update_preferences_default_and_disk_round_trip(){
         let old:EditorSettings=serde_json::from_str(r#"{"theme":"dark","fontSize":18}"#).unwrap();

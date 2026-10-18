@@ -52,6 +52,7 @@ export interface SearchDonePayload {
 type usize = number
 
 export interface WorkspaceGateway {
+  isVisibleFile?(path: string): Promise<boolean>
   openWorkspaceDialog(add?: boolean): Promise<WorkspaceInfo | null>
   removeWorkspaceFolder(path: string): Promise<void>
   restoreWorkspaces(): Promise<WorkspaceInfo[]>
