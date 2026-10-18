@@ -116,6 +116,9 @@ import './viewer.css'
 const props=defineProps<{doc:EditorDocument;pane:string;state:MediaViewState}>()
 const emit=defineEmits<{(e:'metadata',media:MediaMetadata,version:string):void}>()
 const view=reactive(props.state),pdf=shallowRef<PDFJS.PDFDocumentProxy>(),api=shallowRef<typeof PDFJS>(),meta=ref<MediaMetadata>()
+if(view.pdfNavigationOpen===undefined)view.pdfNavigationOpen=true
+if(!view.pdfNavigationWidth)view.pdfNavigationWidth=200
+if(!view.pdfNavigationMode)view.pdfNavigationMode='thumbnails'
 const viewport=ref<HTMLElement>(),error=ref(''),total=ref(0),page=ref(view.page),scale=ref(view.scale)
 const viewportWidth=ref(0),viewportHeight=ref(800),handMode=ref(false),explicitJumpSeq=ref(0)
 const pageInput=ref<HTMLInputElement>(),pageDraft=ref(String(view.page)),pageEditing=ref(false)

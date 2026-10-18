@@ -79,8 +79,7 @@ try{
   assert.equal(await page.getByRole('combobox',{name:'PDF 缩放比例'}).inputValue(),'page')
   assert.equal(await page.getByRole('button',{name:'连续滚动',exact:true}).getAttribute('aria-pressed'),'true')
   await page.screenshot({path:'.markumo-media-test/pdf-reader-edge.png'})
-  // 5. Test empty outline on single.pdf
-  await page.getByRole('button',{name:'显示/隐藏 PDF 导航'}).click();await flush()
+  // 5. Test empty outline on single.pdf (navigation is open by default)
   assert.equal(await page.getByRole('button',{name:'显示/隐藏 PDF 导航'}).getAttribute('aria-pressed'),'true')
   await page.getByRole('tab',{name:'文档大纲'}).click();await flush()
   assert.equal(await page.locator('.pdf-outline-empty').innerText(),'此 PDF 不包含文档目录')
@@ -91,8 +90,6 @@ try{
   await page.evaluate(()=>window.mediaTest.open('bookmark.pdf'))
   await page.waitForFunction(()=>document.querySelectorAll('.pdf-page .textLayer span').length>0,{timeout:30000})
   const navBtn=page.getByRole('button',{name:'显示/隐藏 PDF 导航'})
-  assert.equal(await navBtn.getAttribute('aria-pressed'),'false')
-  await navBtn.click();await flush()
   assert.equal(await navBtn.getAttribute('aria-pressed'),'true')
   assert.equal(await page.locator('.pdf-navigation').isVisible(),true)
   assert.equal(await page.getByRole('tab',{name:'页面缩略图'}).getAttribute('aria-selected'),'true')
@@ -228,8 +225,8 @@ try{
   await page.locator('.pdf-viewport').press('PageDown');await flush()
   assert(await page.locator('.pdf-viewport').evaluate(host=>host.scrollTop)>beforePageDown)
 
-  // 11-12. Test 550 pages lazy thumbnail loading and LRU cache
-  await page.getByRole('button',{name:'显示/隐藏 PDF 导航'}).click();await flush()
+  // 11-12. Test 550 pages lazy thumbnail loading and LRU cache (navigation is open by default)
+  assert.equal(await page.getByRole('button',{name:'显示/隐藏 PDF 导航'}).getAttribute('aria-pressed'),'true')
   assert.equal(await page.locator('.pdf-thumbnail-item').count(),550)
   await page.waitForTimeout(200)
   const renderedThumbs=await page.locator('.pdf-thumbnail-img').count()
@@ -330,8 +327,12 @@ try{
     await window.mediaTest.open('single.pdf')
     return { leftPane:p1, rightPane:p2 }
   })
-  await page.waitForFunction(()=>document.querySelectorAll('.pdf-viewport').length===2)
-  await page.locator(`[data-pane-id="${leftPane}"] [aria-label="显示/隐藏 PDF 导航"]`).click();await flush()
+  await page.waitForFunction(()=>document.querySelectorAll('.pdf-viewport').length===2&&document.querySelectorAll('.pdf-page .textLayer span').length>=2)
+  // Both panes default to navigation open
+  assert.equal(await page.locator(`[data-pane-id="${leftPane}"] .pdf-navigation`).isVisible(),true)
+  assert.equal(await page.locator(`[data-pane-id="${rightPane}"] .pdf-navigation`).isVisible(),true)
+  // Close navigation in right pane while left pane stays open
+  await page.locator(`[data-pane-id="${rightPane}"] [aria-label="显示/隐藏 PDF 导航"]`).click();await flush()
   assert.equal(await page.locator(`[data-pane-id="${leftPane}"] .pdf-navigation`).isVisible(),true)
   assert.equal(await page.locator(`[data-pane-id="${rightPane}"] .pdf-navigation`).count(),0)
   const paneStates=await page.evaluate(({ leftPane, rightPane })=>{

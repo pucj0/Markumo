@@ -22,5 +22,5 @@ export interface MediaViewState {
 }
 export const newMediaViewState = (): MediaViewState => ({
   scale: 1, fit: 'page', rotation: 0, left: 0, top: 0, page: 1, continuous: true, query: '',
-  pdfNavigationOpen: false, pdfNavigationMode: 'thumbnails', pdfNavigationWidth: 200,
+  pdfNavigationOpen: true, pdfNavigationMode: 'thumbnails', pdfNavigationWidth: 200,
 })
