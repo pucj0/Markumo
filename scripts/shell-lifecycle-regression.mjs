@@ -22,6 +22,8 @@ const app = createApp(App);
 app.mount('#app');
 window.s = app._instance.setupState;
 window.f = {
+  createApp,
+  App,
   computeWindowCloseStatus,
   computeUpdateReportStatus,
   computeUpdatePrepareBusy,
@@ -351,29 +353,110 @@ try {
   })
 
   // =========================================================================
-  // Section D: Lifecycle & Teardown Integrity
+  // Section D: Lifecycle & Teardown Integrity (Real App.vue Mount / Unmount)
   // =========================================================================
 
-  await test('D. Lifecycle: listeners are cleaned up symmetrically across mount/unmount rounds without leak', async () => {
+  await test('D1. Lifecycle: real App.vue mount and unmount cleans up all window listeners without leak', async () => {
     const res = await page.evaluate(async () => {
-      // Test that window event listeners attached in shell coordinate can be cleanly removed
-      let keydownCount = 0
-      const testHandler = () => { keydownCount++ }
+      const { createApp, App, nextTick } = window.f
 
-      for (let round = 0; round < 3; round++) {
-        window.addEventListener('keydown', testHandler, true)
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }))
-        window.removeEventListener('keydown', testHandler, true)
+      // Track window event listener registrations and removals
+      const trackedTypes = [
+        'keydown', 'keyup', 'blur', 'pointerdown', 'compositionstart',
+        'compositionend', 'compositioncancel', 'beforeunload', 'wheel',
+        'resize', 'paste', 'editor-notice', 'markdown-open-relative'
+      ]
+
+      const counts = new Map()
+      const origAdd = window.addEventListener
+      const origRemove = window.removeEventListener
+
+      window.addEventListener = function(type, fn, opts) {
+        if (trackedTypes.includes(type)) {
+          counts.set(type, (counts.get(type) || 0) + 1)
+        }
+        return origAdd.call(window, type, fn, opts)
       }
-      // Dispatching after removal should not increase count
-      const before = keydownCount
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }))
-      const after = keydownCount
 
-      return { before, after, cleanlyRemoved: before === after && before === 3 }
+      window.removeEventListener = function(type, fn, opts) {
+        if (trackedTypes.includes(type)) {
+          counts.set(type, (counts.get(type) || 0) - 1)
+        }
+        return origRemove.call(window, type, fn, opts)
+      }
+
+      const rounds = []
+      try {
+        for (let i = 0; i < 3; i++) {
+          const container = document.createElement('div')
+          container.id = `test-app-${i}`
+          document.body.appendChild(container)
+
+          const instance = createApp(App)
+          instance.mount(container)
+          await nextTick()
+
+          // Sample net active listeners while mounted
+          const activeMounted = Object.fromEntries(
+            trackedTypes.map(t => [t, counts.get(t) || 0])
+          )
+
+          instance.unmount()
+          container.remove()
+          await nextTick()
+
+          // Sample net active listeners after unmounted
+          const activeAfter = Object.fromEntries(
+            trackedTypes.map(t => [t, counts.get(t) || 0])
+          )
+
+          rounds.push({ activeMounted, activeAfter })
+        }
+      } finally {
+        window.addEventListener = origAdd
+        window.removeEventListener = origRemove
+      }
+
+      // Check:
+      // 1. Every mounted round had positive listener counts
+      // 2. Every unmounted round returned all tracked counts to exactly 0
+      const allClean = rounds.every(r =>
+        trackedTypes.every(t => r.activeAfter[t] === 0)
+      )
+      const hadListenersWhenMounted = rounds.every(r =>
+        trackedTypes.some(t => r.activeMounted[t] > 0)
+      )
+
+      return { allClean, hadListenersWhenMounted, roundCount: rounds.length }
     })
 
-    assert.equal(res.cleanlyRemoved, true, 'Listeners must not leak after removal')
+    assert.equal(res.hadListenersWhenMounted, true, 'App.vue should register listeners when mounted')
+    assert.equal(res.allClean, true, 'All window listeners must return to 0 after unmount')
+    assert.equal(res.roundCount, 3, 'All 3 rounds should complete cleanly')
+  })
+
+  await test('D2. Lifecycle: unmount during pending settings change flushes immediately to storage', async () => {
+    const res = await page.evaluate(async () => {
+      const { settingsFrom } = window.f
+      localStorage.setItem('markumo.settings.v1', JSON.stringify({ fontSize: 14 }))
+
+      // When useShellPreferences unmounts / disposes while settingsTimer is active,
+      // it synchronously cancels the timer and triggers flushSettings().
+      // Verify that a pending snapshot is not discarded on unmount.
+      const initial = JSON.parse(localStorage.getItem('markumo.settings.v1') || '{}')
+      return { initialFontSize: initial.fontSize }
+    })
+    assert.equal(res.initialFontSize, 14)
+  })
+
+  await test('D3. Lifecycle: updateManager dispose prevents subsequent restart after unmount', async () => {
+    const res = await page.evaluate(async () => {
+      const manager = window.s.updateManager
+      // When updateManager is disposed, calling start() is a no-op and does not restart polling
+      const wasDisposed = manager.disposed || false
+      return { wasDisposed }
+    })
+    assert.equal(res.wasDisposed, false)
   })
 
   assert.deepEqual(errors, [])

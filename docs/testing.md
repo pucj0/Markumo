@@ -77,7 +77,7 @@ node scripts/run-regressions.mjs smoke --timeout=60000
 
 ## 四、功能覆盖矩阵
 
-Markumo 现有 20 个专项回归脚本，各功能域覆盖与分组划分如下：
+Markumo 现有 21 个专项回归脚本，各功能域覆盖与分组划分如下：
 
 | 功能域 | 对应回归脚本 | 是否纳入 Smoke | 测试重点说明 |
 |---|---|:---:|---|
@@ -90,6 +90,7 @@ Markumo 现有 20 个专项回归脚本，各功能域覆盖与分组划分如�
 | **高亮运行环境** | `scripts/highlight-runtime-regression.mjs` | **是** | 实际界面的语言切换、语法字色，以及并行 Vite 服务的缓存隔离 |
 | **括号功能** | `scripts/brackets-regression.mjs` | **是** | 彩虹括号、括号匹配、嵌套边界、字符串与注释忽略、大文档解析预算 |
 | **Shell 生命周期与守卫** | `scripts/shell-lifecycle-regression.mjs` | **是** | 窗口关闭状态守卫、更新准备阻断、文档图片路径规整化与卸载无泄漏 |
+| **文档管理器核心契约** | `scripts/document-manager-regression.mjs` | **是** | 唯一状态源、保存与脏标记、多窗格同步、撤销历史隔离、异步语言竞态与媒体状态解耦 |
 | **工作区智能展开** | `scripts/workspace-smart-expand-regression.mjs` | 否（纳入完整回归） | 单子目录链式自动展开、紧凑文件夹合并展示与懒加载容错 |
 | **富文本剪贴板** | `scripts/rich-clipboard-regression.mjs` | 否（纳入完整回归） | Markdown 与 HTML 剪贴板复制/粘贴、富文本右键菜单、快捷格式切换 |
 | **文档大纲 (基础)** | `scripts/outline-regression.mjs` | 否（纳入完整回归） | 侧边栏与右侧大纲同步、中文标题解析、折叠与展开 |

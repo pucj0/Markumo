@@ -19,6 +19,7 @@ const SMOKE_TESTS = [
   'scripts/highlight-runtime-regression.mjs',
   'scripts/brackets-regression.mjs',
   'scripts/shell-lifecycle-regression.mjs',
+  'scripts/document-manager-regression.mjs',
 ]
 
 // Full regression suite: all existing regression scripts
@@ -33,6 +34,7 @@ const FULL_REGRESSION_TESTS = [
   'scripts/highlight-runtime-regression.mjs',
   'scripts/brackets-regression.mjs',
   'scripts/shell-lifecycle-regression.mjs',
+  'scripts/document-manager-regression.mjs',
   'scripts/rich-clipboard-regression.mjs',
   'scripts/outline-regression.mjs',
   'scripts/outline-navigation-regression.mjs',
