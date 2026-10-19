@@ -152,6 +152,82 @@ try{
   assert.deepEqual(await page.evaluate(limit=>Object.keys(window.f.settingsFrom({fileModes:{['a'.repeat(limit)]:'source'}}).fileModes).map(key=>key.length),pathLimit),[pathLimit])
   assert.equal(await page.evaluate(limit=>Object.keys(window.f.settingsFrom({fileModes:{['a'.repeat(limit+1)]:'source'}}).fileModes).length,pathLimit),0)
  })
+ await test('settings limits are measured in UTF-8 bytes with NUL and reserved-key guards',async()=>{
+  // Same boundary vectors the Rust `settings::branding_tests` module asserts, so a
+  // divergence in either implementation fails here as behaviour, not as a text match.
+  const result=await page.evaluate(()=>{
+    const f=window.f,bytes=value=>new TextEncoder().encode(value).length,defaultDirectory='./assets/'
+    const directory=value=>f.imageRulesFrom({customDirectory:value}).customDirectory
+    const fileModeKeys=value=>Object.keys(f.settingsFrom({fileModes:{[value]:'source'}}).fileModes)
+    const documentRuleKeys=value=>Object.keys(f.settingsFrom({documentImageRules:{[value]:{location:'sibling'}}}).documentImageRules)
+    const cjk='中'.repeat(1365),emoji='😀'.repeat(1024)
+    // 16383 + 1 byte keeps a CJK path exactly on the limit.
+    const cjkPath='中'.repeat(5461)+'p'
+    const reservedInput=JSON.parse('{"__proto__":"live","constructor":"live","prototype":"live","c:/ok.md":"source"}')
+    const reservedDocumentRules=JSON.parse('{"__proto__":{"location":"sibling"},"c:/ok.md":{"location":"sibling"}}')
+    const reserved=f.settingsFrom({fileModes:reservedInput,documentImageRules:reservedDocumentRules})
+    const validPath='c:/notes/a.md',overLongPath='p'.repeat(16385),cjkOverLongPath=cjkPath+'pp'
+    const mixed=f.settingsFrom({
+      theme:'dark',fontSize:18,wordWrap:true,
+      imageRules:{location:'sibling',customDirectory:'x'.repeat(4097),relative:false},
+      fileModes:{[validPath]:'source',[overLongPath]:'live',[cjkOverLongPath]:'split'},
+      documentImageRules:{[validPath]:{location:'custom',customDirectory:'bad\0dir'},[overLongPath]:{location:'sibling'}},
+      shortcuts:{table:'Mod+Alt+T'},
+    })
+    return {
+      bytes:{ascii:[bytes('a'.repeat(4096)),bytes('a'.repeat(4097))],cjk:[bytes(cjk+'a'),bytes(cjk+'ab')],emoji:[bytes(emoji),bytes(emoji+'a')],cjkPath:[bytes(cjkPath),bytes(cjkPath+'pp')]},
+      ascii:{atLimit:directory('a'.repeat(4096))==='a'.repeat(4096),overLimit:directory('a'.repeat(4097))===defaultDirectory},
+      cjk:{atLimit:directory(cjk+'a')===cjk+'a',overLimit:directory(cjk+'ab')===defaultDirectory,
+        // 4200 bytes but only 1400 UTF-16 units: a code-unit check would accept it.
+        unitsBypass:directory('中'.repeat(1400))===defaultDirectory,units:('中'.repeat(1400)).length},
+      emoji:{atLimit:directory(emoji)===emoji,overLimit:directory(emoji+'a')===defaultDirectory},
+      nul:{directory:directory('./assets/\0x')===defaultDirectory,keepOtherFields:f.imageRulesFrom({location:'sibling',customDirectory:'bad\0dir',relative:false})},
+      paths:{fileModeAtLimit:fileModeKeys('p'.repeat(16384)).length===1,fileModeOverLimit:fileModeKeys(overLongPath).length===0,
+        documentRuleAtLimit:documentRuleKeys('p'.repeat(16384)).length===1,documentRuleOverLimit:documentRuleKeys(overLongPath).length===0,
+        cjkAtLimit:fileModeKeys(cjkPath).length===1,cjkOverLimit:fileModeKeys(cjkOverLongPath).length===0},
+      reserved:{fileModes:Object.keys(reserved.fileModes),documentImageRules:Object.keys(reserved.documentImageRules),
+        ownProto:Object.prototype.hasOwnProperty.call(reserved.fileModes,'__proto__'),
+        protoRead:reserved.fileModes['__proto__'],constructorRead:reserved.fileModes['constructor'],prototypeRead:reserved.fileModes['prototype'],
+        documentProtoRules:reserved.documentImageRules['__proto__'],
+        prototypeIntact:Object.getPrototypeOf(reserved.fileModes)===Object.prototype&&Object.getPrototypeOf(reserved.documentImageRules)===Object.prototype,
+        noPollution:({}).polluted===undefined&&Object.prototype.polluted===undefined,
+        json:JSON.stringify(reserved.fileModes)},
+      mixed:{theme:mixed.theme,fontSize:mixed.fontSize,wordWrap:mixed.wordWrap,imageRules:mixed.imageRules,
+        fileModes:Object.keys(mixed.fileModes),documentImageRules:Object.keys(mixed.documentImageRules),
+        documentRules:mixed.documentImageRules[validPath],table:mixed.shortcuts.table,
+        jsonRoundTrip:JSON.parse(JSON.stringify(f.persistedSettings(mixed))).fileModes},
+    }
+  })
+  assert.deepEqual(result.bytes,{ascii:[4096,4097],cjk:[4096,4097],emoji:[4096,4097],cjkPath:[16384,16386]})
+  assert.deepEqual(result.ascii,{atLimit:true,overLimit:true})
+  assert.deepEqual(result.cjk,{atLimit:true,overLimit:true,unitsBypass:true,units:1400})
+  assert.deepEqual(result.emoji,{atLimit:true,overLimit:true})
+  assert.equal(result.nul.directory,true)
+  // A rejected sub-field must not discard the valid siblings in the same object.
+  assert.deepEqual(result.nul.keepOtherFields,{location:'sibling',customDirectory:'./assets/',relative:false,dotPrefix:true,escape:true})
+  assert.deepEqual(result.paths,{fileModeAtLimit:true,fileModeOverLimit:true,documentRuleAtLimit:true,documentRuleOverLimit:true,cjkAtLimit:true,cjkOverLimit:true})
+  // Reserved-looking keys are stored as own data properties: their values stay
+  // readable and serializable, while the prototype is never touched.
+  assert.deepEqual(result.reserved.fileModes,['__proto__','constructor','prototype','c:/ok.md'])
+  assert.deepEqual(result.reserved.documentImageRules,['__proto__','c:/ok.md'])
+  assert.equal(result.reserved.ownProto,true)
+  assert.equal(result.reserved.protoRead,'live')
+  assert.equal(result.reserved.constructorRead,'live')
+  assert.equal(result.reserved.prototypeRead,'live')
+  assert.deepEqual(result.reserved.documentProtoRules,{location:'sibling',customDirectory:'./assets/',relative:true,dotPrefix:true,escape:true})
+  assert.equal(result.reserved.prototypeIntact,true)
+  assert.equal(result.reserved.noPollution,true)
+  assert.equal(result.reserved.json,'{"__proto__":"live","constructor":"live","prototype":"live","c:/ok.md":"source"}')
+  assert.equal(result.mixed.theme,'dark')
+  assert.equal(result.mixed.fontSize,18)
+  assert.equal(result.mixed.wordWrap,true)
+  assert.deepEqual(result.mixed.imageRules,{location:'sibling',customDirectory:'./assets/',relative:false,dotPrefix:true,escape:true})
+  assert.deepEqual(result.mixed.fileModes,['c:/notes/a.md'])
+  assert.deepEqual(result.mixed.documentImageRules,['c:/notes/a.md'])
+  assert.deepEqual(result.mixed.documentRules,{location:'custom',customDirectory:'./assets/',relative:true,dotPrefix:true,escape:true})
+  assert.equal(result.mixed.table,'Mod+Alt+T')
+  assert.deepEqual(result.mixed.jsonRoundTrip,{'c:/notes/a.md':'source'})
+ })
  await test('per-entry legacy migration preserves custom/cleared/full-map bindings and added prefs',async()=>{
   const result=await page.evaluate(()=>{const f=window.f,s=f.settingsFrom({shortcutVersion:3,keymapPreset:'fleet',shortcuts:{new:'Mod+Alt+N',bold:'',table:'Mod+Alt+T','delete-line':'Mod+Y'},customShortcuts:['new','bold','table'],caretAnimation:'quick',autoDownloadUpdates:true});const round=f.settingsFrom(f.persistedSettings(s));const old=f.settingsFrom({shortcutVersion:1,shortcuts:{sidebar:'Mod+B',replace:'Mod+H'}});const bad=f.settingsFrom({shortcuts:{new:'Mod+Alt+N',bold:'invalid key'}});return {bindings:round.shortcuts,custom:round.customShortcuts,prefs:[round.caretAnimation,round.autoDownloadUpdates],old:[old.shortcuts.sidebar,old.shortcuts.replace],bad:bad.shortcuts.new}})
   assert.equal(result.bindings.new,'Mod+Alt+N');assert.equal(result.bindings.bold,'');assert.equal(result.bindings.table,'Mod+Alt+T');assert.equal(result.bindings['delete-line'],'Mod+Y');assert.deepEqual(result.prefs,['quick',true]);assert.deepEqual(result.old,['Mod+Alt+B','Mod+R']);assert.equal(result.bad,'Mod+Alt+N')

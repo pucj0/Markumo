@@ -54,7 +54,7 @@ impl Default for MarkdownTypography {
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct MarkdownClipboard { copy_markdown: bool, copy_whole_line: bool }
 impl Default for MarkdownClipboard {
-    fn default() -> Self { Self { copy_markdown: true, copy_whole_line: false } }
+    fn default() -> Self { Self { copy_markdown: false, copy_whole_line: false } }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -96,7 +96,7 @@ impl Default for EditorSettings {
             keymap_preset: "markumo".into(),
             image_rules: ImageRules::default(),
             document_image_rules: BTreeMap::new(),
-            settings_version: 5,
+            settings_version: 6,
             shortcut_version: 4,
             custom_shortcuts: Vec::new(),
             shortcuts: BTreeMap::new(),
@@ -140,7 +140,7 @@ fn validate(settings: &EditorSettings) -> Result<(), String> {
         || !(500..=10000).contains(&settings.auto_save_delay)
         || !["single", "double"].contains(&settings.tree_click_mode.as_str())
         || !["markumo", "fleet", "typora"].contains(&settings.keymap_preset.as_str())
-        || !(1..=5).contains(&settings.settings_version)
+        || !(1..=6).contains(&settings.settings_version)
         || !(1..=4).contains(&settings.shortcut_version)
         || settings.custom_shortcuts.len() > 128
         || settings.custom_shortcuts.iter().any(|id| id.len()>64)
@@ -179,6 +179,9 @@ fn load(path: &std::path::Path) -> Result<EditorSettings, String> {
         "one-dark" | "github-dark" | "github-light" => "standard".into(),
         _ => settings.syntax_style,
     };
+    if settings.settings_version < 6 {
+        settings.markdown_clipboard.copy_markdown = false;
+    }
     validate(&settings)?;
     Ok(settings)
 }
@@ -354,7 +357,7 @@ mod branding_tests {
     #[test]
     fn rich_clipboard_defaults_and_preferences_round_trip() {
         let old: EditorSettings = serde_json::from_str("{}").unwrap();
-        assert!(old.markdown_clipboard.copy_markdown);
+        assert!(!old.markdown_clipboard.copy_markdown);
         assert!(!old.markdown_clipboard.copy_whole_line);
         let settings: EditorSettings = serde_json::from_str(r#"{"markdownClipboard":{"copyMarkdown":false,"copyWholeLine":true}}"#).unwrap();
         validate(&settings).unwrap();
@@ -362,6 +365,18 @@ mod branding_tests {
         assert_eq!(value["markdownClipboard"]["copyMarkdown"], false);
         assert_eq!(value["markdownClipboard"]["copyWholeLine"], true);
         assert!(serde_json::from_str::<EditorSettings>(r#"{"markdownClipboard":{"copyMarkdown":"false"}}"#).is_err());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        for version in [1, 5, 6] {
+            let settings: EditorSettings = serde_json::from_value(serde_json::json!({
+                "settingsVersion": version,
+                "markdownClipboard": {"copyMarkdown": true, "copyWholeLine": true}
+            })).unwrap();
+            save(&path, &settings).unwrap();
+            let loaded = load(&path).unwrap();
+            assert_eq!(loaded.markdown_clipboard.copy_markdown, version >= 6);
+            assert!(loaded.markdown_clipboard.copy_whole_line);
+        }
     }
 
     #[test]
@@ -373,5 +388,87 @@ mod branding_tests {
         assert_eq!(value["fontSize"], 19);
         assert_eq!(value["autoSave"], true);
         assert_eq!(EditorSettings::default().keymap_preset, "markumo");
+    }
+
+    /// The web reader measures `customDirectory` in UTF-8 bytes and rejects NUL;
+    /// these are the same vectors `settings-keybindings-regression.mjs` asserts, so
+    /// a divergence in either implementation fails a real behaviour check.
+    #[test]
+    fn image_directory_limit_is_utf8_bytes_and_rejects_nul() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let ascii_at = "a".repeat(4096);
+        let ascii_over = "a".repeat(4097);
+        let cjk = "中".repeat(1365); // 4095 bytes, 1365 UTF-16 code units
+        let cjk_at = format!("{cjk}a");
+        let cjk_over = format!("{cjk}ab");
+        let emoji = "😀".repeat(1024); // 4096 bytes, 2048 UTF-16 code units
+        let emoji_over = format!("{emoji}a");
+        // 4200 bytes but only 1400 UTF-16 code units: a code-unit check accepts it.
+        let units_bypass = "中".repeat(1400);
+        for (value, accepted) in [
+            ("assets/中文", true),
+            (ascii_at.as_str(), true),
+            (ascii_over.as_str(), false),
+            (cjk_at.as_str(), true),
+            (cjk_over.as_str(), false),
+            (emoji.as_str(), true),
+            (emoji_over.as_str(), false),
+            (units_bypass.as_str(), false),
+            ("./assets/\u{0}x", false),
+        ] {
+            let mut settings = EditorSettings::default();
+            settings.image_rules.custom_directory = value.to_string();
+            assert_eq!(save(&path, &settings).is_ok(), accepted, "customDirectory bytes={}", value.len());
+        }
+    }
+
+    #[test]
+    fn per_document_map_keys_are_capped_at_16384_utf8_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let ascii_at = "p".repeat(16384);
+        let ascii_over = "p".repeat(16385);
+        let cjk_at = format!("{}p", "中".repeat(5461)); // 16383 + 1 bytes
+        let cjk_over = format!("{cjk_at}pp");
+        let emoji_at = "😀".repeat(4096); // 16384 bytes
+        let emoji_over = format!("{emoji_at}a");
+        for (key, accepted) in [
+            (ascii_at.as_str(), true),
+            (ascii_over.as_str(), false),
+            (cjk_at.as_str(), true),
+            (cjk_over.as_str(), false),
+            (emoji_at.as_str(), true),
+            (emoji_over.as_str(), false),
+        ] {
+            let mut modes = EditorSettings::default();
+            modes.file_modes.insert(key.to_string(), "source".to_string());
+            assert_eq!(save(&path, &modes).is_ok(), accepted, "fileModes key bytes={}", key.len());
+            let mut rules = EditorSettings::default();
+            rules.document_image_rules.insert(key.to_string(), ImageRules::default());
+            assert_eq!(save(&path, &rules).is_ok(), accepted, "documentImageRules key bytes={}", key.len());
+        }
+    }
+
+    /// `__proto__` and friends are ordinary map keys for serde; the desktop side
+    /// must round-trip them verbatim instead of dropping user data.
+    #[test]
+    fn reserved_looking_keys_round_trip_as_plain_map_keys() {
+        let settings: EditorSettings = serde_json::from_str(
+            r#"{"fileModes":{"__proto__":"source","constructor":"live","prototype":"split"},
+                "documentImageRules":{"__proto__":{"location":"sibling"}}}"#,
+        )
+        .unwrap();
+        validate(&settings).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        save(&path, &settings).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.file_modes.len(), 3);
+        assert_eq!(loaded.file_modes.get("__proto__").map(String::as_str), Some("source"));
+        assert_eq!(loaded.document_image_rules.len(), 1);
+        let value = serde_json::to_value(&loaded).unwrap();
+        assert_eq!(value["fileModes"]["constructor"], "live");
+        assert_eq!(value["documentImageRules"]["__proto__"]["location"], "sibling");
     }
 }

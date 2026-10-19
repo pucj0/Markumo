@@ -5,6 +5,7 @@ import { defaultUpdatePreferences, type UpdatePreferences } from './updater/Upda
 import { defaultImageRules, imageRulesFrom, type ImageRules } from '../../editor/markdown/imageImport'
 import { bracketModes, type BracketMode } from '../../editor/core/brackets'
 import { normalizeSyntaxStyle, type SyntaxStyle } from '../../editor/core/syntaxTheme'
+import { fitsSettingsText, maxSettingsPathBytes, setSettingsEntry } from './settingsLimits'
 import { defaultMarkdownTypography, defaultMarkdownClipboard, type MarkdownClipboardSettings, type MarkdownTypography } from '../../editor/markdown/wysiwyg/contracts'
 import {
   type KeymapPresetId,
@@ -20,8 +21,9 @@ export const shortcutLabels: Record<string,string> = Object.fromEntries(allComma
 export const currentShortcutVersion = 4
 /** Bumped when a stored preference needs migration. Version 4 made automatic
  * save opt-in: files written by older versions always stored the old `true`
- * default, so that value cannot prove intent. Version 5 adds independent UI typography. */
-export const currentSettingsVersion = 5
+ * default, so that value cannot prove intent. Version 5 adds independent UI typography.
+ * Version 6 makes visible text the default clipboard representation. */
+export const currentSettingsVersion = 6
 export interface EditorSettings extends UpdatePreferences {
   syntaxStyle: SyntaxStyle
   bracketMode: BracketMode
@@ -47,9 +49,6 @@ export interface EditorSettings extends UpdatePreferences {
   shortcuts: Record<ShortcutAction, string>; fileModes: Record<string, MarkdownMode>
 }
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
-/** Per-document maps are capped by the Rust validator too: keeping the same
- * limits avoids dropping entries that the desktop side already stored. */
-export const maxSettingsPathLength = 16384
 export function defaultSettings(): EditorSettings {
   const markdownClipboard = defaultMarkdownClipboard(), outlineWidth = 240
   return { bracketMode: 'matching', syntaxStyle: 'soft', ...defaultUpdatePreferences(), caretAnimation: 'smooth', outlineWidth, markdownClipboard, markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 4, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, treeClickMode: 'single', autoFollowActiveFile: false, smartExpand: true, compactFolders: false, keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: currentShortcutVersion, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
@@ -85,6 +84,9 @@ export function settingsFrom(raw: unknown): EditorSettings {
   if (s.markdownClipboard && typeof s.markdownClipboard === 'object') {
     for (const key of ['copyMarkdown', 'copyWholeLine'] as const) if (typeof s.markdownClipboard[key] === 'boolean') defaults.markdownClipboard[key] = s.markdownClipboard[key]
   }
+  // Older releases persisted copyMarkdown=true by default. Migrate that default
+  // once; a choice saved by the new settings UI remains authoritative.
+  if (!(Number.isInteger(s.settingsVersion) && s.settingsVersion! >= 6)) defaults.markdownClipboard.copyMarkdown = false
   if(s.markdownTypography&&typeof s.markdownTypography==='object'){
     const md=s.markdownTypography,target=defaults.markdownTypography
     if(Number.isFinite(md.width)&&md.width>=480&&md.width<=1400)target.width=md.width
@@ -97,7 +99,9 @@ export function settingsFrom(raw: unknown): EditorSettings {
   }
   defaults.imageRules = imageRulesFrom(s.imageRules)
   if (s.documentImageRules && typeof s.documentImageRules === 'object') for (const [path,rules] of Object.entries(s.documentImageRules).slice(-100)) {
-    if (path && path.length <= maxSettingsPathLength && !['__proto__','constructor','prototype'].includes(path)) Object.defineProperty(defaults.documentImageRules,path,{value:imageRulesFrom(rules),enumerable:true,configurable:true,writable:true})
+    // Keys are absolute paths and the byte cap mirrors the Rust validator; a
+    // rejected key only drops its own entry, never the rest of the map.
+    if (fitsSettingsText(path, maxSettingsPathBytes)) setSettingsEntry(defaults.documentImageRules,path,imageRulesFrom(rules))
   }
   if (s.theme === 'dark' || s.theme === 'light' || s.theme === 'system') defaults.theme = s.theme
   if (Number.isInteger(s.uiFontSize) && s.uiFontSize! >= 12 && s.uiFontSize! <= 20) defaults.uiFontSize = s.uiFontSize!
@@ -149,7 +153,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
   }
   defaults.customShortcuts = [...explicit]
   defaults.shortcuts = shortcuts
-  for (const [path,mode] of Object.entries(s.fileModes || {}).slice(-100)) if (path.length <= maxSettingsPathLength && ['live','source','split'].includes(mode)) defaults.fileModes[path] = mode
+  for (const [path,mode] of Object.entries(s.fileModes || {}).slice(-100)) if (fitsSettingsText(path, maxSettingsPathBytes) && ['live','source','split'].includes(mode)) setSettingsEntry(defaults.fileModes,path,mode)
   return defaults
 }
 export function macPlatform(platform = globalThis.navigator?.platform || '') { return /Mac|iPhone|iPad/i.test(platform) }

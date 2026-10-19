@@ -28,7 +28,7 @@ textClipboard.readText=()=>navigator.clipboard.readText();textClipboard.writeTex
 const manager=new DocumentManager();const revision=ref(0);manager.subscribe(()=>revision.value++);
 createApp({render(){revision.value;return h(EditorContainer,{manager,doc:manager.activeDocument,desktop:false});}}).mount('#app');
 window.f={manager,settingsFrom,defaultSettings,persistedSettings,
-  async reset(source){manager.setMarkdownClipboard({copyMarkdown:true,copyWholeLine:false});const id=manager.createUntitled('md');manager.dispatch(id,{changes:{from:0,insert:source}});manager.setMarkdownMode(id,'live');},
+  async reset(source){manager.setMarkdownClipboard(defaultSettings().markdownClipboard);const id=manager.createUntitled('md');manager.dispatch(id,{changes:{from:0,insert:source}});manager.setMarkdownMode(id,'live');},
   live:()=>manager.activeLiveEditor,view:()=>manager.activeLiveEditor.view,
   source:()=>manager.getText(manager.activeId),
   all(){const v=this.view();v.dispatch(v.state.tr.setSelection(new AllSelection(v.state.doc)));},
@@ -40,7 +40,8 @@ window.f={manager,settingsFrom,defaultSettings,persistedSettings,
 };
 window.notices=[];window.addEventListener('editor-notice',e=>window.notices.push(e.detail));
 `)
-const server = await createServer({ server: { port: 1427, strictPort: true } })
+const port = Number(process.env.MARKUMO_TEST_PORT || 1427)
+const server = await createServer({ server: { port, strictPort: true } })
 await server.listen()
 let browser
 const results = []
@@ -48,7 +49,7 @@ try {
   browser = await chromium.launch({ headless: true, ...(process.env.MARKUMO_CHROME ? { executablePath: process.env.MARKUMO_CHROME } : {}) })
   const page = await browser.newPage({ viewport: { width: 1100, height: 800 } })
   const errors = []; page.on('pageerror', e => errors.push(e.message))
-  await page.goto('http://localhost:1427/' + output + '/index.html')
+  await page.goto(`http://localhost:${port}/` + output + '/index.html')
   await page.waitForFunction(() => window.f)
   const test = async (name, run) => { await run(); results.push(name); console.log('PASS ' + name) }
   const reset = async source => {
@@ -61,14 +62,59 @@ try {
       return [f.defaultSettings().markdownClipboard, f.settingsFrom({}).markdownClipboard,
         f.settingsFrom({markdownClipboard:{copyMarkdown:false,copyWholeLine:true}}).markdownClipboard,
         f.settingsFrom({markdownClipboard:{copyMarkdown:'false',copyWholeLine:1}}).markdownClipboard,
-        f.persistedSettings(f.settingsFrom({markdownClipboard:{copyMarkdown:false}})).markdownClipboard]
+        f.persistedSettings(f.settingsFrom({markdownClipboard:{copyMarkdown:false}})).markdownClipboard,
+        f.settingsFrom({settingsVersion:5,markdownClipboard:{copyMarkdown:true,copyWholeLine:true}}).markdownClipboard,
+        f.settingsFrom({settingsVersion:6,markdownClipboard:{copyMarkdown:true,copyWholeLine:false}}).markdownClipboard]
     })
-    assert.deepEqual(value, [{copyMarkdown:true,copyWholeLine:false},{copyMarkdown:true,copyWholeLine:false},{copyMarkdown:false,copyWholeLine:true},{copyMarkdown:true,copyWholeLine:false},{copyMarkdown:false,copyWholeLine:false}])
+    assert.deepEqual(value, [{copyMarkdown:false,copyWholeLine:false},{copyMarkdown:false,copyWholeLine:false},{copyMarkdown:false,copyWholeLine:true},{copyMarkdown:false,copyWholeLine:false},{copyMarkdown:false,copyWholeLine:false},{copyMarkdown:false,copyWholeLine:true},{copyMarkdown:true,copyWholeLine:false}])
+  })
+  const tableSource = '| 角色 | 测试账号 | 测试密码 |\n| --- | --- | --- |\n| 系统管理员 | admin | 123456 |\n| 普通用户 | zhangsan | 123456 |'
+  await reset(tableSource)
+  await test('copying a cell word returns only that word in native and menu copy', async () => {
+    const value = await page.evaluate(async () => {
+      const f=window.f;let pos;
+      f.view().state.doc.descendants((node,at)=>{if(node.isText&&node.text==='admin')pos=at;});
+      f.range(pos,pos+5);const native=f.native();await f.live().clipboard('copy');const menu=f.copied();
+      await f.live().clipboard('markdown');const markdown=f.copied();
+      f.manager.setMarkdownClipboard({copyMarkdown:true,copyWholeLine:false});const optIn=f.native();
+      f.range(pos+1,pos+4);const partial=f.native();
+      return {native,menu,markdown,optIn,partial,source:f.source()};
+    })
+    for(const copy of [value.native,value.menu,value.markdown,value.optIn])assert.equal(copy.text,'admin')
+    assert.equal(value.partial.text,'dmi')
+    for(const copy of [value.native,value.menu,value.optIn,value.partial])assert.doesNotMatch(copy.html, /<table>|<th>|<td>|\|/)
+    assert.equal(value.source,tableSource)
+  })
+  await reset('项目介绍地址：https://example.com/project?id=123&view=detail\n\n[查看项目](https://example.com/project)')
+  await test('ordinary URL and labeled-link copy returns visible text without Markdown delimiters', async () => {
+    const value = await page.evaluate(async () => {
+      const f=window.f,results=[];
+      for(const text of ['https://example.com/project?id=123&view=detail','查看项目']){
+        let pos;f.view().state.doc.descendants((node,at)=>{if(node.isText&&node.text===text)pos=at;});
+        if(pos===undefined)throw Error('Missing link text '+text);
+        f.range(pos,pos+text.length);const native=f.native();await f.live().clipboard('copy');
+        results.push({text,native,menu:f.copied()});
+      }
+      return results;
+    })
+    for(const result of value){assert.equal(result.native.text,result.text);assert.equal(result.menu.text,result.text);assert.match(result.native.html, /<a href=/)}
+  })
+  await reset(tableSource)
+  await test('whole-table copy keeps semantic HTML and explicit Markdown; cutting cell text is undoable', async () => {
+    const value = await page.evaluate(async () => {
+      const f=window.f;f.all();const table=f.native();await f.live().clipboard('markdown');const markdown=f.copied();
+      let pos;f.view().state.doc.descendants((node,at)=>{if(node.isText&&node.text==='admin')pos=at;});
+      f.range(pos,pos+5);const cut=f.native(true),after=f.source();f.manager.command('undo');
+      return {table,markdown,cut,after,undo:f.source()};
+    })
+    assert.doesNotMatch(value.table.text, /\||---/);assert.match(value.table.html, /<table>/)
+    assert.equal(value.markdown.text,tableSource);assert.equal(value.cut.text,'admin')
+    assert.doesNotMatch(value.after, /admin/);assert.equal(value.undo,tableSource)
   })
   const source = '# 项目标题\n\n**加粗** 与 *斜体*、[链接](https://example.com)\n\n- 列表一\n- 列表二\n\n| A | B |\n| --- | --- |\n| 内容 | 😀 |\n\n```js\nconst n = 1\n```\n'
   await reset(source)
-  await test('native copy preserves exact whole-document Markdown and semantic HTML', async () => {
-    const copy = await page.evaluate(() => {window.f.all();return window.f.native()})
+  await test('Markdown opt-in preserves exact whole-document source and semantic HTML', async () => {
+    const copy = await page.evaluate(() => {window.f.manager.setMarkdownClipboard({copyMarkdown:true,copyWholeLine:false});window.f.all();return window.f.native()})
     assert.equal(copy.text, source)
     assert.match(copy.html, /<h1>项目标题<\/h1>/)
     assert.match(copy.html, /<strong>加粗<\/strong>/)
@@ -207,12 +253,19 @@ try {
   await test('real settings UI saves and reloads clipboard preferences', async () => {
     const app = await browser.newPage()
     app.on('pageerror',e=>errors.push(e.message))
-    await app.goto('http://localhost:1427/')
+    await app.goto(`http://localhost:${port}/`)
+    await app.evaluate(()=>localStorage.setItem('markumo.settings.v1',JSON.stringify({settingsVersion:5,markdownClipboard:{copyMarkdown:true,copyWholeLine:false}})))
+    await app.reload()
     await app.getByTitle('设置',{exact:true}).click()
     await app.locator('#settings-md-copy').waitFor({state:'attached'})
     await app.locator('#settings-md-copy').scrollIntoViewIfNeeded()
-    assert.equal(await app.locator('#settings-md-copy').isChecked(),true)
+    assert.equal(await app.locator('#settings-md-copy').isChecked(),false)
     assert.equal(await app.locator('#settings-md-copy-line').isChecked(),false)
+    await app.locator('#settings-md-copy').check()
+    await app.waitForFunction(()=>{const saved=JSON.parse(localStorage.getItem('markumo.settings.v1')||'{}');return saved.settingsVersion===6&&saved.markdownClipboard?.copyMarkdown===true})
+    await app.reload();await app.getByTitle('设置',{exact:true}).click()
+    await app.locator('#settings-md-copy').scrollIntoViewIfNeeded()
+    assert.equal(await app.locator('#settings-md-copy').isChecked(),true)
     await app.locator('#settings-md-copy').uncheck()
     await app.locator('#settings-md-copy-line').check()
     await app.waitForFunction(()=>JSON.parse(localStorage.getItem('markumo.settings.v1')||'{}').markdownClipboard?.copyWholeLine===true)

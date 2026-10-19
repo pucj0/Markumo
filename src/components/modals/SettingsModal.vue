@@ -68,9 +68,9 @@
             <section id="settings-markdown" class="settings-section">
               <h3>Markdown</h3>
               <h4 class="subhead">默认复制行为（{{ shortcutLabel('Mod+C') }}）</h4>
-              <div class="settingrow"><label for="settings-md-copy">当复制纯文本时复制 Markdown 源码</label><input id="settings-md-copy" type="checkbox" :checked="markdownClipboard?.copyMarkdown ?? true" @change="updateClipboard('copyMarkdown', ($event.target as HTMLInputElement).checked)" /></div>
+              <div class="settingrow"><label for="settings-md-copy">普通复制时将纯文本内容替换为 Markdown 源码</label><input id="settings-md-copy" type="checkbox" :checked="markdownClipboard?.copyMarkdown ?? false" @change="updateClipboard('copyMarkdown', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><label for="settings-md-copy-line">无文字选中时，复制或剪切光标所在的一整行</label><input id="settings-md-copy-line" type="checkbox" :checked="markdownClipboard?.copyWholeLine ?? false" @change="updateClipboard('copyWholeLine', ($event.target as HTMLInputElement).checked)" /></div>
-              <p class="setting-hint">仅在 Markdown 富文本编辑区生效。复制为 Markdown：{{ shortcutLabel('Mod+Shift+C') }}；粘贴为纯文本：{{ shortcutLabel('Mod+Shift+V') }}。</p>
+              <p class="setting-hint">默认复制选中的可见文字，粘贴到富文本应用时保留格式。仅在 Markdown 富文本编辑区生效。复制为 Markdown：{{ shortcutLabel('Mod+Shift+C') }}；粘贴为纯文本：{{ shortcutLabel('Mod+Shift+V') }}。</p>
               <h4 class="subhead">排版</h4>
               <div class="settingrow"><label for="settings-md-width">正文宽度</label><input id="settings-md-width" type="number" min="480" max="1400" :value="markdownTypography?.width || 860" @change="updateMd('width', Number(($event.target as HTMLInputElement).value))" /></div>
               <div class="settingrow"><label for="settings-md-size">正文字号</label><input id="settings-md-size" type="number" min="12" max="28" :value="markdownTypography?.fontSize || 16" @change="updateMd('fontSize', Number(($event.target as HTMLInputElement).value))" /></div>

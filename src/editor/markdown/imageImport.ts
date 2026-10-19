@@ -3,6 +3,7 @@ import { isolateHistory } from '@codemirror/commands'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import type { DocumentManager } from '../core/DocumentManager'
 import { refreshMarkdownResources } from './images'
+import { fitsSettingsText, maxImageDirectoryBytes } from '../../features/shell/settingsLimits'
 
 export interface ImageRules {
   location: 'original' | 'sibling' | 'assets' | 'document' | 'custom'
@@ -12,15 +13,14 @@ export interface ImageRules {
   escape: boolean
 }
 export const defaultImageRules = (): ImageRules => ({ location: 'assets', customDirectory: './assets/', relative: true, dotPrefix: true, escape: true })
-/** Mirrors `valid_image_rules` in src-tauri/src/commands/settings.rs so a value
- * accepted by one side is never silently dropped by the other. */
-export const maxImageDirectoryLength = 4096
 export function imageRulesFrom(raw: unknown): ImageRules {
   const rules = defaultImageRules()
   if (!raw || typeof raw !== 'object') return rules
   const input = raw as Partial<ImageRules>
   if (['original','sibling','assets','document','custom'].includes(input.location || '')) rules.location = input.location!
-  if (typeof input.customDirectory === 'string' && input.customDirectory.length <= maxImageDirectoryLength) rules.customDirectory = input.customDirectory
+  // The Rust validator caps this directory by UTF-8 bytes and rejects NUL; an
+  // over-long value falls back to the default instead of being truncated.
+  if (fitsSettingsText(input.customDirectory, maxImageDirectoryBytes)) rules.customDirectory = input.customDirectory
   for (const key of ['relative','dotPrefix','escape'] as const) if (typeof input[key] === 'boolean') rules[key] = input[key]!
   return rules
 }

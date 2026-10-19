@@ -41,7 +41,12 @@ export class LiveClipboard {
     if (selection.empty) return null
     const slice = selection.content()
     const full = selection instanceof AllSelection || (selection.from <= 1 && selection.to >= state.doc.content.size - 1)
-    const markdown = full ? this.bridge().source : markdownSerializer.serialize(state.schema.nodes.doc.create(null, slice.content))
+    // A text selection inside one cell includes open table/row/cell wrappers in
+    // its slice. Serialize the selected textblock alone, retaining inline marks
+    // without inventing a table header and separators around a copied word.
+    const inline = selection instanceof TextSelection && selection.$from.sameParent(selection.$to) && selection.$from.parent.isTextblock
+    const selected = inline ? selection.$from.parent.cut(selection.$from.parentOffset, selection.$to.parentOffset) : slice.content
+    const markdown = full ? this.bridge().source : markdownSerializer.serialize(state.schema.nodes.doc.create(null, selected))
     const plain = slice.content.textBetween(0, slice.content.size, '\n', node => {
       if (node.type.name === 'image') return node.attrs.alt || ''
       return node.attrs.latex || node.attrs.source || (/^(soft_break|hard_break)$/.test(node.type.name) ? '\n' : '')

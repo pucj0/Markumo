@@ -5,7 +5,7 @@ import type { CaretAnimation } from '../../core/caretMotion'
 export interface MarkdownTypography { width:number; fontSize:number; fontFamily:string; lineHeight:number; codeLineNumbers:boolean; codeWrap:boolean; imageBorder:boolean }
 export const defaultMarkdownTypography=():MarkdownTypography=>({width:860,fontSize:16,fontFamily:'system',lineHeight:1.6,codeLineNumbers:true,codeWrap:false,imageBorder:true})
 export interface MarkdownClipboardSettings { copyMarkdown: boolean; copyWholeLine: boolean }
-export const defaultMarkdownClipboard = (): MarkdownClipboardSettings => ({ copyMarkdown: true, copyWholeLine: false })
+export const defaultMarkdownClipboard = (): MarkdownClipboardSettings => ({ copyMarkdown: false, copyWholeLine: false })
 export interface LiveEditor {
   readonly composing:boolean
   readonly selection:{anchor:number;head:number}
