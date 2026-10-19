@@ -108,10 +108,21 @@ try {
   await test('A2. Reopening existing path: never duplicates record, never overwrites unsaved edits or undo history', async () => {
     const res = await page.evaluate(() => {
       const dm = window.f.createManager()
+      const isCaseInsensitive = window.f.sameFilePath('a', 'A')
+
+      // 1. Explicit sameFilePath unit checks across both case strategies
+      const caseInsensitiveMatch = window.f.sameFilePath('C:/docs/test.md', 'c:\\docs\\test.md', true)
+      const caseSensitiveMismatch = window.f.sameFilePath('C:/docs/test.md', 'c:\\docs\\test.md', false)
+      const separatorMatchPosix = window.f.sameFilePath('/docs/sub/test.md', '/docs\\sub/test.md/', false)
+
+      // 2. Integration test using platform-appropriate equivalent paths
+      const initialPath = isCaseInsensitive ? 'C:/docs/test.md' : '/docs/workspace/test.md'
+      const secondPath = isCaseInsensitive ? 'c:\\docs\\test.md' : '/docs\\workspace\\test.md/'
+
       const file = {
         token: 'tok-file-1',
         name: 'test.md',
-        path: 'C:/docs/test.md',
+        path: initialPath,
         text: 'Initial text',
         version: 'v1',
       }
@@ -122,11 +133,11 @@ try {
       const editedText = dm.getText(id1)
       const isDirty = dm.metadata(id1).dirty
 
-      // Second open with same path (simulating shell reopen or tab click)
+      // Second open with equivalent path (simulating shell reopen or tab click)
       const fileSpelling2 = {
         token: 'tok-file-2',
         name: 'test.md',
-        path: 'c:\\docs\\test.md', // different case and separators
+        path: secondPath,
         text: 'Initial text (from disk)',
         version: 'v1',
       }
@@ -138,10 +149,22 @@ try {
       dm.command('undo')
       const undidText = dm.getText(id1)
 
+      // 3. Media document reopen with equivalent path must also deduplicate
+      const media1 = { token: 'tok-img-1', name: 'photo.png', path: initialPath + '.png', kind: 'image' }
+      const mid1 = dm.openFile(media1)
+      const media2 = { token: 'tok-img-2', name: 'photo.png', path: secondPath + '.png', kind: 'image' }
+      const mid2 = dm.openFile(media2)
+
       return {
+        caseInsensitiveMatch,
+        caseSensitiveMismatch,
+        separatorMatchPosix,
         id1,
         id2,
         sameId: id1 === id2,
+        mid1,
+        mid2,
+        sameMediaId: mid1 === mid2,
         editedText,
         afterSecondOpenText,
         isDirty,
@@ -150,7 +173,11 @@ try {
       }
     })
 
+    assert.equal(res.caseInsensitiveMatch, true, 'sameFilePath with caseInsensitive=true must match Windows paths')
+    assert.equal(res.caseSensitiveMismatch, false, 'sameFilePath with caseInsensitive=false must distinguish POSIX case')
+    assert.equal(res.separatorMatchPosix, true, 'sameFilePath with caseInsensitive=false must normalize separators & slashes')
     assert.equal(res.sameId, true, 'Reopening must return same document ID')
+    assert.equal(res.sameMediaId, true, 'Reopening same media must return same media ID')
     assert.equal(res.afterSecondOpenText, 'Initial text with modifications', 'Unsaved edits must not be overwritten')
     assert.equal(res.isStillDirty, true, 'Dirty state must not be cleared on reopen')
     assert.equal(res.undidText, 'Initial text', 'Undo history must survive reopening')

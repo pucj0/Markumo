@@ -10,6 +10,11 @@ export interface MainMenuState {
 export function mainMenu(state: MainMenuState): MenuGroup[] {
   const submenu = (id: string, label: string, children: MenuNode[], enabled = true): MenuNode => ({type:'submenu',id,label,children,enabled})
   const checkbox = (id: string, label: string, checked: boolean): MenuNode => ({type:'checkbox',id,commandId:id,label,checked})
+  // Menu state is built from persisted recents. Missing or malformed records
+  // degrade to an empty submenu; they must never throw while App.vue renders.
+  const recentFiles = Array.isArray(state.recentFiles) ? state.recentFiles.filter(file => !!file && typeof file.path === 'string') : []
+  const recentWorkspaces = Array.isArray(state.recentWorkspaces) ? state.recentWorkspaces.filter((path): path is string => typeof path === 'string') : []
+  const baseName = (path: string) => readablePath(path).split(/[\\/]/).filter(Boolean).pop() || readablePath(path)
   // Command-backed Markdown formats use their canonical command id so the menu,
   // the palette and the shortcut settings resolve to a single catalog entry.
   // `menuOnlyFormat` covers the formats that have no configurable command.
@@ -17,9 +22,9 @@ export function mainMenu(state: MainMenuState): MenuGroup[] {
   const heading = (level: number, label: string) => cmd(`heading-${level}`, label)
   return [
     {id:'file',title:'文件',items:[cmd('new','新建文件'),cmd('new-markdown','新建 Markdown'),cmd('open','打开文件…'),
-      submenu('recent-files','最近打开',state.recentFiles.map(file => cmd(recentFileCommand(file.path), file.name + (state.recentFiles.filter(other => other.name === file.name).length > 1 ? ` — ${readablePath(file.path).split(/[\\/]/).slice(-2,-1)[0]}` : '')))),
+      submenu('recent-files','最近打开',recentFiles.map(file => cmd(recentFileCommand(file.path), file.name + (recentFiles.filter(other => other.name === file.name).length > 1 ? ` — ${readablePath(file.path).split(/[\\/]/).slice(-2,-1)[0]}` : '')))),
       submenu('workspace-menu','工作区',[cmd('open-workspace','打开文件夹…'),cmd('add-workspace','添加文件夹…'),
-        submenu('recent-workspaces','最近工作区',state.recentWorkspaces.map(path => cmd(recentWorkspaceCommand(path),readablePath(path).split(/[\\/]/).pop()))),
+        submenu('recent-workspaces','最近工作区',recentWorkspaces.map(path => cmd(recentWorkspaceCommand(path),baseName(path)))),
         sep('workspace-search-section'),cmd('workspace-search'),cmd('refresh-workspace')]),
       sep('save-section'),cmd('save','保存'),cmd('save-as','另存为…'),
       sep('import-section'),

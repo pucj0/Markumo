@@ -94,14 +94,6 @@ export class MediaDocumentStore {
     return this.records.delete(id)
   }
 
-  release(id: string): string | undefined {
-    const record = this.records.get(id)
-    if (!record) return undefined
-    const token = record.meta.fileToken
-    this.records.delete(id)
-    return token
-  }
-
   renamePath(oldPath: string, newPath: string, newName: string): boolean {
     for (const record of this.records.values()) {
       if (record.meta.path === oldPath) {
@@ -119,10 +111,6 @@ export class MediaDocumentStore {
       }
     }
     return undefined
-  }
-
-  values(): IterableIterator<CachedMediaDocument> {
-    return this.records.values()
   }
 
   clear() {

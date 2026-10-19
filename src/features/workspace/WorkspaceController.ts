@@ -94,8 +94,11 @@ export class WorkspaceController {
 
   async loadRecents() {
     try {
-      this.recentWorkspaces = await this.gateway.getRecentWorkspaces()
+      const recents = await this.gateway.getRecentWorkspaces()
       if (this.disposed) return
+      // Keep the menu/palette contract (a list of paths) even if a gateway
+      // returns null; recent entries are persisted data, not trusted shape.
+      this.recentWorkspaces = Array.isArray(recents) ? recents.filter((path): path is string => typeof path === 'string') : []
       this.emit()
     } catch {
       // 忽略无法获取最近工作区的异常

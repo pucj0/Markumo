@@ -17,6 +17,8 @@ import { WindowCloseGuard } from '/src/features/shell/WindowCloseGuard.ts';
 import { prepareInstallation } from '/src/features/shell/updater/prepareInstallation.ts';
 import { imageRuleKey, defaultImageRules } from '/src/editor/markdown/imageImport.ts';
 import { settingsFrom } from '/src/features/shell/editorSettings.ts';
+import { UpdateManager } from '/src/features/shell/updater/UpdateManager.ts';
+import { updateState } from '/src/features/shell/updater/UpdateState.ts';
 
 const app = createApp(App);
 app.mount('#app');
@@ -32,6 +34,8 @@ window.f = {
   imageRuleKey,
   defaultImageRules,
   settingsFrom,
+  UpdateManager,
+  updateState,
   nextTick
 };
 `)
@@ -435,28 +439,175 @@ try {
     assert.equal(res.roundCount, 3, 'All 3 rounds should complete cleanly')
   })
 
-  await test('D2. Lifecycle: unmount during pending settings change flushes immediately to storage', async () => {
+  await test('D2. Lifecycle: unmount during debounced settings change flushes new value to storage without delay leak', async () => {
     const res = await page.evaluate(async () => {
-      const { settingsFrom } = window.f
-      localStorage.setItem('markumo.settings.v1', JSON.stringify({ fontSize: 14 }))
+      const { createApp, App, nextTick } = window.f
+      localStorage.removeItem('markumo.settings.v1')
 
-      // When useShellPreferences unmounts / disposes while settingsTimer is active,
-      // it synchronously cancels the timer and triggers flushSettings().
-      // Verify that a pending snapshot is not discarded on unmount.
-      const initial = JSON.parse(localStorage.getItem('markumo.settings.v1') || '{}')
-      return { initialFontSize: initial.fontSize }
+      // 1. Mount real App.vue
+      const container = document.createElement('div')
+      container.id = 'app-test-d2'
+      document.body.appendChild(container)
+      const instance = createApp(App)
+      instance.mount(container)
+      await nextTick()
+
+      // Wait a moment for loadPreferences() to settle
+      await new Promise(r => setTimeout(r, 60))
+
+      const setup = instance._instance.setupState
+      // 2. Modify a reactive setting
+      setup.fontSize = 22
+
+      // Verify that at this exact instant (<250ms), localStorage has NOT yet been written by debounce timer
+      const beforeUnmountRaw = localStorage.getItem('markumo.settings.v1')
+      const beforeUnmountParsed = beforeUnmountRaw ? JSON.parse(beforeUnmountRaw) : null
+      const savedBeforeUnmount = beforeUnmountParsed?.fontSize === 22
+
+      // 3. Immediately unmount BEFORE the 250ms debounce timer fires!
+      instance.unmount()
+      container.remove()
+      await nextTick()
+
+      // 4. Wait for the flush promise (which was synchronously triggered by preferences.dispose()) to complete write
+      await new Promise(r => setTimeout(r, 80))
+
+      const afterUnmountRaw = localStorage.getItem('markumo.settings.v1')
+      const afterUnmountParsed = afterUnmountRaw ? JSON.parse(afterUnmountRaw) : null
+      const savedAfterUnmount = afterUnmountParsed?.fontSize === 22
+
+      // 5. Track writes over the next 350ms to ensure no delayed second write occurs
+      let delayedWriteCount = 0
+      const origSetItem = localStorage.setItem
+      localStorage.setItem = function(k, v) {
+        if (k === 'markumo.settings.v1') delayedWriteCount++
+        return origSetItem.call(localStorage, k, v)
+      }
+      try {
+        await new Promise(r => setTimeout(r, 350))
+      } finally {
+        localStorage.setItem = origSetItem
+      }
+
+      return {
+        savedBeforeUnmount,
+        savedAfterUnmount,
+        delayedWriteCount,
+        finalFontSize: afterUnmountParsed?.fontSize,
+      }
     })
-    assert.equal(res.initialFontSize, 14)
+
+    assert.equal(res.savedBeforeUnmount, false, 'Debounce must not have fired before unmount')
+    assert.equal(res.savedAfterUnmount, true, 'Unmount must flush pending settings immediately to storage')
+    assert.equal(res.finalFontSize, 22, 'Persisted setting must match the modified value')
+    assert.equal(res.delayedWriteCount, 0, 'No delayed second write should happen after unmount')
   })
 
-  await test('D3. Lifecycle: updateManager dispose prevents subsequent restart after unmount', async () => {
+  await test('D3. Lifecycle: controlled UpdateManager dispose prevents rescheduled checks, UI updates, and installs', async () => {
     const res = await page.evaluate(async () => {
-      const manager = window.s.updateManager
-      // When updateManager is disposed, calling start() is a no-op and does not restart polling
-      const wasDisposed = manager.disposed || false
-      return { wasDisposed }
+      const { UpdateManager, updateState } = window.f
+      const state = updateState()
+
+      let checkCalls = 0
+      let prepareCalls = 0
+      let acquireCalls = 0
+      let markPendingCalls = 0
+
+      const services = {
+        check: async () => {
+          checkCalls++
+          return {
+            version: '2.0.0',
+            body: 'Release notes',
+            download: async () => {},
+            install: async () => {},
+            close: async () => {},
+          }
+        },
+        prepare: async () => { prepareCalls++; return true },
+        finishPreparation: () => {},
+        acquire: async () => { acquireCalls++ },
+        release: async () => {},
+        markPending: async () => { markPendingCalls++ },
+        clearPending: async () => {},
+        relaunch: async () => {},
+        notify: () => {},
+      }
+
+      const mgr = new UpdateManager(state, services)
+
+      // Start the manager with auto-check enabled
+      mgr.start(true)
+      mgr.configure({ autoCheckUpdates: true, autoDownloadUpdates: false }, true)
+
+      // Dispose the manager
+      mgr.dispose()
+
+      // Attempt to trigger start again on disposed instance
+      mgr.start(true)
+
+      // Attempt manual check on disposed instance
+      await mgr.checkForUpdates()
+
+      // Attempt download on disposed instance
+      await mgr.downloadUpdate()
+
+      // Attempt install on disposed instance
+      await mgr.installUpdate()
+
+      return {
+        checkCalls,
+        prepareCalls,
+        acquireCalls,
+        markPendingCalls,
+        disposedFlag: mgr.disposed,
+      }
     })
-    assert.equal(res.wasDisposed, false)
+
+    assert.equal(res.checkCalls, 0, 'Disposed UpdateManager must never run checks')
+    assert.equal(res.prepareCalls, 0, 'Disposed UpdateManager must never call prepare')
+    assert.equal(res.acquireCalls, 0, 'Disposed UpdateManager must never acquire lease')
+    assert.equal(res.markPendingCalls, 0, 'Disposed UpdateManager must never mark pending')
+  })
+
+  await test('D4. Lifecycle: async native event listeners returning after unmount are unlistened immediately', async () => {
+    const res = await page.evaluate(async () => {
+      let alive = true
+      let unlistenCalled = false
+      let registeredWhileAlive = false
+
+      // Create an async listener registration promise that takes 60ms to resolve
+      const pendingRegistration = new Promise(resolve => {
+        setTimeout(() => {
+          resolve(() => {
+            unlistenCalled = true
+          })
+        }, 60)
+      })
+
+      // Component unmounts while registration is still in flight
+      setTimeout(() => {
+        alive = false
+      }, 20)
+
+      // When the native listener registration finally resolves:
+      const unlisten = await pendingRegistration
+      if (alive) {
+        registeredWhileAlive = true
+      } else {
+        unlisten()
+      }
+
+      return {
+        registeredWhileAlive,
+        unlistenCalled,
+        aliveAtResolution: alive,
+      }
+    })
+
+    assert.equal(res.registeredWhileAlive, false, 'Should not store listener when component was unmounted')
+    assert.equal(res.aliveAtResolution, false, 'Component should be marked dead')
+    assert.equal(res.unlistenCalled, true, 'Late returned listener must be unlistened immediately')
   })
 
   assert.deepEqual(errors, [])

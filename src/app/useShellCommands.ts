@@ -91,7 +91,33 @@ export interface ShellCommandsHost {
 }
 
 export function useShellCommands(host: ShellCommandsHost) {
+  // Recent entries come from disk. A single malformed record must never be able
+  // to throw inside a computed that App.vue reads while rendering: a thrown
+  // render leaves the last painted frame on screen forever ("正在打开…") even
+  // though startup already finished.
+  const recentFiles = (): Preferences['recent'] =>
+    Array.isArray(host.recentFiles.value) ? host.recentFiles.value.filter(file => !!file && typeof file.path === 'string' && typeof file.name === 'string') : []
+  const recentWorkspaces = (): string[] => {
+    const list = host.workspace.recentWorkspaces
+    return Array.isArray(list) ? list.filter((path): path is string => typeof path === 'string') : []
+  }
+  const reportedRenderErrors = new Set<string>()
+  function reportRenderError(scope: string, error: unknown) {
+    const key = `${scope}:${error instanceof Error ? error.message : String(error)}`
+    console.error(`Markumo: ${scope} failed`, error)
+    if (reportedRenderErrors.has(key)) return
+    reportedRenderErrors.add(key)
+    window.dispatchEvent(new CustomEvent('editor-notice', { detail: `界面渲染异常（${scope}）：${error instanceof Error ? error.message : String(error)}` }))
+  }
   const paletteActions = computed<PaletteAction[]>(() => {
+    try {
+      return buildPaletteActions()
+    } catch (error) {
+      reportRenderError('命令面板', error)
+      return []
+    }
+  })
+  function buildPaletteActions(): PaletteAction[] {
     host.revision.value
     const actions: PaletteAction[] = [
       { id: 'palette', title: '命令面板', detail: '', category: 'action', action: () => host.openPalette('action') },
@@ -263,7 +289,7 @@ export function useShellCommands(host: ShellCommandsHost) {
       { id: 'inspect-class', title: '查看 JVM ClassFile 结构', detail: '只读结构信息', category: 'action' as const, disabled: !host.desktop || !host.activeDoc.value?.fileToken || host.activeDoc.value.encoding !== 'Hex' || host.fileBusy.value, action: () => void host.reopenEncoding('ClassInfo') },
       ...encodings.map(encoding => ({ id: `open-${encoding}`, title: `按 ${encoding} 编码打开文件`, detail: '原生文件选择', category: 'action' as const, disabled: !host.desktop || host.fileBusy.value, action: () => void host.openFile(encoding) })),
       ...encodings.map(encoding => ({ id: `reopen-${encoding}`, title: `用 ${encoding} 编码重新打开`, detail: '需要先保存修改', category: 'action' as const, disabled: !host.desktop || !host.activeDoc.value?.fileToken || host.fileBusy.value || isMedia(host.activeDoc.value), action: () => void host.reopenEncoding(encoding) })),
-      ...host.workspace.recentWorkspaces.map(path => ({ id: recentWorkspaceCommand(path), title: `打开工作区：${path.split(/[\\/]/).pop()}`, detail: readablePath(path), category: 'action' as const, disabled: !host.desktop || host.fileBusy.value, action: () => void host.workspace.openWorkspacePath(path) })),
+      ...recentWorkspaces().map(path => ({ id: recentWorkspaceCommand(path), title: `打开工作区：${path.split(/[\\/]/).pop()}`, detail: readablePath(path), category: 'action' as const, disabled: !host.desktop || host.fileBusy.value, action: () => void host.workspace.openWorkspacePath(path) })),
       ...(host.demo ? host.manager.catalog : host.openedDocuments.value).map(doc => ({ id: `file-${doc.id}`, title: doc.name, fileName: doc.name, detail: doc.path || '未命名 · 内存草稿', category: 'file' as const, action: () => host.handleSelectDoc(doc.id) })),
       ...(host.paletteRef.value?.visible ? host.workspace.getAllKnownFiles() : []).map(file => ({
         id: `ws-${file.path}`,
@@ -284,9 +310,9 @@ export function useShellCommands(host: ShellCommandsHost) {
           hasChildren: false,
         }),
       })),
-      ...host.recentFiles.value.map(file => ({ id: recentFileCommand(file.path), title: `最近：${file.name}`, fileName: file.name, detail: readablePath(file.path), category: 'file' as const, disabled: !host.desktop || host.fileBusy.value, action: () => void host.openRecent(file.path) })),
+      ...recentFiles().map(file => ({ id: recentFileCommand(file.path), title: `最近：${file.name}`, fileName: file.name, detail: readablePath(file.path), category: 'file' as const, disabled: !host.desktop || host.fileBusy.value, action: () => void host.openRecent(file.path) })),
     ]
-  })
+  }
 
   const commandRegistry = computed(() => {
     const actions = paletteActions.value
@@ -311,20 +337,25 @@ export function useShellCommands(host: ShellCommandsHost) {
   })
 
   const menuGroups = computed(() => {
-    host.revision.value
-    return mainMenu({
-      sidebar: host.sidebarVisible.value,
-      outline: host.showOutline.value,
-      wrap: host.wordWrap.value,
-      split: host.manager.isSplit,
-      focus: host.focusMode.value,
-      markdown: !!host.activeDoc.value?.mode,
-      markdownMode: host.activeDoc.value?.mode,
-      composing: host.manager.isComposing,
-      recentFiles: host.recentFiles.value,
-      recentWorkspaces: host.workspace.recentWorkspaces,
-      canExport: host.exportController.canExportActive(),
-    })
+    try {
+      host.revision.value
+      return mainMenu({
+        sidebar: host.sidebarVisible.value,
+        outline: host.showOutline.value,
+        wrap: host.wordWrap.value,
+        split: host.manager.isSplit,
+        focus: host.focusMode.value,
+        markdown: !!host.activeDoc.value?.mode,
+        markdownMode: host.activeDoc.value?.mode,
+        composing: host.manager.isComposing,
+        recentFiles: recentFiles(),
+        recentWorkspaces: recentWorkspaces(),
+        canExport: host.exportController.canExportActive(),
+      })
+    } catch (error) {
+      reportRenderError('主菜单', error)
+      return []
+    }
   })
 
   function executeCommand(id: string) {

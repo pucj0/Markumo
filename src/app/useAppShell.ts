@@ -281,6 +281,11 @@ export function useAppShell() {
   let draining = false
   let sessionWriter: SessionWriter | undefined
   let launchReady = false
+  // A never-settling native IPC (settings load or session restore) must not pin
+  // the window on the welcome page's "正在打开…" state forever: the editor stays
+  // blocked because every command refuses to run while startup is in flight.
+  let startupWatchdog: ReturnType<typeof setTimeout> | undefined
+  let startupTimedOut = false
 
   // --- Update Manager ---
   const updateStatus = reactive(updateState())
@@ -1046,13 +1051,25 @@ export function useAppShell() {
     window.addEventListener('compositioncancel', resumePending)
     window.addEventListener('wheel', handleEditorWheel, { passive: false, capture: true })
 
+    if (desktop) {
+      startupWatchdog = setTimeout(() => {
+        startupWatchdog = undefined
+        if (!alive || !startupLoading.value) return
+        startupTimedOut = true
+        startupLoading.value = false
+        fileBusy.value = false
+        console.warn('[Markumo] startup timed out; continuing without full session restore')
+        toast('启动超时：已跳过未完成的设置或会话恢复，可直接继续操作。若反复出现，请重新启动应用。')
+      }, 20000)
+    }
+
     await preferences.loadPreferences()
     if (!alive) return
 
     if (desktop) {
       try {
         const launch = await initializeLaunch()
-        if (!alive) return
+        if (!alive || startupTimedOut) return
         workspace.restoreSession(launch.roots)
         files.acceptBatch(launch.files)
         const selected = manager.openedDocuments.find(doc => doc.path === launch.activePath) || manager.openedDocuments[0]
@@ -1080,6 +1097,8 @@ export function useAppShell() {
       } catch (error) {
         toast(`启动文件/会话恢复失败：${fileError(error)}`)
       } finally {
+        if (startupWatchdog) clearTimeout(startupWatchdog)
+        startupWatchdog = undefined
         fileBusy.value = false
         startupLoading.value = false
       }
@@ -1164,6 +1183,7 @@ export function useAppShell() {
     alive = false
     updateManager.dispose()
     if (reportTimer) clearTimeout(reportTimer)
+    if (startupWatchdog) clearTimeout(startupWatchdog)
     unlistenWindow?.()
     unlistenPending?.()
     unlistenActivate?.()
