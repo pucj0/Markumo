@@ -38,7 +38,7 @@ pnpm test:smoke
 # 或者简写：
 pnpm test
 
-# 4. 运行完整回归测试套件 (包含全部 19 个专项回归)
+# 4. 运行完整回归测试套件 (包含全部专项回归)
 pnpm test:regression
 
 # 5. 全流程质量检查 (依次执行: 类型检查 -> 前端构建 -> Smoke 回归)
@@ -77,11 +77,12 @@ node scripts/run-regressions.mjs smoke --timeout=60000
 
 ## 四、功能覆盖矩阵
 
-Markumo 现有 21 个专项回归脚本，各功能域覆盖与分组划分如下：
+Markumo 的专项回归按功能域分组如下；实际执行清单以 `scripts/run-regressions.mjs` 为准：
 
 | 功能域 | 对应回归脚本 | 是否纳入 Smoke | 测试重点说明 |
 |---|---|:---:|---|
 | **Markdown 编辑** | `scripts/markdown-empty-regression.mjs` | **是** | 空白文档输入、撤销/重做、Live/Source 模式切换与空白字符处理 |
+| **Markdown Live 控制器** | `scripts/markdown-live-controller-regression.mjs`；Full 使用 `scripts/markdown-live-controller-full-regression.mjs` | **是（核心场景）** | 源码保真、单一撤销栈、双向多窗格同步、表格工具栏及所有者清理；Full 额外验证代码块语言、图片/链接属性、HTML、行内源码与懒加载竞态 |
 | **快捷键与设置** | `scripts/settings-keybindings-regression.mjs` | **是** | 命令注册、快捷键录制、持久化、重置、冲突消除与多平台修饰键 |
 | **更新管理器** | `scripts/updater-regression.mjs` | **是** | 更新检测、下载状态、防抖、保存中脏状态保护、离线重试与资源释放 |
 | **平滑光标动画** | `scripts/smooth-caret-regression.mjs` | **是** | CodeMirror 与 ProseMirror 光标插值、中文输入法回退、多选区与分栏聚焦 |
@@ -164,7 +165,7 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 4. 执行 `pnpm typecheck`（TypeScript 零错误）。
 5. 执行 `pnpm build`（Vite 生产构建校验）。
 6. 执行 `pnpm exec playwright install --with-deps chromium`（准备无头浏览器与系统库）。
-7. 执行 `pnpm test:smoke`（8 个核心 Smoke 回归）。
+7. 执行 `pnpm test:smoke`（当前清单中的核心 Smoke 回归）。
 8. **失败时上传产物**：`test-results/**`（含 `regression-logs/` 日志与截图）以及 `.markumo-media-test/**/*.png`，保留 7 天。
 
 #### Job 2：`Rust Quality`
@@ -184,6 +185,22 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 ---
 
 ## 八、新增功能回归测试规范
+
+### Markdown Live 基线和性能测量
+
+```bash
+# 核心断言 / 加入较重的 NodeView 和生命周期场景
+node scripts/markdown-live-controller-regression.mjs
+node scripts/markdown-live-controller-regression.mjs --full
+
+# 在修改前、修改后使用相同环境分别执行；不使用真实文件或系统剪贴板
+node scripts/markdown-live-controller-regression.mjs --profile --label=before
+node scripts/markdown-live-controller-regression.mjs --profile --label=after
+```
+
+结果保存在 `test-results/phase-05/`。性能模式对六种固定输入各预热一次，再测量七次，记录初始化中位数、同步编辑中位数/P95、循环耗时、DOM、显式事件监听器和 PM/CM View 数量，以及销毁结果。初始化包含 fixture 重挂载和浏览器命令往返；同步编辑测量实际 PM dispatch 到规范 Markdown 与其他 Live 窗格同步完成的耗时，不等同于键入到屏幕呈现延迟。绝对值依赖机器，应在同机同浏览器比较，且不得为通过测量放宽 1 Mi 字符等既有安全预算。
+
+监听器计数追踪真实 `addEventListener` / `removeEventListener`，使用 WeakMap 避免测量工具自身保留已卸载 DOM；属性事件处理器及浏览器内部监听器不计入，也不跟踪 once/AbortSignal 的自动失效，因此是显式注册/注销计数。模块级共享监听器可能在视图销毁后保留，须结合实际 PM/CM View 销毁、浮层移除和相同预热基线比较，而不是宣称全页面监听器必须归零。源码行数按 LF 归一化且不计末尾空行；“decisionPoints”是 TypeScript AST 上条件、循环、catch、case 及逻辑运算的计数，不是完整圈复杂度分析。
 
 后续在重构或新增功能（如拆分 `AppShell`、`DocumentManager`、`MarkdownEditorController` 等组件）时，须遵循以下回归准则：
 

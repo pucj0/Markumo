@@ -328,6 +328,10 @@ try{
     return { leftPane:p1, rightPane:p2 }
   })
   await page.waitForFunction(()=>document.querySelectorAll('.pdf-viewport').length===2&&document.querySelectorAll('.pdf-page .textLayer span').length>=2)
+  // All text spans can belong to the left PDF while the right one is still
+  // loading. Wait for each pane's real navigation before asserting its state.
+  await page.locator(`[data-pane-id="${leftPane}"] .pdf-navigation`).waitFor({state:'visible'})
+  await page.locator(`[data-pane-id="${rightPane}"] .pdf-navigation`).waitFor({state:'visible'})
   // Both panes default to navigation open
   assert.equal(await page.locator(`[data-pane-id="${leftPane}"] .pdf-navigation`).isVisible(),true)
   assert.equal(await page.locator(`[data-pane-id="${rightPane}"] .pdf-navigation`).isVisible(),true)

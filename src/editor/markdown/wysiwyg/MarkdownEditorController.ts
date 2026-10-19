@@ -7,6 +7,7 @@ import { inputRules, textblockTypeInputRule, wrappingInputRule, InputRule } from
 import { wrapInList, splitListItem, sinkListItem, liftListItem } from 'prosemirror-schema-list'
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, goToNextCell, tableEditing, isInTable, selectedRect } from 'prosemirror-tables'
 import { gapCursor } from 'prosemirror-gapcursor'
+import { LiveTableToolbar, type TableToolbarCommand } from './LiveTableToolbar'
 import { markdownSchema as s } from './MarkdownSchema'
 import { MarkdownSourceBridge, textPatch, type SourcePatch } from './MarkdownSourceBridge'
 import { InlineSourceView, inlineSourceRange } from './InlineSourceView'
@@ -52,8 +53,7 @@ export class MarkdownEditorController implements LiveEditor {
   readonly view: EditorView
   bridge: MarkdownSourceBridge
   readonly dom = document.createElement('div')
-  private tableTools!: HTMLElement
-  private tableToolbars = new Map<number, HTMLElement>()
+  private tableToolbar: LiveTableToolbar
   private imagePreview: ImagePreview
   private properties = document.createElement('div')
   private selectionBubble = document.createElement('div')
@@ -110,7 +110,14 @@ export class MarkdownEditorController implements LiveEditor {
     this.dom.setAttribute('aria-label', 'Markdown 所见即所得编辑器')
 
     // Table Toolbar (always anchored directly above table)
-    this.tableTools = this.createTableToolbar()
+    this.tableToolbar = new LiveTableToolbar(this.dom, {
+      selectTable: (position, toolbar) => this.focusToolbarTable(position, toolbar),
+      run: command => {
+        const commands: Record<TableToolbarCommand, Command> = { addRowBefore, addRowAfter, deleteRow, addColumnBefore, addColumnAfter, deleteColumn, deleteTable }
+        this.run(commands[command], true)
+      },
+      align: value => { this.run(this.align(value), true) },
+    })
 
     // Floating Property Popover (anchored to link/image/math)
     this.properties.className = 'md-properties md-anchored-popover'
@@ -186,7 +193,7 @@ export class MarkdownEditorController implements LiveEditor {
             state.doc.descendants((node, pos) => {
               if (node.type === s.nodes.table) {
                 tablePositions.add(pos)
-                decorations.push(Decoration.widget(pos, this.tableToolbarFor(pos), {
+                decorations.push(Decoration.widget(pos, this.tableToolbar.forTable(pos), {
                   key: `table-tools-${pos}`,
                   side: -1,
                   stopEvent: () => true,
@@ -195,12 +202,7 @@ export class MarkdownEditorController implements LiveEditor {
                 return false
               }
             })
-            for (const [pos, bar] of this.tableToolbars) {
-              if (!tablePositions.has(pos)) {
-                if (bar !== this.tableTools) bar.remove()
-                this.tableToolbars.delete(pos)
-              }
-            }
+            this.tableToolbar.retain(tablePositions)
             if ($from.parent.type === s.nodes.heading) {
               const pos = $from.before()
               decorations.push(Decoration.node(pos, pos + $from.parent.nodeSize, { class: 'md-heading-focused', 'data-heading-level': `h${$from.parent.attrs.level}` }))
@@ -925,157 +927,38 @@ export class MarkdownEditorController implements LiveEditor {
     el.style.zIndex = '25'
   }
 
-  private tableToolbarFor(pos: number): HTMLElement {
-    let bar = this.tableToolbars.get(pos)
-    if (!bar) {
-      if (this.tableToolbars.size === 0) {
-        bar = this.tableTools
-      } else {
-        bar = this.createTableToolbar(pos)
+  private focusToolbarTable(position: number | undefined, toolbar: HTMLElement) {
+    let currentPos = position
+    if (currentPos === undefined && this.view?.dom) {
+      const next = toolbar.nextElementSibling
+      if (next && next.tagName === 'TABLE') {
+        try {
+          currentPos = this.view.posAtDOM(next, 0) - 1
+        } catch { /* ignored */ }
       }
-      this.tableToolbars.set(pos, bar)
     }
-    bar.hidden = false
-    return bar
-  }
-
-  private createTableToolbar(tablePos?: number): HTMLElement {
-    const tableTools = document.createElement('div')
-    tableTools.className = 'md-table-tools md-table-floating-bar'
-    tableTools.setAttribute('role', 'toolbar')
-    tableTools.setAttribute('aria-label', '表格工具')
-    tableTools.hidden = false
-
-    const tableCommands: [string, Command][] = [
-      ['前插行', addRowBefore],
-      ['后插行', addRowAfter],
-      ['删除行', deleteRow],
-      ['前插列', addColumnBefore],
-      ['后插列', addColumnAfter],
-      ['删除列', deleteColumn],
-    ]
-    const iconButton = (label: string, path: string, action: () => void) => {
-      const button = document.createElement('button')
-      button.type = 'button'; button.title = label; button.setAttribute('aria-label', label)
-      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-      svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '1.6'); svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('aria-hidden', 'true')
-      const shape = document.createElementNS(svg.namespaceURI, 'path'); shape.setAttribute('d', path); svg.append(shape); button.append(svg)
-      button.onmousedown = event => event.preventDefault()
-      button.onclick = action
-      return button
-    }
-
-    const tableMenu = document.createElement('div')
-    tableMenu.className = 'md-table-menu'
-    tableMenu.hidden = true
-    tableMenu.setAttribute('aria-label', '表格行列操作菜单')
-
-    const closeTableMenu = () => {
-      tableMenu.hidden = true
-      tableTools.querySelectorAll('[aria-expanded]').forEach(el => el.setAttribute('aria-expanded', 'false'))
-    }
-
-    const toggleMenu = () => {
-      tableMenu.hidden = !tableMenu.hidden
-      tableTools.querySelectorAll('[aria-expanded]').forEach(el => el.setAttribute('aria-expanded', String(!tableMenu.hidden)))
-    }
-
-    const ensureTableFocus = () => {
-      let currentPos = tablePos
-      if (currentPos === undefined && this.view?.dom) {
-        const next = tableTools.nextElementSibling
-        if (next && next.tagName === 'TABLE') {
-          try {
-            currentPos = this.view.posAtDOM(next, 0) - 1
-          } catch { /* ignored */ }
-        }
+    if (currentPos !== undefined && this.view?.state) {
+      const { $from } = this.view.state.selection
+      let inCurrentTable = false
+      for (let depth = $from.depth; depth > 0; depth--) {
+        if ($from.before(depth) === currentPos) { inCurrentTable = true; break }
       }
-      if (currentPos !== undefined && this.view?.state) {
-        const { $from } = this.view.state.selection
-        let inCurrentTable = false
-        for (let depth = $from.depth; depth > 0; depth--) {
-          if ($from.before(depth) === currentPos) { inCurrentTable = true; break }
-        }
-        if (!inCurrentTable) {
-          const tableNode = this.view.state.doc.nodeAt(currentPos)
-          if (tableNode) {
-            let firstCellPos: number | undefined
-            this.view.state.doc.nodesBetween(currentPos, currentPos + tableNode.nodeSize, (n, p) => {
-              if ((n.type.name === 'table_cell' || n.type.name === 'table_header') && firstCellPos === undefined) {
-                firstCellPos = p
-              }
-            })
-            if (firstCellPos !== undefined) {
-              this.view.dispatch(this.view.state.tr.setSelection(TextSelection.near(this.view.state.doc.resolve(firstCellPos + 1))))
-              this.view.focus()
+      if (!inCurrentTable) {
+        const tableNode = this.view.state.doc.nodeAt(currentPos)
+        if (tableNode) {
+          let firstCellPos: number | undefined
+          this.view.state.doc.nodesBetween(currentPos, currentPos + tableNode.nodeSize, (n, p) => {
+            if ((n.type.name === 'table_cell' || n.type.name === 'table_header') && firstCellPos === undefined) {
+              firstCellPos = p
             }
+          })
+          if (firstCellPos !== undefined) {
+            this.view.dispatch(this.view.state.tr.setSelection(TextSelection.near(this.view.state.doc.resolve(firstCellPos + 1))))
+            this.view.focus()
           }
         }
       }
     }
-
-    const grid = iconButton('表格行列操作', 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z', () => {
-      ensureTableFocus()
-      toggleMenu()
-    })
-    grid.setAttribute('aria-expanded', 'false')
-    tableTools.append(grid)
-
-    for (const [label, value, path] of [
-      ['左对齐', 'left', 'M3 5h18 M3 10h12 M3 15h18 M3 20h12'],
-      ['居中对齐', 'center', 'M3 5h18 M6 10h12 M3 15h18 M6 20h12'],
-      ['右对齐', 'right', 'M3 5h18 M9 10h12 M3 15h18 M9 20h12'],
-    ]) {
-      const button = iconButton(label, path, () => {
-        ensureTableFocus()
-        this.run(this.align(value), true)
-      })
-      button.dataset.align = value
-      tableTools.append(button)
-    }
-
-    const spacer = document.createElement('span')
-    spacer.className = 'md-table-tools-spacer'
-    tableTools.append(spacer)
-
-    const more = iconButton('更多操作', 'M12 4h.01 M12 12h.01 M12 20h.01', () => {
-      ensureTableFocus()
-      toggleMenu()
-    })
-    more.setAttribute('aria-expanded', 'false')
-
-    tableTools.append(more, iconButton('删除表格', 'M4 6h16 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7', () => {
-      ensureTableFocus()
-      this.run(deleteTable, true)
-    }))
-
-    for (const [label, command] of tableCommands) {
-      const button = document.createElement('button')
-      button.type = 'button'
-      button.textContent = label
-      button.onmousedown = event => event.preventDefault()
-      button.onclick = () => {
-        closeTableMenu()
-        ensureTableFocus()
-        this.run(command, true)
-      }
-      tableMenu.append(button)
-    }
-    tableTools.append(tableMenu)
-
-    tableTools.onkeydown = event => {
-      if (event.key === 'Escape' && !tableMenu.hidden) {
-        event.preventDefault()
-        event.stopPropagation()
-        closeTableMenu()
-        more.focus()
-      }
-    }
-    this.dom.addEventListener('mousedown', event => {
-      if (!tableTools.contains(event.target as globalThis.Node)) closeTableMenu()
-    })
-
-    return tableTools
   }
 
   private updateTools() {
@@ -1104,21 +987,7 @@ export class MarkdownEditorController implements LiveEditor {
         }
       }
     }
-    for (const [pos, bar] of this.tableToolbars) {
-      const active = inTable && activeTablePos !== null && activeTablePos === pos
-      bar.classList.toggle('is-active', active)
-      if (active) {
-        const table = bar.nextElementSibling as HTMLElement | null
-        if (table && table.tagName === 'TABLE') {
-          bar.style.top = `${table.offsetTop - 28}px`
-          bar.style.left = `${table.offsetLeft}px`
-          bar.style.width = `${table.offsetWidth}px`
-        }
-      }
-    }
-    this.dom.querySelectorAll<HTMLButtonElement>('.md-table-tools [data-align]').forEach(button => {
-      button.setAttribute('aria-pressed', String(inTable && button.dataset.align === alignment))
-    })
+    this.tableToolbar.update(inTable ? activeTablePos : null, alignment)
     for (const refresh of this.extensionViews) refresh()
   }
 
@@ -1876,9 +1745,6 @@ export class MarkdownEditorController implements LiveEditor {
     this.codeViews.clear()
     this.liveImages.clear()
     this.extensionViews.clear()
-    for (const bar of this.tableToolbars.values()) {
-      if (bar !== this.tableTools) bar.remove()
-    }
-    this.tableToolbars.clear()
+    this.tableToolbar.destroy()
   }
 }

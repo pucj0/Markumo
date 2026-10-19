@@ -543,7 +543,10 @@ export class DocumentManager {
           publish:(expected,patch,update,isolated)=>{
             if(this.records.get(record.meta.id)!==record||record.state.doc.toString()!==expected||record.state.readOnly)return false
             this.liveOrigin={pane:resolved,update}
-            try{this.dispatch(record.meta.id,{changes:patch,userEvent:'input.markdown',...(isolated?{annotations:isolateHistory.of('full')}:{})})}finally{this.liveOrigin=null}
+            // Ordinary adjacent input uses CM's native grouping; commands keep
+            // their existing full isolation on both sides of the history event.
+            const userEvent=isolated?'input.markdown':patch.insert?'input.type.markdown':'delete.markdown'
+            try{this.dispatch(record.meta.id,{changes:patch,userEvent,...(isolated?{annotations:isolateHistory.of('full')}:{})})}finally{this.liveOrigin=null}
             return true
           },
           selected:(anchor,head)=>{const selection=EditorSelection.single(Math.min(anchor,record.state.doc.length),Math.min(head,record.state.doc.length));record.panes[resolved].selection=selection;if(this.activePane===resolved)record.state=record.state.update({selection,annotations:Transaction.addToHistory.of(false)}).state;this.notify()},
@@ -859,9 +862,12 @@ export class DocumentManager {
 
   private activeViewFor(id: string) {
     const activeLeaf = this.layout.activePaneId
-    if (this.paneGroup(activeLeaf).activeId === id) return this.views.get(activeLeaf) || null
+    const activeView = this.views.get(activeLeaf)
+    if (activeView && this.paneGroup(activeLeaf).activeId === id) return activeView
+    // Live panes have no CM view; keep looking for a source view of this document.
     for (const pane of this.layout.getAllLeafIds()) {
-      if (this.paneGroup(pane).activeId === id) return this.views.get(pane) || null
+      const view = this.views.get(pane)
+      if (view && this.paneGroup(pane).activeId === id) return view
     }
     return null
   }
