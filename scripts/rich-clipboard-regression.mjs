@@ -11,6 +11,7 @@ fs.writeFileSync(`${output}/index.html`, '<!doctype html><meta charset="utf-8"><
 fs.writeFileSync(`${output}/fixture.js`, `
 import {DocumentManager} from '/src/editor/core/DocumentManager.ts';
 import {EditorState,AllSelection,TextSelection} from 'prosemirror-state';
+import {CellSelection,TableMap} from 'prosemirror-tables';
 import {textClipboard} from '/src/features/shell/clipboard.ts';
 import {settingsFrom,defaultSettings,persistedSettings} from '/src/features/shell/editorSettings.ts';
 import {createApp,h,ref} from 'vue';
@@ -33,6 +34,7 @@ window.f={manager,settingsFrom,defaultSettings,persistedSettings,
   source:()=>manager.getText(manager.activeId),
   all(){const v=this.view();v.dispatch(v.state.tr.setSelection(new AllSelection(v.state.doc)));},
   range(from,to=from){const v=this.view();v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc,from,to)));},
+  cells(top,left,bottom=top,right=left){const v=this.view();let table,at;v.state.doc.descendants((node,pos)=>{if(node.type.name==='table'){table=node;at=pos;return false;}});const map=TableMap.get(table);v.dispatch(v.state.tr.setSelection(CellSelection.create(v.state.doc,at+1+map.map[top*map.width+left],at+1+map.map[bottom*map.width+right])));},
   native(cut=false){const data=new DataTransfer();this.view().dom.dispatchEvent(new ClipboardEvent(cut?'cut':'copy',{bubbles:true,cancelable:true,clipboardData:data}));return {text:data.getData('text/plain'),html:data.getData('text/html')};},
   copied:()=>({text,html}),setClipboard(value){text=value;},
   delayWrite(){delay=new Promise(resolve=>this.releaseWrite=()=>{delay=null;resolve();});},
@@ -59,14 +61,83 @@ try {
   await test('settings defaults, old preferences, validation and persistence', async () => {
     const value = await page.evaluate(() => {
       const f = window.f
-      return [f.defaultSettings().markdownClipboard, f.settingsFrom({}).markdownClipboard,
+      return [
+        f.defaultSettings().markdownClipboard,
+        f.settingsFrom({}).markdownClipboard,
         f.settingsFrom({markdownClipboard:{copyMarkdown:false,copyWholeLine:true}}).markdownClipboard,
         f.settingsFrom({markdownClipboard:{copyMarkdown:'false',copyWholeLine:1}}).markdownClipboard,
         f.persistedSettings(f.settingsFrom({markdownClipboard:{copyMarkdown:false}})).markdownClipboard,
+        // Legacy version 5: explicitly saved true must be preserved
         f.settingsFrom({settingsVersion:5,markdownClipboard:{copyMarkdown:true,copyWholeLine:true}}).markdownClipboard,
-        f.settingsFrom({settingsVersion:6,markdownClipboard:{copyMarkdown:true,copyWholeLine:false}}).markdownClipboard]
+        // Legacy version 5: explicitly saved false must be preserved
+        f.settingsFrom({settingsVersion:5,markdownClipboard:{copyMarkdown:false,copyWholeLine:true}}).markdownClipboard,
+        // Legacy version 5: omitted copyMarkdown field must default to false
+        f.settingsFrom({settingsVersion:5,markdownClipboard:{copyWholeLine:true}}).markdownClipboard,
+        // Legacy version 5: omitted markdownClipboard object must default to false
+        f.settingsFrom({settingsVersion:5}).markdownClipboard,
+        // Version 6: respects user choice (true or false)
+        f.settingsFrom({settingsVersion:6,markdownClipboard:{copyMarkdown:true,copyWholeLine:false}}).markdownClipboard,
+        f.settingsFrom({settingsVersion:6,markdownClipboard:{copyMarkdown:false,copyWholeLine:true}}).markdownClipboard,
+      ]
     })
-    assert.deepEqual(value, [{copyMarkdown:false,copyWholeLine:false},{copyMarkdown:false,copyWholeLine:false},{copyMarkdown:false,copyWholeLine:true},{copyMarkdown:false,copyWholeLine:false},{copyMarkdown:false,copyWholeLine:false},{copyMarkdown:false,copyWholeLine:true},{copyMarkdown:true,copyWholeLine:false}])
+    assert.deepEqual(value, [
+      {copyMarkdown:false,copyWholeLine:false},
+      {copyMarkdown:false,copyWholeLine:false},
+      {copyMarkdown:false,copyWholeLine:true},
+      {copyMarkdown:false,copyWholeLine:false},
+      {copyMarkdown:false,copyWholeLine:false},
+      {copyMarkdown:true,copyWholeLine:true},
+      {copyMarkdown:false,copyWholeLine:true},
+      {copyMarkdown:false,copyWholeLine:true},
+      {copyMarkdown:false,copyWholeLine:false},
+      {copyMarkdown:true,copyWholeLine:false},
+      {copyMarkdown:false,copyWholeLine:true},
+    ])
+  })
+  await reset('# 基于SpringBoot+Vue的摄影约拍管理系统\n\n项目介绍地址：https://example.com/project')
+  await test('a selected heading line copies visible text while explicit Markdown retains its heading',async()=>{
+    const value=await page.evaluate(async()=>{
+      const f=window.f;let at,text;
+      f.view().state.doc.descendants((node,pos)=>{if(node.type.name==='heading'){at=pos+1;text=node.textContent;return false;}});
+      f.range(at,at+text.length);const native=f.native();await f.live().clipboard('copy');const menu=f.copied();await f.live().clipboard('markdown');
+      return {text,native,menu,markdown:f.copied()};
+    });
+    assert.equal(value.native.text,value.text);assert.equal(value.menu.text,value.text);assert.equal(value.markdown.text,'# '+value.text);
+    assert.match(value.native.html,/<h1>/);assert.doesNotMatch(value.native.text,/^# /);
+    await page.screenshot({path:`${output}/single-heading-copy.png`});
+    await reset('# '+value.text+'\n');
+    const whole=await page.evaluate(()=>{window.f.all();return window.f.native();});assert.equal(whole.text,value.text);
+  })
+  await test('visual wrapping of a single rich-text line never switches it to Markdown',async()=>{
+    const text='自动折行仍然是同一逻辑行。'.repeat(18);
+    await reset('**'+text+'**');await page.setViewportSize({width:580,height:800});
+    const value=await page.evaluate(()=>{
+      const f=window.f;f.all();const range=document.createRange();range.selectNodeContents(f.view().dom.querySelector('strong'));
+      return {copy:f.native(),rows:new Set([...range.getClientRects()].map(rect=>Math.round(rect.top))).size};
+    });
+    assert.ok(value.rows>1);assert.equal(value.copy.text,text);assert.match(value.copy.html,/<strong>/);
+    await page.setViewportSize({width:1100,height:800});
+  })
+  await test('multiple logical lines automatically retain Markdown for paragraphs, lists, quotes and breaks',async()=>{
+    const sources=['# 标题\n\n**正文** 与 [项目](https://example.com)\n\n- 第一项\n- 第二项','**第一行**\n第二行','第一行  \n**第二行**','- **第一项**\n- 第二项','> 引用 **第一段**\n>\n> 引用第二段'];
+    for(const source of sources){
+      await reset(source);
+      const value=await page.evaluate(async()=>{const f=window.f;f.all();const native=f.native();await f.live().clipboard('copy');const menu=f.copied();await f.live().clipboard('simplified');return {native,menu,simple:f.copied()};});
+      assert.equal(value.native.text,source);assert.equal(value.menu.text,source);assert.doesNotMatch(value.simple.text,/\*\*|^# |^- |^> /m);
+      assert.equal(value.simple.html,value.native.html);
+    }
+  })
+  await test('partial cross-paragraph selection retains structure; a single final newline stays plain',async()=>{
+    await reset('# 标题一\n\n**正文二**\n\n不要复制的段落');
+    const partial=await page.evaluate(async()=>{
+      const f=window.f;let title,body;
+      f.view().state.doc.descendants((node,at)=>{if(node.isText&&node.text==='标题一')title=at;if(node.isText&&node.text==='正文二')body=at;});
+      f.range(title+1,body+2);const native=f.native();await f.live().clipboard('copy');return {native,menu:f.copied()};
+    });
+    assert.equal(partial.native.text,'# 题一\n\n**正文**');assert.equal(partial.menu.text,partial.native.text);
+    await reset('**第一行**\n第二行');
+    const line=await page.evaluate(()=>{const f=window.f;let at;f.view().state.doc.descendants((node,pos)=>{if(node.isText&&node.text==='第一行')at=pos;});f.range(at,at+4);return f.native();});
+    assert.equal(line.text,'第一行\n');assert.doesNotMatch(line.text,/\*\*/);
   })
   const tableSource = '| 角色 | 测试账号 | 测试密码 |\n| --- | --- | --- |\n| 系统管理员 | admin | 123456 |\n| 普通用户 | zhangsan | 123456 |'
   await reset(tableSource)
@@ -100,16 +171,70 @@ try {
     for(const result of value){assert.equal(result.native.text,result.text);assert.equal(result.menu.text,result.text);assert.match(result.native.html, /<a href=/)}
   })
   await reset(tableSource)
-  await test('whole-table copy keeps semantic HTML and explicit Markdown; cutting cell text is undoable', async () => {
+  await test('whole-table copy keeps semantic HTML and Markdown; cutting cell text is undoable', async () => {
     const value = await page.evaluate(async () => {
       const f=window.f;f.all();const table=f.native();await f.live().clipboard('markdown');const markdown=f.copied();
       let pos;f.view().state.doc.descendants((node,at)=>{if(node.isText&&node.text==='admin')pos=at;});
       f.range(pos,pos+5);const cut=f.native(true),after=f.source();f.manager.command('undo');
       return {table,markdown,cut,after,undo:f.source()};
     })
-    assert.doesNotMatch(value.table.text, /\||---/);assert.match(value.table.html, /<table>/)
+    assert.equal(value.table.text,tableSource);assert.match(value.table.html, /<table>/)
     assert.equal(value.markdown.text,tableSource);assert.equal(value.cut.text,'admin')
     assert.doesNotMatch(value.after, /admin/);assert.equal(value.undo,tableSource)
+  })
+  await reset(tableSource)
+  await test('mouse selection of header plus one row copies exactly the selected table', async () => {
+    const first=await page.locator('.md-prose th').first().boundingBox(),last=await page.locator('.md-prose tr').nth(1).locator('td').last().boundingBox();
+    await page.mouse.move(first.x+12,first.y+12);await page.mouse.down();
+    await page.mouse.move(last.x+last.width-12,last.y+12,{steps:12});await page.mouse.up();
+    await page.waitForFunction(()=>document.querySelectorAll('.selectedCell').length===6);
+    const copy=await page.evaluate(async()=>{const f=window.f;const native=f.native();await f.live().clipboard('copy');return {native,menu:f.copied(),source:f.source()};});
+    for(const value of [copy.native,copy.menu]){
+      assert.match(value.text,/\| 角色 \| 测试账号 \| 测试密码 \|/);assert.match(value.text,/\| 系统管理员 \| admin \| 123456 \|/);
+      assert.doesNotMatch(value.text,/zhangsan|普通用户/);assert.match(value.html,/<table>/);
+    }
+    assert.equal(copy.source,tableSource);
+    await page.screenshot({path:`${output}/selected-table-copy.png`});
+  })
+  await test('rows, columns, rectangles, single cells and whole-table cell selections keep their grid', async () => {
+    const cases=[{range:[1,0,1,2],grid:[['系统管理员','admin','123456']]},{range:[0,1,2,1],grid:[['测试账号'],['admin'],['zhangsan']]},{range:[1,1,2,2],grid:[['admin','123456'],['zhangsan','123456']]},{range:[1,1,1,1],grid:[['admin']]},{range:[0,0,2,2],grid:[['角色','测试账号','测试密码'],['系统管理员','admin','123456'],['普通用户','zhangsan','123456']]},{range:[1,2,0,0],grid:[['角色','测试账号','测试密码'],['系统管理员','admin','123456']]}];
+    for(const item of cases){
+      const value=await page.evaluate(async item=>{
+        const f=window.f;f.cells(...item.range);const copy=f.native();await f.live().clipboard('copy');const menu=f.copied();
+        const dom=new DOMParser().parseFromString(copy.html,'text/html');
+        const grid=[...dom.querySelectorAll('tr')].map(row=>[...row.querySelectorAll('th,td')].map(cell=>cell.textContent));
+        const headers=dom.querySelectorAll('th').length;await f.live().clipboard('markdown');
+        return {copy,menu,grid,headers,markdown:f.copied(),source:f.source()};
+      },item);
+      assert.deepEqual(value.grid,item.grid,JSON.stringify(item.range));assert.equal(value.menu.text,value.copy.text);assert.equal(value.markdown.text,value.copy.text);
+      assert.match(value.copy.text,/\|.*\|\n\|.*---/);assert.equal(value.headers,Math.min(...[item.range[0],item.range[2]])===0?item.grid[0].length:0);
+      assert.equal(value.source,tableSource);
+    }
+  })
+  await test('selected rows paste back as a table through native HTML and menu Markdown', async () => {
+    for(const [top,expected] of [[0,[['角色','测试账号','测试密码'],['系统管理员','admin','123456']]],[1,[['','',''],['系统管理员','admin','123456']]]]){
+      await reset(tableSource);
+      const copied=await page.evaluate(async top=>{const f=window.f;f.cells(top,0,1,2);await f.live().clipboard('copy');return f.copied();},top);
+      await reset('Paste target');
+      const value=await page.evaluate(async copied=>{
+        const f=window.f;f.all();f.setClipboard(copied.text);await f.live().clipboard('paste');
+        const rows=[...f.view().dom.querySelectorAll('tr')].map(row=>[...row.querySelectorAll('th,td')].map(cell=>cell.textContent));
+        return {rows,source:f.source()};
+      },copied);
+      assert.deepEqual(value.rows,expected);assert.doesNotMatch(value.source,/zhangsan/);
+      await reset('Native paste target');
+      const nativeRows=await page.evaluate(copied=>{
+        const f=window.f;f.all();const data=new DataTransfer();data.setData('text/plain',copied.text);data.setData('text/html',copied.html);
+        f.view().dom.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}));
+        return [...f.view().dom.querySelectorAll('tr')].map(row=>[...row.querySelectorAll('th,td')].map(cell=>cell.textContent));
+      },copied);
+      assert.deepEqual(nativeRows,top===0?expected:expected.slice(1));
+    }
+  })
+  await reset(tableSource)
+  await test('cutting a table row copies its structure, clears selected cells only and undoes exactly', async()=>{
+    const value=await page.evaluate(async()=>{const f=window.f;f.cells(1,0,1,2);await f.live().clipboard('cut');const copy=f.copied(),after=f.source();f.manager.command('undo');return {copy,after,undo:f.source()};});
+    assert.match(value.copy.text,/\| 系统管理员 \| admin \| 123456 \|/);assert.doesNotMatch(value.after,/admin/);assert.match(value.after,/zhangsan/);assert.equal(value.undo,tableSource);
   })
   const source = '# 项目标题\n\n**加粗** 与 *斜体*、[链接](https://example.com)\n\n- 列表一\n- 列表二\n\n| A | B |\n| --- | --- |\n| 内容 | 😀 |\n\n```js\nconst n = 1\n```\n'
   await reset(source)
@@ -129,17 +254,18 @@ try {
     })
     assert.equal(value.text, '**加粗**')
   })
-  await test('plain-text preference and explicit Markdown/HTML/simplified copy', async () => {
+  await test('automatic multi-line copy and explicit Markdown/HTML/simplified copy', async () => {
     const value = await page.evaluate(async () => {
       const f=window.f;f.all();f.manager.setMarkdownClipboard({copyMarkdown:false,copyWholeLine:false});
       const plain=f.native();await f.live().clipboard('markdown');const markdown=f.copied();
       await f.live().clipboard('html');const html=f.copied();await f.live().clipboard('simplified');return {plain,markdown,html,simple:f.copied()};
     })
-    assert.doesNotMatch(value.plain.text, /\*\*|^# /)
+    assert.equal(value.plain.text, source)
     assert.equal(value.markdown.text, source)
     assert.match(value.html.text, /<h1>/)
     assert.equal(value.html.html, '')
-    assert.equal(value.simple.text, value.plain.text)
+    assert.doesNotMatch(value.simple.text, /\*\*|^# /)
+    assert.match(value.simple.text, /项目标题/)
     assert.match(value.simple.html, /<strong>/)
   })
   await reset('first\nsecond\nthird')
@@ -254,21 +380,36 @@ try {
     const app = await browser.newPage()
     app.on('pageerror',e=>errors.push(e.message))
     await app.goto(`http://localhost:${port}/`)
+
+    // 1. settingsVersion: 5 with explicitly saved copyMarkdown: true -> preserved as checked
     await app.evaluate(()=>localStorage.setItem('markumo.settings.v1',JSON.stringify({settingsVersion:5,markdownClipboard:{copyMarkdown:true,copyWholeLine:false}})))
     await app.reload()
     await app.getByTitle('设置',{exact:true}).click()
     await app.locator('#settings-md-copy').waitFor({state:'attached'})
     await app.locator('#settings-md-copy').scrollIntoViewIfNeeded()
-    assert.equal(await app.locator('#settings-md-copy').isChecked(),false)
+    assert.equal(await app.locator('#settings-md-copy').isChecked(),true)
     assert.equal(await app.locator('#settings-md-copy-line').isChecked(),false)
+
+    // 2. settingsVersion: 5 with omitted copyMarkdown -> defaults to unchecked
+    await app.evaluate(()=>localStorage.setItem('markumo.settings.v1',JSON.stringify({settingsVersion:5,markdownClipboard:{copyWholeLine:true}})))
+    await app.reload()
+    await app.getByTitle('设置',{exact:true}).click()
+    await app.locator('#settings-md-copy').waitFor({state:'attached'})
+    await app.locator('#settings-md-copy').scrollIntoViewIfNeeded()
+    assert.equal(await app.locator('#settings-md-copy').isChecked(),false)
+    assert.equal(await app.locator('#settings-md-copy-line').isChecked(),true)
+
+    // 3. User checks copyMarkdown -> persists to settingsVersion 6 with copyMarkdown: true
     await app.locator('#settings-md-copy').check()
     await app.waitForFunction(()=>{const saved=JSON.parse(localStorage.getItem('markumo.settings.v1')||'{}');return saved.settingsVersion===6&&saved.markdownClipboard?.copyMarkdown===true})
     await app.reload();await app.getByTitle('设置',{exact:true}).click()
     await app.locator('#settings-md-copy').scrollIntoViewIfNeeded()
     assert.equal(await app.locator('#settings-md-copy').isChecked(),true)
+
+    // 4. User unchecks copyMarkdown and checks copyWholeLine -> persists to settingsVersion 6 with copyMarkdown: false, copyWholeLine: true
     await app.locator('#settings-md-copy').uncheck()
     await app.locator('#settings-md-copy-line').check()
-    await app.waitForFunction(()=>JSON.parse(localStorage.getItem('markumo.settings.v1')||'{}').markdownClipboard?.copyWholeLine===true)
+    await app.waitForFunction(()=>JSON.parse(localStorage.getItem('markumo.settings.v1')||'{}').markdownClipboard?.copyWholeLine===true&&JSON.parse(localStorage.getItem('markumo.settings.v1')||'{}').markdownClipboard?.copyMarkdown===false)
     await app.screenshot({path:`${output}/settings.png`})
     await app.reload();await app.getByTitle('设置',{exact:true}).click()
     await app.locator('#settings-md-copy').scrollIntoViewIfNeeded()

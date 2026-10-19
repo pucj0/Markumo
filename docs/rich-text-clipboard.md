@@ -2,10 +2,16 @@
 
 在「设置 → Markdown → 默认复制行为」调整：
 
-- **普通复制时将纯文本内容替换为 Markdown 源码**：默认关闭。普通复制同时写入 `text/plain` 和语义化 `text/html`；文本目标得到选中的可见文字，支持 HTML 的目标得到富文本。选中单元格中的 `admin` 只复制 `admin`，选中网址不会加上 Markdown 的尖括号。需要源码时可使用“复制为 Markdown”（Ctrl+Shift+C），也可主动开启此选项。
+- **始终复制 Markdown 源码（包括单行文字）**：默认关闭，使用智能复制。普通复制同时写入 `text/plain` 和语义化 `text/html`。单逻辑行的文本目标得到可见文字，跨逻辑行时得到 Markdown；支持 HTML 的目标始终能取得富文本。单独选中标题不带 `#`，选中单元格中的 `admin` 只复制 `admin`，选中网址不会加尖括号；跨段落复制则保留标题、列表、链接等 Markdown 结构。开启此选项后单行也输出 Markdown。临时复制源码可用“复制为 Markdown”（Ctrl+Shift+C）。
 - **无文字选中时，复制或剪切光标所在的一整行**：默认关闭。开启后按逻辑行操作，不按屏幕自动换行切分。
 
-两项设置通过现有首选项文件保存。首选项版本 6 将旧版默认开启的源码复制迁移为关闭，保留整行复制设置；之后主动开启的源码复制会正常持久化。多个富文本窗格共享设置，各自保留选区。
+复制按选区区分：单元格内的单行文字选区只输出选中的文字；框选单元格、整行、整列或独立表格时输出表格。表格的 `text/plain` 为可粘回 Markdown 编辑器的表格源码，`text/html` 为只包含所选行列的语义化表格。只选数据行时，HTML 保留数据单元格，Markdown 回退补一个空表头，不把首行数据冒充表头。显式“复制内容并简化格式”仍可取得无表格标记的文字。
+
+行数按选区内容中的真实换行判断，包括段落边界、软换行和硬换行，不按窗口宽度产生的视觉折行判断，也不按 Markdown 序列化器补出的空行、标题标记或代码围栏判断。单行末尾的一个换行符不切换为 Markdown。因此整份文档只有一个标题时，普通复制也是标题文字；同时选中标题和正文则输出 Markdown。
+
+多格式剪贴板参考 [Typora 官方复制说明](https://support.typora.io/Copy-and-Paste/)：同时提供文本和 HTML，由目标应用选择。单行与跨行的自动规则按用户观察到的使用习惯实现，官方说明未明确列出这条判定细节。
+
+两项设置通过现有首选项文件保存。新用户及未显式配置该项的旧配置默认使用智能复制（copyMarkdown = false）；若旧版已明确保存过 copyMarkdown 配置（无论 true 还是 false），首选项版本 6 均完整保留用户已保存的配置，不进行强制覆盖。保留整行复制设置；之后主动开启或关闭的源码复制均正常持久化。多个富文本窗格共享设置，各自保留选区。
 
 ## 右键菜单
 
@@ -32,13 +38,13 @@ Markdown 富文本正文提供 Google 搜索、剪切/复制/粘贴/删除图标
 
 ## 实现与验证
 
-- `LiveClipboard.ts` 统一系统复制事件和应用菜单命令；普通复制提供可见文字和 HTML，显式复制完整文档源码保留原始 Markdown。单个文本块的局部选区只序列化选中的内容与行内格式，不附加外层表格、列表或引用容器。
+- `LiveClipboard.ts` 统一系统复制事件和应用菜单命令；根据选区逻辑行数、表格结构及显式偏好选择文本格式。HTML 始终独立提供，整份多行文档保留原始 Markdown。单个文本块的局部选区只序列化选中的内容与行内格式，不附加外层表格、列表或引用容器。部分 `CellSelection` 返回的裸表格行先补齐 table 容器再序列化，避免 `table_row not supported`。
 - `LiveContextMenu.ts` / `.css` 负责菜单布局、键盘操作和清理，沿用应用主题变量。
 - `MarkdownEditorController.ts` 复用现有格式命令、文档桥接和撤销历史。`DocumentManager` 分发各窗格的首选项。
 - 前后端首选项模型增加 `markdownClipboard`；Tauri 仅增加 `clipboard-manager:allow-write-html` 权限。
 - 无新依赖，PDF.js 和富文本控制器仍动态加载。
 
-执行 `node scripts/rich-clipboard-regression.mjs` 运行 17 项无界面浏览器验证（按现有测试约定可设置 `MARKUMO_PLAYWRIGHT_MODULE`、`MARKUMO_CHROME` 和 `MARKUMO_TEST_PORT`）。覆盖单元格文字、网址与命名链接、完整表格、剪切撤销、历史设置迁移及新选项持久化。测试使用隔离剪贴板，不读取或修改用户的系统剪贴板。截图和结果写入忽略目录 `test-results/rich-clipboard/`。
+执行 `node scripts/rich-clipboard-regression.mjs` 运行 25 项无界面浏览器验证（按现有测试约定可设置 `MARKUMO_PLAYWRIGHT_MODULE`、`MARKUMO_CHROME` 和 `MARKUMO_TEST_PORT`）。覆盖单行标题、视觉折行、跨段落与真实换行、单行末尾换行、单元格文字、网址与命名链接、鼠标框选表头与数据行、部分列与矩形区域、完整表格、表格复制粘贴往返与剪切撤销、历史设置迁移及新选项持久化。测试使用隔离剪贴板，不读取或修改用户的系统剪贴板。截图和结果写入忽略目录 `test-results/rich-clipboard/`。
 
 另已执行 `pnpm typecheck`、`pnpm build`、Cargo check/test（9 项通过），以及空 Markdown、发布控制器和 20 轮媒体切换回归。真实 Windows/macOS/Linux 应用之间的系统剪贴板互通仍需桌面人工验收。
 

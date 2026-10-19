@@ -1,6 +1,7 @@
 import { AllSelection, TextSelection, type EditorState, type Selection } from 'prosemirror-state'
-import { Slice } from 'prosemirror-model'
+import { DOMSerializer, Fragment, Slice, type Node } from 'prosemirror-model'
 import type { EditorView } from 'prosemirror-view'
+import { CellSelection } from 'prosemirror-tables'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { markdownSerializer } from './MarkdownSerializer'
@@ -45,14 +46,39 @@ export class LiveClipboard {
     // its slice. Serialize the selected textblock alone, retaining inline marks
     // without inventing a table header and separators around a copied word.
     const inline = selection instanceof TextSelection && selection.$from.sameParent(selection.$to) && selection.$from.parent.isTextblock
-    const selected = inline ? selection.$from.parent.cut(selection.$from.parentOffset, selection.$to.parentOffset) : slice.content
-    const markdown = full ? this.bridge().source : markdownSerializer.serialize(state.schema.nodes.doc.create(null, selected))
+    let selected = inline ? Fragment.from(selection.$from.parent.cut(selection.$from.parentOffset, selection.$to.parentOffset)) : slice.content
+    // Partial rectangular selections contain rows, while a whole-table selection
+    // already contains a table. Close the former before invoking the serializer.
+    if (selection instanceof CellSelection && selected.firstChild?.type.spec.tableRole === 'row') {
+      selected = Fragment.from(state.schema.nodes.table.create(null, selected))
+    }
+    const table = selected.childCount === 1 && selected.firstChild?.type.spec.tableRole === 'table' ? selected.firstChild : null
+    let markdownContent = selected
+    if (table && table.firstChild?.firstChild?.type.spec.tableRole !== 'header_cell') {
+      // GFM requires a header. A data-only selection gets an empty header in the
+      // Markdown fallback; the HTML copy keeps the original td/th semantics.
+      const headers: Node[] = []
+      table.firstChild?.forEach(cell => headers.push(state.schema.nodes.table_header.create(cell.attrs, state.schema.nodes.paragraph.create())))
+      const header = state.schema.nodes.table_row.create(null, headers)
+      markdownContent = Fragment.from(table.copy(Fragment.from(header).append(table.content)))
+    }
+    const markdown = full ? this.bridge().source : markdownSerializer.serialize(state.schema.nodes.doc.create(null, markdownContent))
     const plain = slice.content.textBetween(0, slice.content.size, '\n', node => {
       if (node.type.name === 'image') return node.attrs.alt || ''
       return node.attrs.latex || node.attrs.source || (/^(soft_break|hard_break)$/.test(node.type.name) ? '\n' : '')
     })
-    const html = DOMPurify.sanitize(renderer.render(markdown), { USE_PROFILES: { html: true } })
-    return { selection, markdown, plain, html, text: this.settings().copyMarkdown ? markdown : plain }
+    let rich = renderer.render(markdown)
+    if (table) {
+      const container = document.createElement('div')
+      container.appendChild(DOMSerializer.fromSchema(state.schema).serializeFragment(selected))
+      rich = container.innerHTML
+    }
+    const html = DOMPurify.sanitize(rich, { USE_PROFILES: { html: true } })
+    // Count logical lines in the selected content, not serializer newlines or
+    // screen wrapping. A final line terminator still belongs to a single line.
+    const multipleLines = /[\r\n]/.test(plain.replace(/(?:\r\n|\r|\n)$/, ''))
+    const useMarkdown = table || multipleLines || this.settings().copyMarkdown
+    return { selection, markdown, plain, html, text: useMarkdown ? markdown : plain }
   }
 
   /** Native Ctrl+C/X and WebView edit commands use the same representations as

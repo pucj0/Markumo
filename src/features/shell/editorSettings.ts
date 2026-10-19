@@ -22,7 +22,7 @@ export const currentShortcutVersion = 4
 /** Bumped when a stored preference needs migration. Version 4 made automatic
  * save opt-in: files written by older versions always stored the old `true`
  * default, so that value cannot prove intent. Version 5 adds independent UI typography.
- * Version 6 makes visible text the default clipboard representation. */
+ * Version 6 makes visible text the default clipboard representation for new users and unconfigured settings. */
 export const currentSettingsVersion = 6
 export interface EditorSettings extends UpdatePreferences {
   syntaxStyle: SyntaxStyle
@@ -84,9 +84,6 @@ export function settingsFrom(raw: unknown): EditorSettings {
   if (s.markdownClipboard && typeof s.markdownClipboard === 'object') {
     for (const key of ['copyMarkdown', 'copyWholeLine'] as const) if (typeof s.markdownClipboard[key] === 'boolean') defaults.markdownClipboard[key] = s.markdownClipboard[key]
   }
-  // Older releases persisted copyMarkdown=true by default. Migrate that default
-  // once; a choice saved by the new settings UI remains authoritative.
-  if (!(Number.isInteger(s.settingsVersion) && s.settingsVersion! >= 6)) defaults.markdownClipboard.copyMarkdown = false
   if(s.markdownTypography&&typeof s.markdownTypography==='object'){
     const md=s.markdownTypography,target=defaults.markdownTypography
     if(Number.isFinite(md.width)&&md.width>=480&&md.width<=1400)target.width=md.width

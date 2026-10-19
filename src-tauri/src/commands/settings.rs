@@ -179,9 +179,6 @@ fn load(path: &std::path::Path) -> Result<EditorSettings, String> {
         "one-dark" | "github-dark" | "github-light" => "standard".into(),
         _ => settings.syntax_style,
     };
-    if settings.settings_version < 6 {
-        settings.markdown_clipboard.copy_markdown = false;
-    }
     validate(&settings)?;
     Ok(settings)
 }
@@ -367,6 +364,8 @@ mod branding_tests {
         assert!(serde_json::from_str::<EditorSettings>(r#"{"markdownClipboard":{"copyMarkdown":"false"}}"#).is_err());
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
+        // Legacy versions (1, 5) and current version (6) preserve explicitly saved copyMarkdown values (true or false).
+        // If copyMarkdown or markdownClipboard is omitted, it defaults to false.
         for version in [1, 5, 6] {
             let settings: EditorSettings = serde_json::from_value(serde_json::json!({
                 "settingsVersion": version,
@@ -374,8 +373,37 @@ mod branding_tests {
             })).unwrap();
             save(&path, &settings).unwrap();
             let loaded = load(&path).unwrap();
-            assert_eq!(loaded.markdown_clipboard.copy_markdown, version >= 6);
+            assert!(loaded.markdown_clipboard.copy_markdown);
             assert!(loaded.markdown_clipboard.copy_whole_line);
+        }
+        for version in [1, 5, 6] {
+            let settings: EditorSettings = serde_json::from_value(serde_json::json!({
+                "settingsVersion": version,
+                "markdownClipboard": {"copyMarkdown": false, "copyWholeLine": true}
+            })).unwrap();
+            save(&path, &settings).unwrap();
+            let loaded = load(&path).unwrap();
+            assert!(!loaded.markdown_clipboard.copy_markdown);
+            assert!(loaded.markdown_clipboard.copy_whole_line);
+        }
+        for version in [1, 5, 6] {
+            let settings: EditorSettings = serde_json::from_value(serde_json::json!({
+                "settingsVersion": version,
+                "markdownClipboard": {"copyWholeLine": true}
+            })).unwrap();
+            save(&path, &settings).unwrap();
+            let loaded = load(&path).unwrap();
+            assert!(!loaded.markdown_clipboard.copy_markdown);
+            assert!(loaded.markdown_clipboard.copy_whole_line);
+        }
+        for version in [1, 5, 6] {
+            let settings: EditorSettings = serde_json::from_value(serde_json::json!({
+                "settingsVersion": version
+            })).unwrap();
+            save(&path, &settings).unwrap();
+            let loaded = load(&path).unwrap();
+            assert!(!loaded.markdown_clipboard.copy_markdown);
+            assert!(!loaded.markdown_clipboard.copy_whole_line);
         }
     }
 
