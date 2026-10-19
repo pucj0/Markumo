@@ -122,4 +122,30 @@ mod tests {
         write_pending(&path,&marker).unwrap();assert!(consume_pending(&path,"new","1.0.3").unwrap().unwrap().confirmed);
         assert!(consume_pending(&path,"new","1.0.3").unwrap().is_none());assert!(!valid_version("../../file"));
     }
+    #[test] fn invalid_target_version_is_rejected_without_replacing_the_marker(){
+        let temporary=tempfile::tempdir().unwrap();let path=temporary.path().join("pending.json");
+        std::fs::write(&path,b"previous marker").unwrap();
+        let marker=PendingUpdate{from_version:"1.0.2".into(),target_version:"1.0".into(),process:"old".into()};
+        assert!(write_pending(&path,&marker).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(),b"previous marker");
+    }
+    #[test] fn oversized_or_corrupt_pending_marker_is_preserved_for_diagnosis(){
+        let temporary=tempfile::tempdir().unwrap();let path=temporary.path().join("pending.json");
+        std::fs::write(&path,vec![b'x';8193]).unwrap();
+        assert!(!restore_after_update(&path,"1.0.3"));
+        assert!(consume_pending(&path,"new","1.0.3").is_err());
+        assert!(path.exists(),"an unreadable marker must not be deleted");
+        std::fs::write(&path,b"not json").unwrap();
+        assert!(consume_pending(&path,"new","1.0.3").is_err());
+        assert!(path.exists());
+    }
+    #[test] fn installation_owner_release_is_scoped_to_the_owner(){
+        let mut coordinator=UpdateCoordinator::default();
+        coordinator.acquire("main",1,1).unwrap();
+        assert!(coordinator.require_owner("other").is_err());
+        coordinator.release("other");
+        assert!(coordinator.require_owner("main").is_ok());
+        coordinator.release("main");
+        assert!(coordinator.require_owner("main").is_err());
+    }
 }

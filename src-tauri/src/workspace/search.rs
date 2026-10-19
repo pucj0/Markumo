@@ -42,21 +42,30 @@ pub struct SearchManager {
     tokens: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 impl SearchManager {
+    /// The token map is a best-effort cancellation registry; recovering a
+    /// poisoned guard is safe and keeps cancellation available after a panic in
+    /// an unrelated search task. Mutable document stores still surface poisoning
+    /// to their callers instead of guessing at recovered state.
+    fn token_map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
+        self.tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
     pub fn create_token(&self, search_id: &str) -> Arc<AtomicBool> {
         let flag = Arc::new(AtomicBool::new(false));
-        let mut map = self.tokens.lock().unwrap();
+        let mut map = self.token_map();
         if let Some(old) = map.insert(search_id.to_string(), Arc::clone(&flag)) {
             old.store(true, Ordering::Relaxed);
         }
         flag
     }
     pub fn cancel(&self, search_id: &str) {
-        if let Some(flag) = self.tokens.lock().unwrap().remove(search_id) {
+        if let Some(flag) = self.token_map().remove(search_id) {
             flag.store(true, Ordering::Relaxed);
         }
     }
     pub fn cleanup(&self, search_id: &str, token: &Arc<AtomicBool>) {
-        let mut map = self.tokens.lock().unwrap();
+        let mut map = self.token_map();
         if map
             .get(search_id)
             .is_some_and(|stored| Arc::ptr_eq(stored, token))
@@ -376,5 +385,33 @@ impl WorkspaceSearcher {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    #[test]
+    fn poisoned_cancellation_registry_keeps_cancel_and_cleanup_available() {
+        let manager = SearchManager::default();
+        let poisoned = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = manager.tokens.lock().unwrap();
+            panic!("simulated panic while holding the token map");
+        }));
+        assert!(poisoned.is_err());
+        assert!(manager.tokens.is_poisoned());
+
+        // A panic in one search task must not disable cancellation for the rest
+        // of the process.
+        let first = manager.create_token("window:first");
+        manager.cancel("window:first");
+        assert!(first.load(Ordering::Relaxed));
+
+        let second = manager.create_token("window:second");
+        manager.cleanup("window:second", &second);
+        assert!(!second.load(Ordering::Relaxed));
+        assert!(manager.token_map().is_empty());
     }
 }

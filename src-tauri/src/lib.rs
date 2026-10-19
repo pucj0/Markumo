@@ -76,10 +76,13 @@ fn route_launch(app:tauri::AppHandle,paths:Vec<PathBuf>){
         }
         // Ownership snapshot first, then one atomic registry decision. The two
         // locks are never held at the same time, so no ordering deadlock exists.
+        // Native identities are resolved before taking the file-service lock so
+        // a locked or slow file cannot stall every window.
+        let identities: Vec<_> = requested.iter().map(|path| files::file_identity(path)).collect();
         let owners:Vec<Option<String>>={
             let store=app.state::<FileStore>();
             let files=match store.lock(){Ok(files)=>files,Err(_)=>return};
-            requested.iter().map(|path|files.owner_of_path(path)).collect()
+            requested.iter().zip(identities).map(|(path,identity)|files.owner_of_path(path,identity)).collect()
         };
         let plan={
             let state=app.state::<session::LaunchStore>();

@@ -1,9 +1,45 @@
 use std::{path::{Path, PathBuf}, sync::{Arc, Mutex}};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::{AppHandle, State, Window};
 use tauri_plugin_dialog::DialogExt;
 use crate::files::{FileError, FileMetadata, FileService, Layout, OpenBatch, OpenFile, Preferences, Result, SaveTarget};
 
 pub type FileStore = Arc<Mutex<FileService>>;
+
+/// Global cap for concurrent media chunk reads. Four 256 KiB reads keep the
+/// native peak bounded while allowing one image plus several PDF range requests.
+const MAX_MEDIA_READS: usize = 4;
+static ACTIVE_MEDIA_READS: AtomicUsize = AtomicUsize::new(0);
+
+/// RAII reservation for one media read. The permit is dropped on success, on
+/// every error path, and while unwinding a failed blocking task.
+struct MediaReadPermit;
+
+impl MediaReadPermit {
+    fn acquire() -> Option<Self> {
+        let mut active = ACTIVE_MEDIA_READS.load(Ordering::Acquire);
+        loop {
+            if active >= MAX_MEDIA_READS {
+                return None;
+            }
+            match ACTIVE_MEDIA_READS.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(Self),
+                Err(actual) => active = actual,
+            }
+        }
+    }
+}
+
+impl Drop for MediaReadPermit {
+    fn drop(&mut self) {
+        ACTIVE_MEDIA_READS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 #[tauri::command]
 pub async fn media_metadata(window: Window, store: State<'_, FileStore>, token: String) -> Result<(crate::files::media::MediaMetadata, String)> {
@@ -11,19 +47,7 @@ pub async fn media_metadata(window: Window, store: State<'_, FileStore>, token: 
 }
 #[tauri::command]
 pub async fn read_media_chunk(window: Window, store: State<'_, FileStore>, token: String, expected_version: String, offset: u64, length: usize) -> Result<tauri::ipc::Response> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static ACTIVE: AtomicUsize = AtomicUsize::new(0);
-    struct ReadPermit;
-    impl Drop for ReadPermit { fn drop(&mut self) { ACTIVE.fetch_sub(1, Ordering::AcqRel); } }
-    let mut active = ACTIVE.load(Ordering::Acquire);
-    loop {
-        if active >= 4 { return Err(FileError::new("busy", "媒体读取繁忙，请稍后重新加载。")); }
-        match ACTIVE.compare_exchange_weak(active, active+1, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => break,
-            Err(actual) => active=actual,
-        }
-    }
-    let _permit = ReadPermit;
+    let _permit = MediaReadPermit::acquire().ok_or_else(|| FileError::new("busy", "媒体读取繁忙，请稍后重新加载。"))?;
     operate(store.inner().clone(), window.label().into(), move |s| s.read_media_chunk(&token, &expected_version, offset, length).map(tauri::ipc::Response::new)).await
 }
 #[tauri::command]
@@ -278,4 +302,45 @@ pub async fn persist_layout(window: Window, launches: State<'_, crate::session::
     let owner=window.label().to_owned();
     if launches.lock().map_err(|_|FileError::new("state","启动状态不可用"))?.owner().as_deref()!=Some(&owner){return Ok(())}
     operate(store.inner().clone(), owner, move |service| service.set_layout(layout)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_read_permits_are_released_on_success_error_and_panic() {
+        let permits: Vec<_> = (0..MAX_MEDIA_READS)
+            .map(|_| MediaReadPermit::acquire().expect("permit within the limit"))
+            .collect();
+        assert!(MediaReadPermit::acquire().is_none());
+        assert_eq!(ACTIVE_MEDIA_READS.load(Ordering::Acquire), MAX_MEDIA_READS);
+        drop(permits);
+        assert_eq!(ACTIVE_MEDIA_READS.load(Ordering::Acquire), 0);
+
+        // A completed request returns its permit.
+        let permit = MediaReadPermit::acquire().unwrap();
+        drop(permit);
+        assert_eq!(ACTIVE_MEDIA_READS.load(Ordering::Acquire), 0);
+
+        // An error path is represented by dropping the permit without a read.
+        let permit = MediaReadPermit::acquire().unwrap();
+        let _ = Err::<(), _>("simulated read error");
+        drop(permit);
+        assert_eq!(ACTIVE_MEDIA_READS.load(Ordering::Acquire), 0);
+
+        // A panicking blocking task must unwind the permit too.
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _permit = MediaReadPermit::acquire().unwrap();
+            panic!("simulated blocking task failure");
+        }));
+        assert!(failed.is_err());
+        assert_eq!(ACTIVE_MEDIA_READS.load(Ordering::Acquire), 0);
+
+        let permits: Vec<_> = (0..MAX_MEDIA_READS)
+            .map(|_| MediaReadPermit::acquire().expect("capacity restored after every path"))
+            .collect();
+        drop(permits);
+        assert_eq!(ACTIVE_MEDIA_READS.load(Ordering::Acquire), 0);
+    }
 }

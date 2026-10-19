@@ -375,12 +375,31 @@ impl SessionService {
             .read_to_end(&mut bytes)
             .map_err(|e| e.to_string())?;
         if bytes.len() > 512 * 1024 {
-            return Err("会话文件过大，已跳过恢复".into());
+            return Err(self.preserve_unreadable(path, "会话文件过大，已跳过恢复"));
         }
-        let session: LastSession =
-            serde_json::from_slice(&bytes).map_err(|e| format!("上次会话损坏，已跳过恢复：{e}"))?;
-        session.validate()?;
+        let session: LastSession = match serde_json::from_slice(&bytes) {
+            Ok(session) => session,
+            Err(error) => {
+                return Err(self.preserve_unreadable(path, &format!("上次会话损坏，已跳过恢复：{error}")))
+            }
+        };
+        if let Err(error) = session.validate() {
+            return Err(self.preserve_unreadable(path, &format!("上次会话无效，已跳过恢复：{error}")));
+        }
         Ok(Some(session))
+    }
+    /// Keep an unreadable session beside the live file. Recovery then writes a
+    /// clean session without destroying the only copy of the user's history.
+    fn preserve_unreadable(&self, path: &Path, reason: &str) -> String {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|time| time.as_nanos())
+            .unwrap_or(0);
+        let backup = path.with_file_name(format!("last-session.corrupt-{stamp}.json"));
+        match std::fs::rename(path, &backup) {
+            Ok(()) => format!("{reason}；原会话已保留在 {}", backup.display()),
+            Err(error) => format!("{reason}；原会话备份失败（{error}），请勿继续编辑前先手动备份。"),
+        }
     }
     pub fn save(&self, session: &LastSession) -> Result<(), String> {
         session.validate()?;
@@ -488,6 +507,228 @@ pub fn capture(
     };
     session.validate()?;
     Ok(session)
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+
+    #[test]
+    fn an_already_open_file_activates_its_owner_instead_of_queuing_again() {
+        let mut registry = LaunchRegistry::default();
+        registry.insert("main".into(), Vec::new());
+        registry.insert("file-1".into(), vec![PathBuf::from("C:\\notes\\a.md")]);
+        let requested = vec![PathBuf::from("C:\\notes\\a.md")];
+        let plan = plan_external_open(
+            &mut registry,
+            &requested,
+            &[Some("file-1".into())],
+            &|_| true,
+        );
+        assert_eq!(plan.activate, vec![("file-1".into(), requested.clone())]);
+        assert_eq!(plan.deliveries, vec!["file-1"]);
+        assert!(plan.created.is_none());
+        assert!(registry.windows["file-1"].pending.is_empty());
+        assert_eq!(registry.owner().as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn a_destroyed_owner_does_not_receive_an_activation() {
+        let mut registry = LaunchRegistry::default();
+        registry.insert("main".into(), Vec::new());
+        let requested = vec![PathBuf::from("C:\\notes\\a.md")];
+        let plan = plan_external_open(
+            &mut registry,
+            &requested,
+            &[Some("file-gone".into())],
+            &|_| false,
+        );
+        // The request is treated as unowned and a single-file window is reserved.
+        assert!(plan.activate.is_empty());
+        assert!(plan.created.is_some());
+        assert!(registry.windows.contains_key(&plan.created.unwrap().0));
+    }
+
+    #[test]
+    fn a_queued_file_stays_with_its_window_and_is_not_duplicated() {
+        let mut registry = LaunchRegistry::default();
+        registry.insert("main".into(), Vec::new());
+        registry.insert("file-1".into(), vec![PathBuf::from("C:\\notes\\a.md")]);
+        let requested = vec![PathBuf::from("C:\\notes\\b.md")];
+        let first = plan_external_open(&mut registry, &requested, &[None], &|_| true);
+        assert_eq!(first.deliveries, vec!["file-1"]);
+        assert_eq!(registry.windows["file-1"].pending.len(), 1);
+        let second = plan_external_open(&mut registry, &requested, &[None], &|_| true);
+        assert_eq!(second.deliveries, vec!["file-1"]);
+        assert_eq!(registry.windows["file-1"].pending.len(), 1);
+    }
+
+    #[test]
+    fn the_window_cap_prevents_creating_another_route_window() {
+        let mut registry = LaunchRegistry::default();
+        for index in 0..MAX_WINDOWS {
+            registry.insert(format!("app-{index}"), Vec::new());
+        }
+        let plan = plan_external_open(
+            &mut registry,
+            &[PathBuf::from("C:\\notes\\a.md")],
+            &[None],
+            &|_| true,
+        );
+        assert!(plan.created.is_none());
+        assert_eq!(registry.windows.len(), MAX_WINDOWS);
+    }
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    fn long_absolute_path(index: usize) -> String {
+        let prefix = if cfg!(windows) {
+            format!("C:\\{index}-")
+        } else {
+            format!("/{index}-")
+        };
+        let padding = 16_384usize.saturating_sub(prefix.len());
+        format!("{prefix}{}", "a".repeat(padding))
+    }
+
+    #[test]
+    fn capture_rejects_a_token_owned_by_another_window() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("note.md");
+        std::fs::write(&path, "# note").unwrap();
+        let mut files = FileService::default();
+        files.set_owner("window-a");
+        let opened = files.open_selected(path.clone(), None).unwrap();
+        let input = SessionInput {
+            kind: "single".into(),
+            tabs: vec![SessionTabInput { token: opened.metadata.token.clone(), encoding: "UTF-8".into() }],
+            active_token: Some(opened.metadata.token.clone()),
+            layout: Layout::default(),
+            editor_layout: None,
+        };
+
+        files.set_owner("window-b");
+        assert!(capture(input, &files, Vec::new()).is_err());
+
+        files.set_owner("window-a");
+        let input = SessionInput {
+            kind: "single".into(),
+            tabs: vec![SessionTabInput { token: opened.metadata.token, encoding: "UTF-8".into() }],
+            active_token: None,
+            layout: Layout::default(),
+            editor_layout: None,
+        };
+        let session = capture(input, &files, Vec::new()).unwrap();
+        assert_eq!(session.tabs.len(), 1);
+        assert_eq!(Path::new(&session.tabs[0].path), path.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn an_oversized_session_is_rejected_before_the_previous_file_is_touched() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("last-session.json");
+        let mut store = SessionService::default();
+        store.configure(path.clone());
+        let normal = long_absolute_path(0);
+        let previous = LastSession {
+            schema_version: 1,
+            kind: "single".into(),
+            roots: Vec::new(),
+            tabs: vec![SessionTab { path: normal.clone(), encoding: "UTF-8".into() }],
+            active_path: Some(normal.clone()),
+            layout: Layout::default(),
+            editor_layout: None,
+        };
+        store.save(&previous).unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        let tabs: Vec<_> = (0..100)
+            .map(|index| SessionTab { path: long_absolute_path(index), encoding: "UTF-8".into() })
+            .collect();
+        let oversized = LastSession {
+            schema_version: 1,
+            kind: "single".into(),
+            roots: Vec::new(),
+            tabs,
+            active_path: Some(normal),
+            layout: Layout::default(),
+            editor_layout: None,
+        };
+        let error = store.save(&oversized).unwrap_err();
+        assert!(error.contains("会话过大"));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(store.load().unwrap().unwrap().tabs.len(), 1);
+    }
+
+    #[test]
+    fn corrupt_session_is_preserved_before_a_clean_session_replaces_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("last-session.json");
+        std::fs::write(&path, b"{ not valid json").unwrap();
+        let mut store = SessionService::default();
+        store.configure(path.clone());
+
+        let error = store.load().err().unwrap();
+        assert!(error.contains("保留在"), "{error}");
+        assert!(!path.exists());
+        let backups: Vec<_> = std::fs::read_dir(directory.path())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("last-session.corrupt-"))
+            })
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read(&backups[0]).unwrap(), b"{ not valid json");
+
+        let clean = LastSession {
+            schema_version: 1,
+            kind: "single".into(),
+            roots: Vec::new(),
+            tabs: Vec::new(),
+            active_path: None,
+            layout: Layout::default(),
+            editor_layout: None,
+        };
+        store.save(&clean).unwrap();
+        assert!(path.exists());
+        assert!(backups[0].exists());
+    }
+
+    #[test]
+    fn load_rejects_oversized_invalid_and_traversing_sessions() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("last-session.json");
+        let mut store = SessionService::default();
+        store.configure(path.clone());
+
+        std::fs::write(&path, vec![b' '; 512 * 1024 + 1]).unwrap();
+        assert!(store.load().err().unwrap().contains("过大"));
+
+        let traversal = serde_json::json!({
+            "schemaVersion": 1, "kind": "single", "roots": [], "tabs": [{
+                "path": "C:\\notes\\..\\secret.txt", "encoding": "UTF-8"
+            }], "activePath": null,
+            "layout": {"mode": "single", "sidebarVisible": false, "sidebarWidth": 254}
+        });
+        std::fs::write(&path, serde_json::to_vec(&traversal).unwrap()).unwrap();
+        assert!(store.load().is_err());
+
+        let unknown_encoding = serde_json::json!({
+            "schemaVersion": 1, "kind": "single", "roots": [], "tabs": [{
+                "path": "C:\\notes\\a.txt", "encoding": "NOT-AN-ENCODING"
+            }], "activePath": null,
+            "layout": {"mode": "single", "sidebarVisible": false, "sidebarWidth": 254}
+        });
+        std::fs::write(&path, serde_json::to_vec(&unknown_encoding).unwrap()).unwrap();
+        assert!(store.load().is_err());
+    }
 }
 
 #[cfg(test)]

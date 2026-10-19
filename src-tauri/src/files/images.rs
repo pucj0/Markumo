@@ -97,6 +97,71 @@ mod dropped_directory_tests {
         assert!(files.take_dropped_directory(&input.token).is_err());
         assert!(files.take_dropped_directory(&input.token).is_err());
     }
+
+    #[test]
+    fn hardlinked_images_are_rejected_consistently_with_other_files() {
+        let temporary = tempfile::tempdir().unwrap();
+        let original = temporary.path().join("original.png");
+        std::fs::write(&original, b"\x89PNG\r\n\x1a\ntest").unwrap();
+        let hardlink = temporary.path().join("hardlink.png");
+        if std::fs::hard_link(&original, &hardlink).is_err() {
+            return;
+        }
+        let error = read_raster(&hardlink).unwrap_err();
+        assert_eq!(error.code, "image_scope");
+        // Both directory entries now share one file identity.
+        assert!(read_raster(&original).is_err());
+
+        let single = temporary.path().join("single.png");
+        std::fs::write(&single, b"\x89PNG\r\n\x1a\ntest").unwrap();
+        assert!(read_raster(&single).is_ok());
+    }
+
+    #[test]
+    fn markdown_image_reads_are_window_scoped_and_require_explicit_scope() {
+        let temporary = tempfile::tempdir().unwrap();
+        let notes = temporary.path().join("notes");
+        let assets = notes.join("assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        let document = notes.join("doc.md");
+        std::fs::write(&document, "# note\n").unwrap();
+        let inside = assets.join("inside.png");
+        std::fs::write(&inside, b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00").unwrap();
+        let outside_dir = temporary.path().join("outside");
+        std::fs::create_dir(&outside_dir).unwrap();
+        let outside = outside_dir.join("outside.png");
+        std::fs::write(&outside, std::fs::read(&inside).unwrap()).unwrap();
+
+        let mut files = FileService::default();
+        files.set_owner("window-a");
+        let token = files.open_selected(document, None).unwrap().metadata.token;
+        assert!(files.markdown_image(&token, "assets/inside.png", &[]).is_ok());
+
+        files.set_owner("window-b");
+        assert!(files.markdown_image(&token, "assets/inside.png", &[]).is_err());
+        files.set_owner("window-a");
+        let absolute = outside.to_string_lossy().into_owned();
+        assert!(files.markdown_image(&token, &absolute, &[]).is_err());
+        assert!(files.authorize_image_read(&token, &absolute, &outside).is_ok());
+        assert!(files.markdown_image(&token, &absolute, &[]).is_ok());
+
+        files.release(&token);
+        assert!(files.image_reads.is_empty());
+        assert!(files.markdown_image(&token, "assets/inside.png", &[]).is_err());
+    }
+
+    #[test]
+    fn oversized_clipboard_image_payload_is_rejected_while_deserializing() {
+        use serde::de::value::{Error as ValueError, SeqDeserializer};
+        use serde::Deserialize;
+        let oversized = SeqDeserializer::<_, ValueError>::new(
+            std::iter::repeat_n(0u8, MAX_IMAGE_BYTES + 1),
+        );
+        assert!(ImageBytes::deserialize(oversized).is_err());
+
+        let valid = SeqDeserializer::<_, ValueError>::new(vec![1u8, 2, 3].into_iter());
+        assert_eq!(ImageBytes::deserialize(valid).unwrap().0, vec![1, 2, 3]);
+    }
 }
 
 #[derive(Deserialize)]
@@ -104,10 +169,44 @@ mod dropped_directory_tests {
 pub struct ImageImport {
     pub token: String,
     pub source_token: Option<String>,
-    pub bytes: Option<Vec<u8>>,
+    pub bytes: Option<ImageBytes>,
     pub name: String,
     // None means retain original. Clipboard pixels always need a destination.
     pub directory: Option<String>,
+}
+
+/// Clipboard pixels arrive as a JSON number array. Apply the image budget while
+/// the array is being read so an oversized or malicious IPC payload cannot
+/// allocate more than the viewer's 4 MiB encoded-image budget first.
+pub struct ImageBytes(Vec<u8>);
+
+impl<'de> Deserialize<'de> for ImageBytes {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ImageBytesVisitor;
+        impl<'de> serde::de::Visitor<'de> for ImageBytesVisitor {
+            type Value = ImageBytes;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "图片字节数组（最多 4 MiB）")
+            }
+            fn visit_seq<A>(self, mut sequence: A) -> std::result::Result<ImageBytes, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut bytes = Vec::with_capacity(sequence.size_hint().unwrap_or(0).min(MAX_IMAGE_BYTES));
+                while let Some(byte) = sequence.next_element::<u8>()? {
+                    if bytes.len() >= MAX_IMAGE_BYTES {
+                        return Err(serde::de::Error::custom("图片超过 4 MiB 上限"));
+                    }
+                    bytes.push(byte);
+                }
+                Ok(ImageBytes(bytes))
+            }
+        }
+        deserializer.deserialize_seq(ImageBytesVisitor)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -209,8 +308,26 @@ fn read_raster(path: &Path) -> Result<Vec<u8>> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
         if metadata.file_attributes() & 0x400 != 0 {
             return fail("image_scope", "图片不能是符号链接或重解析点。");
+        }
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
+            return Err(FileError::io(std::io::Error::last_os_error()));
+        }
+        if info.nNumberOfLinks > 1 {
+            return fail("image_scope", "暂不支持硬链接图片，请复制为独立文件后使用。");
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() > 1 {
+            return fail("image_scope", "暂不支持硬链接图片，请复制为独立文件后使用。");
         }
     }
     if !metadata.is_file() || metadata.len() > MAX_IMAGE_BYTES as u64 {
@@ -501,7 +618,7 @@ impl FileService {
                 path.file_name().unwrap().to_string_lossy().into_owned(),
             )
         } else {
-            (input.bytes.unwrap(), None, input.name)
+            (input.bytes.unwrap().0, None, input.name)
         };
         let kind = image_type(&bytes)?;
         crate::workspace::guard::validate_name(&name)

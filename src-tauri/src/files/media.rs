@@ -171,14 +171,44 @@ fn signature(bytes: &[u8]) -> Option<(FileKind, &'static str, &'static str)> {
     None
 }
 
-fn version(meta: &fs::Metadata) -> String {
+fn version(file: &fs::File, meta: &fs::Metadata) -> Result<String> {
     let modified = meta
         .modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|t| t.as_nanos())
         .unwrap_or(0);
-    format!("media-{}-{modified}", meta.len())
+    Ok(format!("media-{}-{modified}-{}", meta.len(), identity(file, meta)?))
+}
+
+/// Native identity of the opened handle. A different file at the same path must
+/// invalidate a viewer even when length and modification time were reproduced.
+#[allow(clippy::needless_return)]
+fn identity(file: &fs::File, meta: &fs::Metadata) -> Result<String> {
+    #[cfg(windows)]
+    {
+        let _ = meta;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
+            return Err(FileError::io(std::io::Error::last_os_error()));
+        }
+        let index = ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64;
+        return Ok(format!("{:x}:{index:x}", info.dwVolumeSerialNumber));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        return Ok(format!("{:x}:{:x}", meta.dev(), meta.ino()));
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = (file, meta);
+        Ok("identity-unavailable".into())
+    }
 }
 
 fn open(path: &Path) -> Result<fs::File> {
@@ -207,6 +237,7 @@ fn open(path: &Path) -> Result<fs::File> {
 pub(super) fn inspect(path: &Path) -> Result<Option<(FileKind, MediaMetadata, String)>> {
     let mut file = open(path)?;
     let meta = file.metadata().map_err(FileError::io)?;
+    let initial_version = version(&file, &meta)?;
     let mut header = Vec::new();
     (&mut file)
         .take(HEADER_BYTES)
@@ -236,7 +267,8 @@ pub(super) fn inspect(path: &Path) -> Result<Option<(FileKind, MediaMetadata, St
         } else {
             None
         };
-        if version(&file.metadata().map_err(FileError::io)?) != version(&meta) {
+        let final_meta = file.metadata().map_err(FileError::io)?;
+        if version(&file, &final_meta)? != initial_version {
             return fail("conflict", "读取媒体元数据期间文件发生变化，请重试。");
         }
         Ok(Some((
@@ -248,7 +280,7 @@ pub(super) fn inspect(path: &Path) -> Result<Option<(FileKind, MediaMetadata, St
                 width: dimensions.map(|d| d.0),
                 height: dimensions.map(|d| d.1),
             },
-            version(&meta),
+            initial_version,
         )))
     } else {
         let ext = path
@@ -295,14 +327,15 @@ impl FileService {
             return fail("range", "媒体读取范围越界。");
         }
         let mut file = open(&path)?;
-        if version(&file.metadata().map_err(FileError::io)?) != expected {
+        let opened_meta = file.metadata().map_err(FileError::io)?;
+        if version(&file, &opened_meta)? != expected {
             return fail("conflict", "文件读取期间发生修改，请重新加载。");
         }
         file.seek(SeekFrom::Start(offset)).map_err(FileError::io)?;
         let mut bytes = vec![0; length];
         file.read_exact(&mut bytes).map_err(FileError::io)?;
         if self.validate(token, false)? != path
-            || version(&file.metadata().map_err(FileError::io)?) != expected
+            || version(&file, &file.metadata().map_err(FileError::io)?)? != expected
         {
             return fail("conflict", "文件读取期间发生修改，请重新加载。");
         }
@@ -338,6 +371,9 @@ mod tests {
         assert_eq!(service.read_media_chunk(t, v, 0, 5).unwrap(), b"%PDF-");
         assert!(service.read_media_chunk(t, v, 0, CHUNK_BYTES + 1).is_err());
         assert!(service.read_media_chunk(t, v, 20 * 1024 * 1024, 1).is_err());
+        assert!(service.read_media_chunk(t, v, u64::MAX, 1).is_err());
+        assert!(service.read_media_chunk(t, v, u64::MAX - 1, 2).is_err());
+        assert!(service.read_media_chunk(t, v, 0, 0).is_err());
         service.set_owner("two");
         assert!(service.read_media_chunk(t, v, 0, 5).is_err());
         service.set_owner("one");
@@ -353,6 +389,56 @@ mod tests {
         service.release(t);
         assert!(service.media_metadata(t).is_err());
     }
+    #[test]
+    fn replacing_a_media_file_with_an_identical_size_and_mtime_is_detected() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("document.pdf");
+        fs::write(&path, b"%PDF-1.7\n").unwrap();
+        let mut service = FileService::default();
+        service.set_owner("window-a");
+        let opened = service.open_selected(path.clone(), None).unwrap();
+        assert_eq!(opened.kind, FileKind::Pdf);
+        let token = opened.metadata.token;
+        let version = opened.metadata.version;
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+
+        // A different file with the same length and a restored mtime would keep
+        // the old length+mtime version; native identity must still invalidate it.
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, b"%PDF-2.0\n").unwrap();
+        let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();
+        drop(file);
+        if fs::metadata(&path).unwrap().modified().unwrap() != modified {
+            // The platform rounded the timestamp; the identity assertion below
+            // is still valid, but this fixture cannot prove the no-mtime case.
+            return;
+        }
+        let error = service.read_media_chunk(&token, &version, 0, 5).unwrap_err();
+        assert_eq!(error.code, "conflict");
+    }
+
+    #[test]
+    fn read_only_media_cannot_escalate_to_writable_hex_but_text_can() {
+        let directory = tempfile::tempdir().unwrap();
+        let pdf = directory.path().join("document.pdf");
+        fs::write(&pdf, b"%PDF-1.7\n").unwrap();
+        let mut service = FileService::default();
+        service.set_owner("window-a");
+        let media = service.open_selected(pdf, None).unwrap();
+        let error = service.reopen(&media.metadata.token, "Hex").unwrap_err();
+        assert_eq!(error.code, "scope");
+        // Reopening the same preview as media remains allowed and read-only.
+        assert_eq!(service.reopen(&media.metadata.token, "Media").unwrap().kind, FileKind::Pdf);
+
+        let text = directory.path().join("notes.txt");
+        fs::write(&text, "plain text").unwrap();
+        let document = service.open_selected(text, None).unwrap();
+        let reopened = service.reopen(&document.metadata.token, "Hex").unwrap();
+        assert_eq!(reopened.kind, FileKind::Text);
+        assert_eq!(reopened.metadata.encoding, "Hex");
+    }
+
     #[test]
     fn validates_content_and_paths() {
         let dir = tempfile::tempdir().unwrap();

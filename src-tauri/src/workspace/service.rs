@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::Read,
     path::{Path, PathBuf},
     time::UNIX_EPOCH,
 };
@@ -9,6 +10,13 @@ use super::{
     guard::{relative_slash_path, validate_name, validate_under_root},
     ignore::IgnoreRuleSet,
 };
+
+/// Workspace history only stores ten recents and sixteen roots. A file beyond
+/// this bound is corrupt or foreign and must not be read into memory at startup.
+const MAX_PREFERENCES_BYTES: u64 = 256 * 1024;
+const MAX_RECENT_WORKSPACES: usize = 10;
+const MAX_ACTIVE_ROOTS: usize = 16;
+const MAX_STORED_PATH_BYTES: usize = 32 * 1024;
 
 pub(super) fn rename_without_overwrite(source: &Path, target: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
@@ -85,12 +93,34 @@ impl Default for WorkspaceService {
 impl WorkspaceService {
     pub fn disable_persistence(&mut self) { self.storage_path=None; }
     pub fn configure(&mut self, storage_path: PathBuf) {
-        if let Ok(content) = fs::read_to_string(&storage_path) {
-            if let Ok(prefs) = serde_json::from_str(&content) {
-                self.preferences = prefs;
-            }
+        self.storage_path = Some(storage_path.clone());
+        let Ok(metadata) = fs::metadata(&storage_path) else { return };
+        if !metadata.is_file() || metadata.len() > MAX_PREFERENCES_BYTES {
+            return;
         }
-        self.storage_path = Some(storage_path);
+        let Ok(file) = fs::File::open(&storage_path) else { return };
+        let mut bytes = Vec::new();
+        if file
+            .take(MAX_PREFERENCES_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .is_err()
+            || bytes.len() as u64 > MAX_PREFERENCES_BYTES
+        {
+            return;
+        }
+        if let Ok(mut prefs) = serde_json::from_slice::<WorkspacePreferences>(&bytes) {
+            // Bound externally edited or corrupt history to the same shape this
+            // service writes, so the menu and restore loop stay bounded.
+            prefs
+                .recent_workspaces
+                .retain(|path| path.len() <= MAX_STORED_PATH_BYTES);
+            prefs.recent_workspaces.truncate(MAX_RECENT_WORKSPACES);
+            prefs
+                .active_roots
+                .retain(|path| path.len() <= MAX_STORED_PATH_BYTES);
+            prefs.active_roots.truncate(MAX_ACTIVE_ROOTS);
+            self.preferences = prefs;
+        }
     }
 
     pub fn save_preferences(&self) -> Result<(), String> {
@@ -567,6 +597,48 @@ impl WorkspaceService {
 #[cfg(test)]
 mod reveal_tests {
     use super::*;
+
+    #[test]
+    fn oversized_preference_file_is_ignored_without_loading_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspaces.json");
+        let mut value = serde_json::json!({
+            "recent_workspaces": ["E:/should-not-load"],
+            "active_roots": ["E:/also-should-not-load"]
+        });
+        value["padding"] = "x".repeat(MAX_PREFERENCES_BYTES as usize + 1024).into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let mut workspace = WorkspaceService::default();
+        workspace.configure(path);
+        assert!(workspace.recent_workspaces().is_empty());
+        assert!(workspace.roots().is_empty());
+    }
+
+    #[test]
+    fn corrupt_history_is_truncated_to_the_documented_limits() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspaces.json");
+        let recents: Vec<_> = (0..MAX_RECENT_WORKSPACES + 5)
+            .map(|index| format!("E:/recent-{index}"))
+            .collect();
+        let roots: Vec<_> = (0..MAX_ACTIVE_ROOTS + 5)
+            .map(|index| format!("E:/root-{index}"))
+            .collect();
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "recent_workspaces": recents,
+                "active_roots": roots
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut workspace = WorkspaceService::default();
+        workspace.configure(path);
+        assert_eq!(workspace.recent_workspaces().len(), MAX_RECENT_WORKSPACES);
+        assert_eq!(workspace.preferences.active_roots.len(), MAX_ACTIVE_ROOTS);
+    }
 
     #[test]
     fn reveal_visibility_checks_disk_and_ignore_rules_without_loading_the_tree() {
