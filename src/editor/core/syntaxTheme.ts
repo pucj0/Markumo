@@ -5,6 +5,12 @@ import { yamlScalarHighlight } from './yamlScalars'
 
 export const syntaxStyles = ['soft', 'standard', 'vivid'] as const
 export type SyntaxStyle = typeof syntaxStyles[number]
+/** Read both the original settings and values saved by the theme-card version. */
+export function normalizeSyntaxStyle(value: unknown): SyntaxStyle {
+  if (value === 'monokai-pro' || value === 'monokai-classic') return 'vivid'
+  if (value === 'one-dark' || value === 'github-dark' || value === 'github-light') return 'standard'
+  return syntaxStyles.includes(value as SyntaxStyle) ? value as SyntaxStyle : 'soft'
+}
 export const syntaxRoles = [
   'foreground', 'muted', 'keyword', 'control', 'string', 'number', 'boolean', 'null', 'comment', 'doc-comment',
   'type', 'class', 'function', 'method', 'property', 'parameter', 'variable', 'constant', 'operator', 'punctuation',
@@ -44,6 +50,6 @@ export const markumoSyntax = [syntaxHighlighting(markumoHighlight), yamlScalarHi
 
 /** Inheritance updates every live editor and preview without state reconstruction
  * or per-editor listeners. Only syntax classes consume these colors. */
-export function applySyntaxStyle(style: SyntaxStyle, host = document.body) {
-  host.dataset.syntaxStyle = syntaxStyles.includes(style) ? style : 'soft'
+export function applySyntaxStyle(style: SyntaxStyle | string, host = document.body) {
+  host.dataset.syntaxStyle = normalizeSyntaxStyle(style)
 }

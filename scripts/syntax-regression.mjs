@@ -26,7 +26,8 @@ window.views=[];
 window.mountApp=async()=>{for(const view of window.views)view.destroy();window.views=[];document.getElementById('gallery').replaceChildren();const {default:App}=await import('/src/App.vue');const app=createApp(App);app.mount('#app');window.s=app._instance.setupState;return true};
 window.doc=async(text,kind='txt',mode='source')=>{const m=window.s.manager;m.mergeAllPanes();m.createUntitled(kind);const id=m.activeId;m.dispatch(id,{changes:{from:0,to:m.getState(id).doc.length,insert:text},selection:{anchor:0}});if(kind==='md')m.setMarkdownMode(id,mode);await nextTick();return id};
 `)
-const server = await createServer({optimizeDeps:{include:['@codemirror/legacy-modes/mode/pug']},server:{host:'127.0.0.1',port:1438,strictPort:true}})
+const port=Number(process.env.MARKUMO_TEST_PORT||1438)
+const server = await createServer({optimizeDeps:{include:['@codemirror/legacy-modes/mode/pug']},server:{host:'127.0.0.1',port,strictPort:true}})
 await server.listen()
 let browser
 const results=[], errors=[]
@@ -35,7 +36,7 @@ try {
   const page=await browser.newPage({viewport:{width:1500,height:1050},reducedMotion:'reduce'})
   page.on('pageerror',error=>errors.push(error.message))
   page.on('console',message=>{if(message.text().includes('Unknown highlighting tag'))errors.push(message.text())})
-  await page.goto(`http://127.0.0.1:1438/${output}/index.html`)
+  await page.goto(`http://127.0.0.1:${port}/${output}/index.html`)
   await page.waitForFunction(()=>window.f)
   const test=async(name,run)=>{await run();results.push(name);console.log('PASS '+name)}
   const matrix=await page.evaluate(async()=>{
@@ -90,6 +91,10 @@ try {
     const luminance=hex=>{const match=hex.match(/[\da-f]{2}/gi);const c=match.map(n=>parseInt(n,16)/255).map(n=>n<=.04045?n/12.92:((n+.055)/1.055)**2.4);return c[0]*.2126+c[1]*.7152+c[2]*.0722}
     for(const palette of palettes){for(const token of Object.values(palette.colors))assert.match(token.color,/^rgb\(/);for(const role of ['comment','doc-comment']){const token=palette.colors[role];assert.equal(token.fontStyle,'normal');assert.equal(token.fontWeight,'400');const rgb=token.color.match(/\d+/g).map(n=>Number(n).toString(16).padStart(2,'0')).join(''),a=luminance(rgb),b=luminance(palette.background);assert.ok((Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=4.5,JSON.stringify({palette:palette.style,theme:palette.theme,role}))}assert.notEqual(palette.colors.keyword.color,palette.colors.string.color);assert.notEqual(palette.colors.type.color,palette.colors.function.color)}
     for(const theme of ['dark','light'])assert.equal(new Set(palettes.filter(p=>p.theme===theme).map(p=>p.colors.keyword.color)).size,3)
+  })
+  await test('named-theme settings migrate back to the original three highlight choices',async()=>{
+    const result=await page.evaluate(async()=>{const {settingsFrom,defaultSettings}=await import('/src/features/shell/editorSettings.ts');return {default:defaultSettings().syntaxStyle,styles:['soft','standard','vivid','fleet','fleet-dark','fleet-light','monokai-pro','monokai-classic','one-dark','github-dark','github-light','unknown'].map(syntaxStyle=>settingsFrom({syntaxStyle}).syntaxStyle)}});
+    assert.deepEqual(result,{default:'soft',styles:['soft','standard','vivid','soft','soft','soft','vivid','vivid','standard','standard','standard','soft']});
   })
   await test('filename rules and existing manual selector aliases are unambiguous',async()=>{
     const result=await page.evaluate(()=>{const f=window.f;return Object.fromEntries(['Dockerfile','Dockerfile.dev','CONTAINERFILE.ci','Makefile','GNUmakefile','CMakeLists.txt','.bashrc','.zshrc','.bash_profile','Gemfile','TYPES.D.TS','view.TSX','view.JSX','.env','.env.local','.gitignore','.editorconfig','config.JSONC','graph.MMD','unknown.binary'].map(name=>[name,f.detectLanguage(name)]))})
@@ -183,12 +188,13 @@ try {
   })
   await test('repeated theme switching and editor teardown retain neither history states nor listeners',async()=>{
     const cdp=await page.context().newCDPSession(page)
-    await cdp.send('HeapProfiler.collectGarbage');const before=await cdp.send('Runtime.getHeapUsage')
+    // One collectGarbage can leave a partially reclaimed heap, so a single sample
+    // reflects GC timing rather than retained editor state. Collect until two
+    // consecutive samples agree before reporting the used size.
+    const settledHeap=async()=>{let previous=-1;for(let round=0;round<6;round++){await cdp.send('HeapProfiler.collectGarbage');await page.waitForTimeout(120);const used=(await cdp.send('Runtime.getHeapUsage')).usedSize;if(previous>=0&&Math.abs(used-previous)<64*1024)return used;previous=used}return previous}
+    const before=await settledHeap()
     await page.evaluate(async()=>{const f=window.f,support=await f.loadLanguage('TypeScript');for(let i=0;i<60;i++){const host=document.createElement('div');document.body.append(host);const view=new f.EditorView({parent:host,state:f.EditorState.create({doc:f.syntaxSamples.typescript.source,extensions:[support,f.markumoSyntax]})});const state=view.state;for(const style of f.syntaxStyles)f.applySyntaxStyle(style);if(view.state!==state)throw Error('Style switch replaced state');view.destroy();host.remove()}})
-    // CM cancels scheduled measurements on teardown. Let that animation frame
-    // finish before asking GC about retained, rather than pending, view state.
-    await page.waitForTimeout(150)
-    await cdp.send('HeapProfiler.collectGarbage');const after=await cdp.send('Runtime.getHeapUsage');assert.ok(after.usedSize-before.usedSize<8_000_000,JSON.stringify({before:before.usedSize,after:after.usedSize}));await cdp.detach()
+    const after=await settledHeap();assert.ok(after-before<8_000_000,JSON.stringify({before,after}));await cdp.detach()
   })
   assert.deepEqual(errors,[])
   fs.writeFileSync(`${output}/results.json`,JSON.stringify({passed:results.length,tests:results,errors},null,2))

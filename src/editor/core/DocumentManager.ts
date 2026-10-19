@@ -987,8 +987,9 @@ export class DocumentManager {
       if (this.disposed || this.records.get(id) !== record || generation !== record.languageGeneration) return
       record.readyLanguageGeneration = generation
       record.meta.languageStatus = this.effects(record, [record.language.reconfigure(extension)]) ? 'ready' : 'loading'
-    } catch {
+    } catch (error) {
       if (this.disposed || this.records.get(id) !== record || generation !== record.languageGeneration) return
+      if (import.meta.env.DEV) console.warn(`Markumo: failed to load ${language} language support`, error)
       record.meta.languageStatus = 'error'
       record.meta.languageError = '语言包加载失败；当前仍可作为纯文本编辑，请重新选择语言以重试。'
     }

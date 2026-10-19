@@ -38,7 +38,7 @@ pnpm test:smoke
 # 或者简写：
 pnpm test
 
-# 4. 运行完整回归测试套件 (包含全部 18 个专项回归)
+# 4. 运行完整回归测试套件 (包含全部 19 个专项回归)
 pnpm test:regression
 
 # 5. 全流程质量检查 (依次执行: 类型检查 -> 前端构建 -> Smoke 回归)
@@ -59,8 +59,10 @@ pnpm check
    - 若未下载 Playwright 浏览器，自动探测系统安装的 Google Chrome 或 Microsoft Edge。
    - 亦可直接通过 `MARKUMO_CHROME` 显式指定浏览器可执行文件路径。
 4. **状态与耗时**：为每个用例输出编号、名称、状态（`PASS` / `FAIL` / `SKIP`）与精确执行耗时。
-5. **超时控制与进程清理**：为每个用例设置独立超时保护（默认 180s），超时后强行终止进程树，防止卡死挂起。
-6. **严格退出码**：当且仅当全部用例通过时返回 0；任意用例失败返回退出码 1，便于 CI 质量门禁拦截。
+5. **超时控制与进程清理**：为每个用例设置独立超时保护（默认 180s）。超时后终止整个进程树（Windows 使用 `taskkill /T /F`，POSIX 使用进程组 `SIGKILL`），并附加 10s 看门狗，即使终止命令本身失败也不会让运行器永久等待。
+6. **严格退出码**：当且仅当全部用例通过时返回 0；任意用例失败返回退出码 1。失败绝不会被降级为 `SKIP`（仅当子进程以 0 退出且显式输出独立成行的 `SKIP:` 时才记为跳过）。
+7. **失败上下文**：失败用例会打印退出码/超时原因、断言错误堆栈的 stdout 与 stderr 尾部（各最多 30 行），并将完整日志保存到 `test-results/regression-logs/<用例名>.log`。
+8. **输出有界**：每条流仅保留 8 KiB 头部与 64 KiB 滚动尾部，超出部分以 `... [N characters omitted by the regression runner] ...` 标记，异常放大输出不会造成内存增长。
 
 ### 高级用法：
 ```bash
@@ -75,7 +77,7 @@ node scripts/run-regressions.mjs smoke --timeout=60000
 
 ## 四、功能覆盖矩阵
 
-Markumo 现有 18 个专项回归脚本，各功能域覆盖与分组划分如下：
+Markumo 现有 19 个专项回归脚本，各功能域覆盖与分组划分如下：
 
 | 功能域 | 对应回归脚本 | 是否纳入 Smoke | 测试重点说明 |
 |---|---|:---:|---|
@@ -85,6 +87,7 @@ Markumo 现有 18 个专项回归脚本，各功能域覆盖与分组划分如�
 | **平滑光标动画** | `scripts/smooth-caret-regression.mjs` | **是** | CodeMirror 与 ProseMirror 光标插值、中文输入法回退、多选区与分栏聚焦 |
 | **工作区 P0** | `scripts/workspace-p0-regression.mjs` | **是** | 快速点击异步竞争、Tab 预览与固定（Pin）、文件重命名与定位 |
 | **语法高亮** | `scripts/syntax-regression.mjs` | **是** | 48 种语言注册表、高亮主题调色板、YAML/JSON/SQL 解析与大文件视口高亮 |
+| **高亮运行环境** | `scripts/highlight-runtime-regression.mjs` | **是** | 实际界面的语言切换、语法字色，以及并行 Vite 服务的缓存隔离 |
 | **括号功能** | `scripts/brackets-regression.mjs` | **是** | 彩虹括号、括号匹配、嵌套边界、字符串与注释忽略、大文档解析预算 |
 | **工作区智能展开** | `scripts/workspace-smart-expand-regression.mjs` | 否（纳入完整回归） | 单子目录链式自动展开、紧凑文件夹合并展示与懒加载容错 |
 | **富文本剪贴板** | `scripts/rich-clipboard-regression.mjs` | 否（纳入完整回归） | Markdown 与 HTML 剪贴板复制/粘贴、富文本右键菜单、快捷格式切换 |
@@ -148,18 +151,33 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 - **Push**：向 `main` 分支提交推送自动触发。
 - **手动触发**：支持在 GitHub 仓库 Actions 界面通过 `workflow_dispatch` 手动执行。
 
-### 门禁检查步骤：
+### 门禁 Job（两个相互独立的 Job，互不跳过）
+
+工作流拆分为 `Frontend Quality` 与 `Rust Quality` 两个并行、独立的 Job。二者没有 `needs` 依赖：任一方失败都不会导致另一方被跳过，整体工作流仅在**两个 Job 都成功**时才通过。
+
+#### Job 1：`Frontend Quality`
 1. 检出源码（`actions/checkout`）。
-2. 环境安装（Node.js 24、pnpm 12.11.2、Rust stable）。
-3. 安装 Linux 系统依赖（GTK/WebKit 等）。
-4. 执行 `pnpm install --frozen-lockfile`（锁定版本一致性）。
-5. 执行 `pnpm typecheck`（TypeScript 零错误）。
-6. 执行 `pnpm build`（Vite 生产构建校验）。
-7. 执行 `pnpm exec playwright install --with-deps chromium`（准备无头浏览器）。
-8. 执行 `pnpm test:smoke`（执行 7 个核心 Smoke 回归测试）。
-9. 执行 `cargo check --locked`（Rust 编译检查）。
-10. 执行 `cargo test --locked`（Rust 23 项单元测试）。
-11. **测试失败时自动上传测试产物**：当且仅当出现故障时，将 `.markumo-media-test/**/*.png`、`test-results/**` 及日志保留 7 天以上传归档，便于排查定位。
+2. 安装 Node.js 24 与 pnpm 12.11.2（启用 pnpm store 缓存）。
+3. 执行 `pnpm install --frozen-lockfile`（锁定版本一致性）。
+4. 执行 `pnpm typecheck`（TypeScript 零错误）。
+5. 执行 `pnpm build`（Vite 生产构建校验）。
+6. 执行 `pnpm exec playwright install --with-deps chromium`（准备无头浏览器与系统库）。
+7. 执行 `pnpm test:smoke`（8 个核心 Smoke 回归）。
+8. **失败时上传产物**：`test-results/**`（含 `regression-logs/` 日志与截图）以及 `.markumo-media-test/**/*.png`，保留 7 天。
+
+#### Job 2：`Rust Quality`
+1. 检出源码。
+2. 安装 Rust stable 与 `Swatinem/rust-cache` 编译缓存。
+3. 安装 Linux Tauri 系统依赖（GTK/WebKit 等）。
+4. 执行 `cargo check --locked`。
+5. 执行 `cargo test --locked`（23 项 Rust 单元测试）。
+
+> 两个 Job 均不涉及更新签名私钥、不创建 Release、不打包或上传正式安装包、不修改版本号。发布流程仍由 `.github/workflows/release.yml` 独立负责。
+
+### 失败定位入口：
+- **浏览器截图**：`test-results/<用例目录>/failure.png` 等。
+- **回归日志**：`test-results/regression-logs/<用例名>.log`，包含退出码、耗时以及完整的（有界）stdout / stderr。
+- CI 失败时上述文件随 artifact 上传，可在对应 Job 的 Artifacts 区域下载。
 
 ---
 
@@ -179,4 +197,11 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
    )
    ```
 4. **清理钩子**：所有测试脚本必须在 `finally` 块中关闭浏览器实例和 Vite 服务器，释放系统资源。
-5. **纳入运行清单**：在 `scripts/run-regressions.mjs` 的测试清单中登记新增的测试脚本。
+5. **等待已提交的 UI 状态，而不是固定延迟**：凡是依赖 `requestAnimationFrame`、`ResizeObserver`、`MutationObserver` 或异步测量的状态（例如设置页 `aria-current`、平滑光标 `.smooth-caret-layer` 的 `hidden`），必须用 `page.waitForFunction` 等待明确状态，禁止用 `waitForTimeout` 猜时间。示例：
+   ```javascript
+   await page.waitForFunction(target =>
+     document.querySelector('.settings-nav button[aria-current]')?.getAttribute('aria-controls') === 'settings-' + target, id)
+   ```
+   Linux CI 的帧调度比本地更慢，固定延迟会在慢机器上瞬间失去意义。
+6. **断言强度只增不减**：等待状态之后仍需保留 `assert`，以便失败时给出明确的断言错误；不得为通过测试而删除断言、放宽预期或写入期望值。
+7. **纳入运行清单**：在 `scripts/run-regressions.mjs` 的测试清单中登记新增的测试脚本。

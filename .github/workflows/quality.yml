@@ -15,8 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality:
-    name: Code Quality & Automated Regression (Linux)
+  # Frontend quality: types, build and browser regressions.
+  frontend:
+    name: Frontend Quality
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
@@ -33,19 +34,6 @@ jobs:
           version: 12.11.2
           cache: true
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
-        with:
-          workspaces: src-tauri -> target
-
-      - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
-
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
@@ -61,20 +49,40 @@ jobs:
       - name: Run browser smoke regressions
         run: pnpm test:smoke
 
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: frontend-regression-artifacts
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            test-results/**
+            .markumo-media-test/**/*.png
+
+  # Rust quality: independent of the frontend job so neither failure skips the other.
+  rust:
+    name: Rust Quality
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
+
       - name: Rust cargo check
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml
 
       - name: Rust cargo test
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
-
-      - name: Upload test artifacts on failure
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: regression-failure-artifacts
-          if-no-files-found: ignore
-          retention-days: 7
-          path: |
-            .markumo-media-test/**/*.png
-            test-results/**
-            *.log

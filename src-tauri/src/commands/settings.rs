@@ -121,8 +121,8 @@ fn validate(settings: &EditorSettings) -> Result<(), String> {
     if !["off", "matching", "rainbow"].contains(&settings.bracket_mode.as_str()) {
         return Err("不支持的括号高亮模式".into());
     }
-    if !["soft", "standard", "vivid"].contains(&settings.syntax_style.as_str()) {
-        return Err("不支持的语法高亮风格".into());
+    if !["soft", "standard", "vivid", "fleet", "fleet-dark", "fleet-light", "monokai-pro", "monokai-classic", "one-dark", "github-dark", "github-light"].contains(&settings.syntax_style.as_str()) {
+        return Err("不支持的编辑器配色".into());
     }
     let md = &settings.markdown_typography;
     if !(480..=1400).contains(&md.width) || !(12..=28).contains(&md.font_size)
@@ -171,8 +171,14 @@ fn load(path: &std::path::Path) -> Result<EditorSettings, String> {
     if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > 128 * 1024 {
         return Err("首选项文件过大".into());
     }
-    let settings = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+    let mut settings: EditorSettings = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
         .map_err(|e| format!("首选项损坏: {e}"))?;
+    settings.syntax_style = match settings.syntax_style.as_str() {
+        "fleet" | "fleet-dark" | "fleet-light" => "soft".into(),
+        "monokai-pro" | "monokai-classic" => "vivid".into(),
+        "one-dark" | "github-dark" | "github-light" => "standard".into(),
+        _ => settings.syntax_style,
+    };
     validate(&settings)?;
     Ok(settings)
 }
@@ -238,10 +244,16 @@ mod branding_tests {
         assert_eq!(old.syntax_style, "soft");
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
-        for style in ["soft", "standard", "vivid"] {
+        for style in ["soft", "standard", "vivid", "fleet", "fleet-dark", "fleet-light", "monokai-pro", "monokai-classic", "one-dark", "github-dark", "github-light"] {
             let settings: EditorSettings = serde_json::from_value(serde_json::json!({"syntaxStyle": style})).unwrap();
             save(&path, &settings).unwrap();
-            assert_eq!(load(&path).unwrap().syntax_style, style);
+            let expected = match style {
+                "fleet" | "fleet-dark" | "fleet-light" => "soft",
+                "monokai-pro" | "monokai-classic" => "vivid",
+                "one-dark" | "github-dark" | "github-light" => "standard",
+                _ => style,
+            };
+            assert_eq!(load(&path).unwrap().syntax_style, expected);
         }
         let bad: EditorSettings = serde_json::from_str(r#"{"syntaxStyle":"unknown"}"#).unwrap();
         assert!(validate(&bad).is_err());

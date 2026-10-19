@@ -6,6 +6,7 @@ import {createServer} from 'vite'
 
 const {chromium}=await import(process.env.MARKUMO_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MARKUMO_PLAYWRIGHT_MODULE).href : 'playwright')
 const output='test-results/brackets-p2'
+const schemeIds=['soft','standard','vivid'];
 const pairs='()[]{}'
 fs.mkdirSync(output,{recursive:true})
 fs.writeFileSync(`${output}/index.html`,'<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><div id="app"></div><div id="fixture" style="height:420px"></div><script type="module" src="./fixture.js"></script>')
@@ -22,13 +23,14 @@ import {applySyntaxStyle} from '/src/editor/core/syntaxTheme.ts';
 import {defaultSettings,settingsFrom} from '/src/features/shell/editorSettings.ts';
 import {createApp,nextTick} from 'vue';
 import '/src/styles/reset.css';import '/src/styles/variables.css';import '/src/styles/main.css';import '/src/editor/markdown/styles.css';
-window.f={EditorState,EditorSelection,Compartment,EditorView,syntaxTree,forceParsing,ensureSyntaxTree,undo,redo,bracketHighlight,bracketModes,bracketLimits,rainbowBrackets,matchingBrackets,languageRegistry,loadLanguage,syntaxSamples,applySyntaxStyle,defaultSettings,settingsFrom,nextTick};
+window.f={EditorState,EditorSelection,Compartment,EditorView,syntaxTree,forceParsing,ensureSyntaxTree,undo,redo,bracketHighlight,bracketModes,bracketLimits,rainbowBrackets,matchingBrackets,coreExtensions,editorTheme,languageRegistry,loadLanguage,syntaxSamples,applySyntaxStyle,defaultSettings,settingsFrom,nextTick};
 window.reset=async(name,source,mode='rainbow')=>{window.view?.destroy();window.config=new Compartment();window.view=new EditorView({parent:document.getElementById('fixture'),state:EditorState.create({doc:source,extensions:[coreExtensions,await loadLanguage(name),window.config.of(bracketHighlight(mode)),editorTheme('dark')]})});forceParsing(window.view,Math.min(source.length,50000),100);window.view.focus();await new Promise(r=>setTimeout(r,60));};
 window.spans=(plugin=rainbowBrackets)=>{const view=window.view, marks=view.plugin(plugin)?.decorations;const spans=[];if(marks)for(let c=marks.iter();c.value;c.next())spans.push({from:c.from,to:c.to,text:view.state.sliceDoc(c.from,c.to),class:c.value.spec.class});return spans;};
 window.mountApp=async()=>{window.view?.destroy();window.view=null;document.getElementById('fixture').remove();const {default:App}=await import('/src/App.vue');window.app=createApp(App);window.app.mount('#app');window.s=window.app._instance.setupState;await nextTick();};
 window.doc=async(source,kind='txt',mode='source')=>{const m=window.s.manager;m.mergeAllPanes();m.createUntitled(kind);const id=m.activeId;m.dispatch(id,{changes:{from:0,to:m.getState(id).doc.length,insert:source},selection:{anchor:0}});if(kind==='md')m.setMarkdownMode(id,mode);await nextTick();return id;};
 `)
-const server=await createServer({optimizeDeps:{include:['@codemirror/legacy-modes/mode/pug']},server:{host:'127.0.0.1',port:1439,strictPort:true}})
+const port=Number(process.env.MARKUMO_TEST_PORT||1439)
+const server=await createServer({optimizeDeps:{include:['@codemirror/legacy-modes/mode/pug']},server:{host:'127.0.0.1',port,strictPort:true}})
 await server.listen()
 let browser
 const tests=[],errors=[],performanceResults=[]
@@ -38,7 +40,7 @@ try {
   page.setDefaultTimeout(12000)
   page.on('pageerror',e=>errors.push(e.message))
   page.on('console',e=>{if(/crashed|Unknown highlighting tag/.test(e.text()))errors.push(e.text())})
-  await page.goto(`http://127.0.0.1:1439/${output}/index.html`)
+  await page.goto(`http://127.0.0.1:${port}/${output}/index.html`)
   await page.waitForFunction(()=>window.f)
   const test=async(name,run)=>{await run();tests.push(name);console.log('PASS '+name)}
   const reset=(name,source,mode)=>page.evaluate(([name,source,mode])=>window.reset(name,source,mode),[name,source,mode])
@@ -47,10 +49,15 @@ try {
     const data=await page.evaluate(()=>({old:window.f.settingsFrom({}).bracketMode,bad:window.f.settingsFrom({bracketMode:'wrong'}).bracketMode,modes:window.f.bracketModes.map(bracketMode=>window.f.settingsFrom(JSON.parse(JSON.stringify({...window.f.defaultSettings(),bracketMode}))).bracketMode)}))
     assert.deepEqual(data,{old:'matching',bad:'matching',modes:['off','matching','rainbow']})
   })
-  await test('nested and mixed brackets use the same level for each pair and cycle softly',async()=>{
+  await test('nested and mixed brackets share pair colors and cycle through eight levels',async()=>{
     await reset('JavaScript','const value = ({items: [call({deep: [1]})]});')
     const result=await spans();assert.equal(result.map(s=>s.text).join(''),'({[({[]})]})')
-    assert.deepEqual(result.map(s=>s.class),[1,2,3,4,1,2,2,1,4,3,2,1].map(n=>'mk-bracket-'+n))
+    assert.deepEqual(result.map(s=>s.class),[1,2,3,4,5,6,6,5,4,3,2,1].map(n=>'mk-bracket-'+n))
+    for(const name of ['JavaScript','Plain Text']){
+      await reset(name,'('.repeat(10)+'1'+')'.repeat(10));
+      const levels=Array.from({length:10},(_,i)=>'mk-bracket-'+(i%8+1));
+      assert.deepEqual((await spans()).map(s=>s.class),[...levels,...levels.toReversed()],name);
+    }
     await reset('JavaScript','const x = '+ '('.repeat(200)+'1'+')'.repeat(200)+';')
     const deep=await spans();assert.ok(deep.length>0);assert.ok(deep.every(s=>s.to-s.from===1));assert.ok((await page.evaluate(()=>window.view.plugin(window.f.rainbowBrackets).work)).ancestors<=16000)
   })
@@ -63,28 +70,39 @@ try {
     const cases={TypeScript:'function f(x: number[]) { return ({a: [x]}); }',Java:'class A { int f() { return call(new int[]{1}); } }',Rust:'fn f() { let v = vec![(1, 2)]; }',Python:'def f(x):\n    return {"items": [call(x)]}',Go:'package main\nfunc f() { v := []int{1, 2}; call(v) }',JSON:'{"items": [{"ok":true}]}',SQL:'SELECT COALESCE((age + 1), 2) FROM users;',YAML:'items: [{name: "([)]", enabled: true}]'}
     for(const [name,source] of Object.entries(cases)){await reset(name,source);const result=await spans();assert.ok(result.length>=2,name);assert.ok(result.every(s=>pairs.includes(s.text)),name);const quote=source.indexOf('"([)]"');if(quote>=0)assert.ok(!result.some(s=>s.from>quote&&s.from<quote+6),name)}
   })
-  await test('all registry entries load safely; StreamLanguage and plain formats have explicit fallback',async()=>{
+  await test('all registry entries load safely; native and token-based languages have scoped strategies',async()=>{
     const matrix=[]
     for(const row of await page.evaluate(()=>window.f.languageRegistry.map(l=>({id:l.id,name:l.name,parser:l.parser})))){
-      await page.evaluate(async row=>{const source=window.f.syntaxSamples[row.id].source;await window.reset(row.name,row.id==='php'?'<?php\n'+source:source)},row)
-      const result=await spans();if(row.parser!=='lezer')assert.equal(result.length,0,row.name)
-      matrix.push({...row,rainbow:result.length>0,marks:result.length,strategy:row.parser==='stream'?'bounded matching only':row.parser==='none'?'matching only':'syntax delimiters / embedded languages only'})
+      await page.evaluate(async row=>{const source=window.f.syntaxSamples[row.id].source+'\n([{}])';await window.reset(row.name,row.id==='php'?'<?php\n'+source:source)},row)
+      await page.waitForFunction(()=>window.spans().length>=2).catch(error=>{throw Error(row.name+': '+error.message)})
+      const result=await spans();
+      assert.ok(result.length>=2,row.name+' lost rainbow brackets')
+      matrix.push({...row,rainbow:result.length>0,marks:result.length,strategy:row.parser==='stream'?'bounded lexical scan for code formats':row.parser==='none'?'bounded plain-text scan':'syntax delimiters / embedded languages only'})
     }
-    fs.writeFileSync(`${output}/language-matrix.json`,JSON.stringify(matrix,null,2));assert.equal(matrix.length,48)
+    fs.writeFileSync(`${output}/language-matrix.json`,JSON.stringify(matrix,null,2));assert.equal(matrix.length,48);assert.ok(matrix.every(row=>row.rainbow))
+    for(const row of matrix){
+      await page.evaluate(async row=>{const source=window.f.syntaxSamples[row.id].source+'\n([{}])';await window.reset('Markdown','~~~'+row.id+'\n'+source+'\n~~~')},row)
+      await page.waitForFunction(()=>window.spans().length>=2).catch(error=>{throw Error('Markdown '+row.name+': '+error.message)})
+    }
     for(const name of ['C','C#','JSONC','TOML']){
       await reset(name,'({items:[1]}) /* ([)] */ "([)]"');await page.evaluate(()=>window.view.dispatch({selection:{anchor:1}}))
       const matches=await page.evaluate(()=>window.spans(window.f.matchingBrackets));assert.equal(matches.length,2,name);assert.ok(matches.every(s=>s.class==='mk-bracket-match'),name)
     }
   })
-  await test('JSX, HTML and Vue respect embedded boundaries and ignore tag angles, attributes and prose',async()=>{
+  await test('JSX, HTML and Vue keep embedded scopes and ignore tag angles and quoted attributes',async()=>{
     const cases={JSX:'const x = <div title="([)]">plain ([)] {call({a:[1]})}</div>;',HTML:'<p title="([)]">plain ([)]</p><script>call({a:[1]})</script><style>.a { width:calc(1px + 2px); }</style>',Vue:'<template><p title="([)]">plain ([)] {{ call({a:[1]}) }}</p></template><script setup lang="ts">const a = [call({n:1})]</script>'}
-    for(const [name,source] of Object.entries(cases)){await reset(name,source);const result=await spans();assert.ok(result.length>=6,name);assert.ok(result.every(s=>!'< >'.includes(s.text)),name);const attr=source.indexOf('([)]');assert.ok(result.every(s=>s.from<attr||s.from>=attr+4),name);const prose=source.indexOf('plain (')+6;assert.ok(result.every(s=>s.from<prose||s.from>=prose+4),name)}
+    for(const [name,source] of Object.entries(cases)){await reset(name,source);const result=await spans();assert.ok(result.length>=6,name);assert.ok(result.every(s=>!'< >'.includes(s.text)),name);const attr=source.indexOf('([)]');assert.ok(result.every(s=>s.from<attr||s.from>=attr+4),name);const prose=source.indexOf('plain (')+6;if(name==='JSX')assert.ok(result.every(s=>s.from<prose||s.from>=prose+4),name)}
   })
-  await test('Markdown source fences use their parser, prose and unsupported fences stay plain',async()=>{
-    const source='Text ([{}])\n\n```javascript\ncall({a:[1]})\n```\n\n```text\n([{}])\n```\n'
-    await reset('Markdown',source);await page.waitForFunction(()=>window.spans().length===6)
-    const result=await spans();assert.equal(result.map(s=>s.text).join(''),'({[]})');assert.ok(result.every(s=>s.from>=source.indexOf('call(')&&s.to<=source.indexOf('\n```',source.indexOf('call('))))
-    const separate='```c\n(\n```\n\n```c\n)\n```';await reset('Markdown',separate,'matching');await page.evaluate(()=>window.view.dispatch({selection:{anchor:6}}));const matches=await page.evaluate(()=>window.spans(window.f.matchingBrackets));assert.ok(matches.every(s=>s.class==='mk-bracket-invalid'));assert.ok(matches.length<=1,'never pair across independent fences')
+  await test('Markdown prose and every fence support rainbow brackets without crossing fence scopes',async()=>{
+    const source='Text ([{}])\n\n\x60\x60\x60javascript\ncall({a:[1]})\n\x60\x60\x60\n\n\x60\x60\x60text\n([{}])\n\x60\x60\x60\n';
+    await reset('Markdown',source);await page.waitForFunction(()=>window.spans().length===18);
+    const result=await spans();assert.equal(result.map(s=>s.text).join(''),'([{}])({[]})([{}])');
+    await reset('Markdown','\x60\x60\x60c\ncall({items:[1]}); /* ([)] */ "([)]"\n\x60\x60\x60');await page.waitForFunction(()=>window.spans().length===6);
+    for(const label of ['text','unknown','c']){
+      const separate='\x60\x60\x60'+label+'\n(\n\x60\x60\x60\n\n\x60\x60\x60'+label+'\n)\n\x60\x60\x60';await reset('Markdown',separate);
+      assert.equal((await spans()).filter(s=>s.text===')').length,0,'never color a pair across separate '+label+' fences');
+    }
+    const separate='\x60\x60\x60c\n(\n\x60\x60\x60\n\n\x60\x60\x60c\n)\n\x60\x60\x60';await reset('Markdown',separate,'matching');await page.evaluate(()=>window.view.dispatch({selection:{anchor:6}}));const matches=await page.evaluate(()=>window.spans(window.f.matchingBrackets));assert.ok(matches.every(s=>s.class==='mk-bracket-invalid'));assert.ok(matches.length<=1);
   })
   await test('matching mode is exclusive, malformed brackets warn, and multiple cursors deduplicate',async()=>{
     await reset('JavaScript','call({items:[1]}); next();','matching');await page.evaluate(()=>window.view.dispatch({selection:window.f.EditorSelection.create([window.f.EditorSelection.cursor(5),window.f.EditorSelection.cursor(12)])}))
@@ -94,14 +112,34 @@ try {
     await reset('JavaScript','const x = ([1,2];','matching');await page.evaluate(()=>window.view.dispatch({selection:{anchor:11}}));assert.ok((await page.evaluate(()=>window.spans(window.f.matchingBrackets))).some(s=>s.class==='mk-bracket-invalid'))
     await reset('JavaScript','{]');const malformed=await spans();assert.equal(malformed.some(s=>s.text===']'),false,'error recovery must not invent a rainbow pair')
   })
-  await test('six palettes update computed colors; matching wins over rainbow without background blocks',async()=>{
-    await reset('JavaScript','call({a:[1]});');await page.evaluate(()=>window.view.dispatch({selection:{anchor:5}}))
+  await test('all eight colors reach glyphs in every style and theme; matching preserves layer colors',async()=>{
+    await reset('JavaScript','('.repeat(8)+'1'+')'.repeat(8));await page.evaluate(()=>window.view.dispatch({selection:{anchor:1}}))
     const colors=[]
-    for(const theme of ['dark','light'])for(const style of ['soft','standard','vivid']){
-      const data=await page.evaluate(({theme,style})=>{document.body.classList.toggle('light',theme==='light');window.f.applySyntaxStyle(style);const match=document.querySelector('.mk-bracket-match'),rainbow=document.querySelector('.mk-bracket-3'),body=getComputedStyle(document.body);const actual=el=>{const leaf=el.querySelector('span')||el;return {color:getComputedStyle(leaf).color,background:getComputedStyle(leaf).backgroundColor}};const probe=document.createElement('span');probe.style.color='var(--syntax-bracket-match)';document.body.append(probe);const expected=getComputedStyle(probe).color;probe.remove();return {match:actual(match),rainbow:actual(rainbow),expected,tokens:['1','2','3','4','match','invalid'].map(r=>body.getPropertyValue('--syntax-bracket-'+r).trim())}},{theme,style})
-      assert.equal(data.match.color,data.expected);assert.equal(data.match.background,'rgba(0, 0, 0, 0)');assert.ok(data.tokens.every(c=>/^#[\da-f]{6}$/i.test(c)));colors.push({theme,style,...data})
+    for(const theme of ['dark','light'])for(const style of schemeIds){
+      const data=await page.evaluate(({theme,style})=>{
+        document.body.classList.toggle('light',theme==='light');window.f.applySyntaxStyle(style);
+        const marks=[...document.querySelectorAll('#fixture [class*=mk-bracket-]')].filter(el=>/mk-bracket-[1-8]/.test(el.className));
+        return marks.map(el=>{const level=/mk-bracket-([1-8])/.exec(el.className)[1];const leaf=el.querySelector('span:last-child')||el;
+          const probe=document.createElement('span');probe.style.color=getComputedStyle(el).getPropertyValue('--syntax-bracket-'+level);document.body.append(probe);const expected=getComputedStyle(probe).color;probe.remove();
+          return {text:el.textContent,color:getComputedStyle(leaf).color,expected,background:getComputedStyle(leaf).backgroundColor};});
+      },{theme,style});
+      assert.equal(data.length,16);for(const mark of data){assert.equal(mark.color,mark.expected,JSON.stringify({theme,style,mark}));assert.equal(mark.background,'rgba(0, 0, 0, 0)');}
+      assert.equal(new Set(data.map(m=>m.color)).size,8);colors.push({theme,style,marks:data});
+      assert.ok(await page.locator('.mk-bracket-match').first().evaluate(el=>getComputedStyle(el).textDecorationLine.includes('underline')));
     }
-    fs.writeFileSync(`${output}/palettes.json`,JSON.stringify(colors,null,2));assert.equal(new Set(colors.map(c=>c.tokens[0])).size,6)
+    fs.writeFileSync(output+'/palettes.json',JSON.stringify(colors,null,2));
+  })
+  await test('normal asynchronous file opening renders rainbow glyphs without forcing the parser',async()=>{
+    for(const name of ['JavaScript','TypeScript','JSON','Python','C','C#','Kotlin','PowerShell','Plain Text']){
+      await page.evaluate(async name=>{window.view?.destroy();const f=window.f;window.config=new f.Compartment();window.view=new f.EditorView({parent:document.getElementById('fixture'),state:f.EditorState.create({doc:name==='JSON'?'{"a":[1,{"b":2}]}':'call({items: [1, (2)]});',extensions:[f.coreExtensions,await f.loadLanguage(name),window.config.of(f.bracketHighlight('rainbow')),f.editorTheme('dark')]})});},name);
+      await page.waitForFunction(()=>window.spans().length>=6).catch(error=>{throw Error(name+': '+error.message)});
+      const glyphs=await page.locator('#fixture [class*=mk-bracket-]').evaluateAll(elements=>elements.map(el=>({text:el.textContent,color:getComputedStyle(el.querySelector('span')||el).color})));
+      assert.ok(new Set(glyphs.map(g=>g.color)).size>=3,name);
+    }
+    for(const name of ['C','C#','Kotlin','PowerShell']){
+      const source='call({items:[1]}); /* ([)] */ "([)]"';await reset(name,source);
+      const quote=source.lastIndexOf('"([)]"'),spans=await page.evaluate(()=>window.spans());assert.ok(!spans.some(s=>s.from>quote&&s.from<quote+6),name);
+    }
   })
   await test('off removes plugin instances and leaves auto-close, history, copyable text and selection intact',async()=>{
     await reset('JavaScript','const x = ({a:[1]});');const result=await page.evaluate(()=>{const f=window.f,v=window.view,doc=v.state.doc,selection=v.state.selection;v.dispatch({effects:window.config.reconfigure(f.bracketHighlight('off'))});return {rainbow:v.plugin(f.rainbowBrackets)===null,matching:v.plugin(f.matchingBrackets)===null,doc:v.state.doc===doc,selection:v.state.selection.eq(selection)}})
@@ -144,7 +182,7 @@ try {
     await page.evaluate(()=>window.codeCM=window.f.EditorView.findFromDOM(document.querySelector('.md-code-block .cm-editor')))
     await page.evaluate(()=>window.s.bracketMode='off');await page.waitForFunction(()=>!document.querySelector('.md-code-block [class*=mk-bracket-]'));assert.equal(await page.evaluate(()=>window.codeCM.plugin(window.f.rainbowBrackets)),null)
     await page.evaluate(()=>window.s.bracketMode='rainbow');await page.waitForSelector('.md-code-block .mk-bracket-3');assert.equal(await page.evaluate(()=>window.codeCM===window.f.EditorView.findFromDOM(document.querySelector('.md-code-block .cm-editor'))),true)
-    await page.locator('.md-code-block .cm-content').click();await page.locator('.md-code-lang-btn').click();const input=page.getByRole('combobox',{name:/^搜索代码语言/});await input.fill('text');await input.press('Enter');await page.waitForFunction(()=>document.querySelector('.md-code-block')?.dataset.languageStatus==='ready');assert.equal(await page.locator('.md-code-block [class*=mk-bracket-1]').count(),0)
+    await page.locator('.md-code-block .cm-content').click();await page.locator('.md-code-lang-btn').click();const input=page.getByRole('combobox',{name:/^搜索代码语言/});await input.fill('text');await input.press('Enter');await page.waitForFunction(()=>document.querySelector('.md-code-block')?.dataset.languageStatus==='ready');assert.ok(await page.locator('.md-code-block [class*=mk-bracket-1]').count()>0)
     await page.locator('.md-code-lang-btn').click();await input.fill('json');await input.press('Enter');await page.waitForFunction(()=>document.querySelector('.md-code-block')?.dataset.languageStatus==='ready');await page.evaluate(()=>window.codeCM.dispatch({changes:{from:0,to:window.codeCM.state.doc.length,insert:'{"items":[1]}'}}));await page.waitForSelector('.md-code-block .mk-bracket-2')
     await page.evaluate(()=>window.s.manager.command('undo'));await page.evaluate(()=>window.s.manager.command('redo'));assert.ok((await page.evaluate(()=>window.s.manager.getText(window.s.manager.activeId))).includes('"items"'))
   })

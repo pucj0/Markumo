@@ -21,6 +21,66 @@ const test=async(name,fn)=>{try{await fn();results.push({name,pass:true});consol
 const openSettings=async section=>{await page.evaluate(id=>window.s.settingsRef.openSection(id),section);await page.waitForTimeout(70)}
 const closeSettings=async()=>{await page.evaluate(()=>window.s.settingsRef.close());await page.waitForTimeout(60)}
 const content=page.locator('.settings-content')
+const nav=page.locator('.settings-nav button[aria-current]')
+// The scroll spy recomputes on the next animation frame, so assertions wait for
+// the committed aria-current value instead of sampling a stale DOM snapshot.
+const activeSection=()=>nav.getAttribute('aria-controls')
+const waitForActive=id=>page.waitForFunction(target=>document.querySelector('.settings-nav button[aria-current]')?.getAttribute('aria-controls')==='settings-'+target,id)
+// goToSection() highlights the target immediately and then scrolls to it, so a
+// smooth scroll passes through the intermediate categories. Wait until the
+// container actually arrived at the target before asserting the committed state.
+const waitForSettled=id=>page.waitForFunction(target=>{
+  const container=document.querySelector('.settings-content'),section=document.getElementById('settings-'+target)
+  if(!container||!section)return false
+  if(document.querySelector('.settings-nav button[aria-current]')?.getAttribute('aria-controls')!=='settings-'+target)return false
+  const top=section.getBoundingClientRect().top-container.getBoundingClientRect().top
+  const atBottom=container.scrollTop+container.clientHeight>=container.scrollHeight-2
+  return Math.abs(top-20)<3||atBottom
+},id)
+// Native scrollbar dragging is a pixel gesture: a press that lands on the track
+// instead of the thumb silently pages the container, so the gesture is verified
+// and retried from a known position.
+const dragScrollbarToBottom=async()=>{
+  const geometry=[]
+  for(let attempt=0;attempt<3;attempt++){
+    // Park at the top, then derive the thumb position from the scroll offset that
+    // actually stuck: late font/preview layout can shift the anchor by a few px,
+    // and pressing the track instead of the thumb silently pages the container.
+    await content.evaluate(el=>el.scrollTop=0)
+    await page.waitForTimeout(120)
+    const rect=await content.boundingBox()
+    const box=await content.evaluate(el=>({top:el.scrollTop,scrollHeight:el.scrollHeight,clientHeight:el.clientHeight,scrollbar:el.offsetWidth-el.clientWidth}))
+    const thumb=Math.max(18,box.clientHeight*box.clientHeight/box.scrollHeight)
+    const travel=rect.height-thumb
+    const y=rect.y+travel*(box.scrollHeight>box.clientHeight?box.top/(box.scrollHeight-box.clientHeight):0)+thumb/2
+    geometry.push({scrollTop:Math.round(box.top),scrollbar:box.scrollbar,thumb:Math.round(thumb),pressY:Math.round(y)})
+    await page.mouse.move(rect.x+rect.width-3,y)
+    await page.mouse.down()
+    await page.mouse.move(rect.x+rect.width-3,rect.y+rect.height-2,{steps:12})
+    await page.mouse.up()
+    try{
+      await page.waitForFunction(()=>{const el=document.querySelector('.settings-content');return Math.abs(el.scrollHeight-el.clientHeight-el.scrollTop)<3},null,{timeout:4000})
+      return {ok:true,geometry}
+    }catch{/* The native gesture did not grab the thumb; retry from the top. */}
+  }
+  return {ok:false,geometry}
+}
+// Whether one page is enough to leave a category depends on that category's
+// height, so verify the spy tracks the section actually at the top instead of
+// hard-coding which category a single PageDown should land on.
+const spyTracksTop=async()=>{
+  try{
+    await page.waitForFunction(()=>{
+      const container=document.querySelector('.settings-content')
+      if(!container||container.scrollTop<=1)return false
+      const edge=container.getBoundingClientRect().top+36
+      let expected=null
+      for(const section of container.querySelectorAll('.settings-section')){if(section.getBoundingClientRect().top<=edge)expected=section.id;else break}
+      return !!expected&&document.querySelector('.settings-nav button[aria-current]')?.getAttribute('aria-controls')===expected
+    },null,{timeout:5000})
+    return true
+  }catch{return false}
+}
 const row=id=>page.locator('.shortcut-item-row').filter({has:page.locator(`[data-command-id="${id}"]`)})
 async function edit(id,key){await page.getByRole('textbox',{name:'搜索快捷键',exact:true}).fill(id);const target=row(id);await target.locator('.keycap-container').click();await page.keyboard.press(key);return target}
 async function text(){return page.evaluate(()=>window.s.manager.getState(window.s.manager.activeId).doc.toString())}
@@ -44,13 +104,13 @@ try{
  })
  await test('manual scroll, top/bottom, PageDown and smooth navigation use only content',async()=>{
    await openSettings('appearance');assert.equal(await page.getByRole('button',{name:'外观',exact:true}).getAttribute('aria-current'),'location')
-   for(const id of ['editor','workspace','updates','save','markdown','conversion','shortcuts']){await content.evaluate((el,id)=>{const section=document.getElementById('settings-'+id);el.scrollTop+=section.getBoundingClientRect().top-el.getBoundingClientRect().top-22},id);await page.waitForTimeout(40);assert.equal(await page.locator('.settings-nav button[aria-current]').getAttribute('aria-controls'),'settings-'+id)}
-   await content.evaluate(el=>el.scrollTop=el.scrollHeight);await page.waitForTimeout(40);assert.equal(await page.locator('.settings-nav button[aria-current]').getAttribute('aria-controls'),'settings-shortcuts')
-   await page.getByRole('button',{name:'外观',exact:true}).click();await page.waitForTimeout(40);assert.equal(await content.evaluate(el=>el.scrollTop),0)
-   await content.focus();await page.keyboard.press('PageDown');await page.waitForTimeout(150);assert.notEqual(await page.locator('.settings-nav button[aria-current]').getAttribute('aria-controls'),'settings-appearance');assert.equal(await page.evaluate(()=>window.scrollY),0)
+   for(const id of ['editor','workspace','updates','save','markdown','conversion','shortcuts']){await content.evaluate((el,id)=>{const section=document.getElementById('settings-'+id);el.scrollTop+=section.getBoundingClientRect().top-el.getBoundingClientRect().top-22},id);await waitForActive(id);assert.equal(await activeSection(),'settings-'+id)}
+   await content.evaluate(el=>el.scrollTop=el.scrollHeight);await waitForActive('shortcuts');assert.equal(await activeSection(),'settings-shortcuts')
+   await page.getByRole('button',{name:'外观',exact:true}).click();await waitForActive('appearance');assert.equal(await content.evaluate(el=>el.scrollTop),0)
+   await content.focus();await page.keyboard.press('PageDown');assert.equal(await spyTracksTop(),true,'settings navigation did not follow the PageDown scroll');assert.equal(await page.evaluate(()=>window.scrollY),0)
  })
  await test('dragging the native content scrollbar selects the final category',async()=>{
-   await content.evaluate(el=>el.scrollTop=0);await page.waitForTimeout(40);const rect=await content.boundingBox();const thumb=await content.evaluate(el=>Math.max(18,el.clientHeight*el.clientHeight/el.scrollHeight));await page.mouse.move(rect.x+rect.width-3,rect.y+thumb/2);await page.mouse.down();await page.mouse.move(rect.x+rect.width-3,rect.y+rect.height-2,{steps:12});await page.mouse.up();await page.waitForTimeout(80);assert.equal(await content.evaluate(el=>Math.abs(el.scrollHeight-el.clientHeight-el.scrollTop)<3),true);assert.equal(await page.locator('.settings-nav button[aria-current]').getAttribute('aria-controls'),'settings-shortcuts')
+   const drag=await dragScrollbarToBottom();assert.equal(drag.ok,true,'dragging the native scrollbar did not reach the end of the settings content: '+JSON.stringify(drag.geometry));await waitForActive('shortcuts');assert.equal(await content.evaluate(el=>Math.abs(el.scrollHeight-el.clientHeight-el.scrollTop)<3),true);assert.equal(await activeSection(),'settings-shortcuts')
  })
  await test('segmented controls keyboard, indentation 1–8, conversion persistence and reload',async()=>{
   await openSettings('appearance');await page.locator('#settings-theme').getByRole('radio',{name:'深色',exact:true}).click();await page.locator('#settings-theme').getByRole('radio',{name:'深色',exact:true}).press('ArrowRight');assert.equal(await page.evaluate(()=>window.s.theme),'system')
@@ -80,7 +140,7 @@ try{
  })
  await test('filter/search height changes retain navigation and no horizontal overflow with 20px UI',async()=>{
   await page.getByRole('textbox',{name:'搜索快捷键',exact:true}).fill('Ctrl+Shift+K');assert.equal(await page.locator('.shortcut-item-row').count(),1)
-  await page.getByRole('textbox',{name:'搜索快捷键',exact:true}).fill('');await page.getByRole('radiogroup',{name:'筛选快捷键'}).getByRole('radio',{name:'未绑定',exact:true}).click();await page.waitForTimeout(60);assert.equal(await page.locator('.settings-nav button[aria-current]').getAttribute('aria-controls'),'settings-shortcuts')
+  await page.getByRole('textbox',{name:'搜索快捷键',exact:true}).fill('');await page.getByRole('radiogroup',{name:'筛选快捷键'}).getByRole('radio',{name:'未绑定',exact:true}).click();await waitForActive('shortcuts');assert.equal(await activeSection(),'settings-shortcuts')
   await page.getByRole('radiogroup',{name:'筛选快捷键'}).getByRole('radio',{name:'全部',exact:true}).click();await page.evaluate(()=>window.s.uiFontSize=20);await page.setViewportSize({width:540,height:720});await openSettings('shortcuts');await page.waitForTimeout(100);assert.equal(await content.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);await page.screenshot({path:`${output}/narrow-large-font.png`})
   await page.setViewportSize({width:1200,height:850});await page.evaluate(()=>{window.s.uiFontSize=14;window.s.theme='dark'});await openSettings('shortcuts');await page.screenshot({path:`${output}/settings-dark.png`});await page.evaluate(()=>window.s.theme='light');await page.screenshot({path:`${output}/settings-light.png`});await closeSettings()
  })
@@ -110,7 +170,7 @@ try{
  })
  await test('IME composition and settings dialog never dispatch editor commands; reopen initializes first category',async()=>{
    const result=await page.evaluate(()=>{const s=window.s,before=s.manager.getState(s.manager.activeId).doc.toString();document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'k',code:'KeyK',ctrlKey:true,shiftKey:true,isComposing:true,bubbles:true,cancelable:true}));return before===s.manager.getState(s.manager.activeId).doc.toString()});assert.equal(result,true)
-   await openSettings('shortcuts');const before=await text();await page.keyboard.press('Control+Shift+K');assert.equal(await text(),before);await closeSettings();await page.evaluate(()=>window.s.settingsRef.open());await page.waitForTimeout(60);assert.equal(await content.evaluate(el=>el.scrollTop),0);assert.equal(await page.locator('.settings-nav button[aria-current]').getAttribute('aria-controls'),'settings-appearance')
+   await openSettings('shortcuts');const before=await text();await page.keyboard.press('Control+Shift+K');assert.equal(await text(),before);await closeSettings();await page.evaluate(()=>window.s.settingsRef.open());await waitForActive('appearance');assert.equal(await content.evaluate(el=>el.scrollTop),0);assert.equal(await activeSection(),'settings-appearance')
  })
 
  await test('pure modifiers and unmodified text cannot execute an unbound command',async()=>{
@@ -133,9 +193,9 @@ try{
    await page.evaluate(()=>{window.s.updateKeymap({preset:'markumo',bindings:window.f.getPresetBindings('markumo')});return window.doc(Array.from({length:5000},(_,index)=>'line '+index).join('\n'))});await page.evaluate(()=>{const s=window.s;s.updateShortcuts({...s.shortcuts,'copy-line-down':'Mod+Alt+D'});const view=s.manager.activeEditorView;view.focus();for(let index=0;index<10;index++)view.contentDOM.dispatchEvent(new KeyboardEvent('keydown',{key:'d',code:'KeyD',ctrlKey:true,altKey:true,repeat:true,bubbles:true,cancelable:true}));view.contentDOM.dispatchEvent(new KeyboardEvent('keydown',{key:'\\',code:'Backslash',ctrlKey:true,repeat:true,bubbles:true,cancelable:true}))});assert.equal(await page.evaluate(()=>window.s.manager.getState(window.s.manager.activeId).doc.lines),5010);assert.equal(await page.evaluate(()=>window.s.manager.isSplit),false);await page.keyboard.press('Control+\\');assert.equal(await page.evaluate(()=>window.s.manager.isSplit),true);await page.keyboard.press('Control+Shift+M');assert.equal(await page.evaluate(()=>window.s.manager.isSplit),false)
  })
  await test('smooth container navigation, wheel interruption, dynamic Markdown height and last section',async()=>{
-   await page.emulateMedia({reducedMotion:'no-preference'});await openSettings('appearance');await page.getByRole('button',{name:'导入与导出',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.settings-nav button[aria-current]')?.getAttribute('aria-controls')==='settings-conversion');assert.equal(await page.locator('.settings-nav button[aria-current]').getAttribute('aria-controls'),'settings-conversion')
+   await page.emulateMedia({reducedMotion:'no-preference'});await openSettings('appearance');await page.getByRole('button',{name:'导入与导出',exact:true}).click();await waitForSettled('conversion');assert.equal(await activeSection(),'settings-conversion')
    await content.hover();await page.mouse.wheel(0,-700);await page.waitForTimeout(200);const current=await content.evaluate(el=>el.scrollTop);await page.waitForTimeout(250);assert.equal(await content.evaluate(el=>el.scrollTop),current)
-   await page.emulateMedia({reducedMotion:'reduce'});await openSettings('markdown');await page.locator('#image-location').selectOption('custom');await page.locator('#image-directory').waitFor();await page.waitForTimeout(60);assert.equal(await page.locator('.settings-nav button[aria-current]').getAttribute('aria-controls'),'settings-markdown');await content.evaluate(el=>el.scrollTop=el.scrollHeight);await page.waitForTimeout(60);assert.equal(await page.locator('.settings-nav button[aria-current]').getAttribute('aria-controls'),'settings-shortcuts')
+   await page.emulateMedia({reducedMotion:'reduce'});await openSettings('markdown');await page.locator('#image-location').selectOption('custom');await page.locator('#image-directory').waitFor();await waitForActive('markdown');assert.equal(await activeSection(),'settings-markdown');await content.evaluate(el=>el.scrollTop=el.scrollHeight);await waitForActive('shortcuts');assert.equal(await activeSection(),'settings-shortcuts')
  })
  await test('restore entire active preset and changed/unbound filters reflect the committed config',async()=>{
    await page.getByRole('textbox',{name:'搜索快捷键',exact:true}).fill('');await page.getByRole('radiogroup',{name:'筛选快捷键'}).getByRole('radio',{name:'已修改',exact:true}).click();assert.ok(await page.locator('.shortcut-item-row').count()>0);await page.getByRole('button',{name:'恢复默认',exact:true}).first().click();await page.getByRole('button',{name:'确认应用',exact:true}).click();await page.waitForTimeout(60);assert.equal(await page.locator('.shortcut-item-row').count(),0);await page.waitForFunction(()=>{const saved=JSON.parse(localStorage.getItem('markumo.settings.v1')||'{}');return Object.entries(window.s.shortcuts).every(([id,binding])=>saved.shortcuts?.[id]===binding)});await closeSettings();await page.reload();await page.waitForFunction(()=>window.s?.shortcuts?.table==='Mod+T');assert.deepEqual(await page.evaluate(()=>window.s.shortcuts),await page.evaluate(()=>window.f.getPresetBindings(window.s.keymapPreset)))

@@ -268,7 +268,15 @@ try {
     await page.locator('.md-prose').last().locator('p').first().click()
     await page.keyboard.insertText('双栏同步')
     await page.waitForFunction(()=>[...document.querySelectorAll('.md-prose')].every(el=>el.textContent.includes('双栏同步')))
+    // The overlay is revealed in the caret plugin's animation frame after the focus
+    // change, so wait for that committed state instead of sampling the same frame.
+    const soleFocusedCaret = () => { const shown=[...document.querySelectorAll('.smooth-caret-layer')].filter(el=>!el.hidden)
+      if(shown.length!==1)return false
+      const host=shown[0].parentElement,active=document.activeElement
+      return !!host&&!!active&&host.contains(active)&&active.classList.contains('ProseMirror')&&active.classList.contains('smooth-caret-active') }
+    await page.waitForFunction(soleFocusedCaret)
     assert.equal(await page.evaluate(()=>window.f.visible().length),1)
+    assert.equal(await page.evaluate(soleFocusedCaret),true)
     await page.keyboard.press('Control+z')
     await page.waitForFunction(()=>!window.f.manager.getText(window.f.manager.activeId).includes('双栏同步'))
     await page.keyboard.press('Control+y')

@@ -6,6 +6,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const LOG_DIR = path.resolve(ROOT_DIR, 'test-results/regression-logs')
 
 // Smoke tests: fast, deterministic, core regressions covering Markdown, settings, updater, smooth caret, workspace, syntax, brackets
 const SMOKE_TESTS = [
@@ -15,6 +16,7 @@ const SMOKE_TESTS = [
   'scripts/smooth-caret-regression.mjs',
   'scripts/workspace-p0-regression.mjs',
   'scripts/syntax-regression.mjs',
+  'scripts/highlight-runtime-regression.mjs',
   'scripts/brackets-regression.mjs'
 ]
 
@@ -27,6 +29,7 @@ const FULL_REGRESSION_TESTS = [
   'scripts/workspace-p0-regression.mjs',
   'scripts/workspace-smart-expand-regression.mjs',
   'scripts/syntax-regression.mjs',
+  'scripts/highlight-runtime-regression.mjs',
   'scripts/brackets-regression.mjs',
   'scripts/rich-clipboard-regression.mjs',
   'scripts/outline-regression.mjs',
@@ -39,6 +42,11 @@ const FULL_REGRESSION_TESTS = [
   'scripts/windows-artifacts-regression.mjs',
   'scripts/release-regression.mjs'
 ]
+
+// Bounds on retained child output. A runaway test must not grow this process.
+const MAX_CAPTURE_CHARS = 64 * 1024
+const HEAD_CHARS = 8 * 1024
+const KILL_GRACE_MS = 10000
 
 function findSystemBrowser() {
   const candidates = []
@@ -150,14 +158,59 @@ function checkTestPrerequisites(scriptPath) {
   return { ok: true }
 }
 
+/**
+ * Bounded output capture: keeps the first HEAD_CHARS characters plus a rolling
+ * tail, so a runaway or chatty test cannot exhaust memory.
+ */
+class BoundedOutput {
+  constructor() {
+    this.head = ''
+    this.tail = ''
+    this.totalChars = 0
+    this.truncated = false
+  }
+
+  append(chunk) {
+    this.totalChars += chunk.length
+    if (this.head.length < HEAD_CHARS) {
+      const room = HEAD_CHARS - this.head.length
+      this.head += chunk.slice(0, room)
+      chunk = chunk.slice(room)
+    }
+    if (!chunk) return
+    this.tail += chunk
+    if (this.tail.length > MAX_CAPTURE_CHARS) {
+      // Drop the oldest tail content in large blocks to keep this O(1) amortised.
+      this.tail = this.tail.slice(this.tail.length - MAX_CAPTURE_CHARS)
+      this.truncated = true
+    }
+    if (this.totalChars > this.head.length + this.tail.length) this.truncated = true
+  }
+
+  /** Whole captured text, bounded and safe to persist. */
+  text() {
+    if (this.tail.length === 0) return this.head
+    const omitted = this.totalChars - this.head.length - this.tail.length
+    const marker = omitted > 0 ? `\n... [${omitted} characters omitted by the regression runner] ...\n` : ''
+    return this.head + marker + this.tail
+  }
+}
+
 function terminateProcess(child) {
-  if (!child || child.killed) return
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
   const pid = child.pid
   if (!pid) return
 
   if (process.platform === 'win32') {
+    // taskkill may fail (already exited, access denied). Unref the helper and
+    // fall back to a direct kill so the runner can never wait forever.
     try {
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
+      const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+      killer.on('error', () => {})
+      killer.unref()
+    } catch {}
+    try {
+      child.kill('SIGKILL')
     } catch {}
   } else {
     try {
@@ -168,6 +221,14 @@ function terminateProcess(child) {
       } catch {}
     }
   }
+}
+
+function saveLog(scriptPath, payload) {
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true })
+    const base = path.basename(scriptPath).replace(/\.mjs$/, '')
+    fs.writeFileSync(path.join(LOG_DIR, `${base}.log`), payload, 'utf8')
+  } catch {}
 }
 
 function runSingleTest(scriptPath, timeoutMs = 180000) {
@@ -196,12 +257,15 @@ function runSingleTest(scriptPath, timeoutMs = 180000) {
 
     const startTime = performance.now()
     const env = { ...process.env }
-    // Ensure temporary directories on Windows avoid permission issues in restricted sandboxes
-    if (process.platform === 'win32' && !env.TEMP) {
-      const fallbackTemp = path.resolve(ROOT_DIR, '.markumo-media-test')
-      fs.mkdirSync(fallbackTemp, { recursive: true })
-      env.TEMP = fallbackTemp
-      env.TMP = fallbackTemp
+    // Restricted environments may not expose a writable TEMP; fall back to the
+    // workspace so tests that create temporary files still run.
+    if (!env.TEMP || !env.TMP) {
+      const fallbackTemp = path.resolve(ROOT_DIR, '.markumo-media-test/tmp')
+      try {
+        fs.mkdirSync(fallbackTemp, { recursive: true })
+        env.TEMP ||= fallbackTemp
+        env.TMP ||= fallbackTemp
+      } catch {}
     }
 
     const child = spawn(process.execPath, [absPath], {
@@ -211,97 +275,143 @@ function runSingleTest(scriptPath, timeoutMs = 180000) {
       detached: process.platform !== 'win32'
     })
 
-    let stdout = ''
-    let stderr = ''
+    const stdout = new BoundedOutput()
+    const stderr = new BoundedOutput()
     let timedOut = false
+    let settled = false
+    let watchdog
+    let timer
 
-    child.stdout.on('data', (data) => {
-      stdout += data.toString()
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      clearTimeout(watchdog)
+      resolve(result)
+    }
+
+    const collect = () => ({
+      stdout: stdout.text(),
+      stderr: stderr.text()
     })
 
-    child.stderr.on('data', (data) => {
-      stderr += data.toString()
-    })
+    child.stdout.on('data', (data) => stdout.append(data.toString()))
+    child.stderr.on('data', (data) => stderr.append(data.toString()))
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       timedOut = true
       terminateProcess(child)
+      // A wedged child (or a failed taskkill) must not stall the whole suite.
+      watchdog = setTimeout(() => {
+        const duration = Math.round(performance.now() - startTime)
+        const captured = collect()
+        saveLog(scriptPath, `# ${scriptPath}\n# TIMEOUT after ${timeoutMs}ms; process did not exit after ${KILL_GRACE_MS}ms\n\n--- stdout ---\n${captured.stdout}\n\n--- stderr ---\n${captured.stderr}\n`)
+        finish({
+          name: scriptPath,
+          status: 'FAIL',
+          duration,
+          error: `Test timed out after ${timeoutMs}ms and did not exit ${KILL_GRACE_MS}ms after termination`,
+          logFile: path.join(LOG_DIR, `${path.basename(scriptPath).replace(/\.mjs$/, '')}.log`),
+          ...captured
+        })
+      }, KILL_GRACE_MS)
     }, timeoutMs)
 
     child.on('close', (code, signal) => {
-      clearTimeout(timer)
       const duration = Math.round(performance.now() - startTime)
+      const captured = collect()
+      const logFile = path.join(LOG_DIR, `${path.basename(scriptPath).replace(/\.mjs$/, '')}.log`)
+      saveLog(scriptPath, `# ${scriptPath}\n# exit=${code} signal=${signal || 'none'} timeout=${timedOut} duration=${duration}ms\n\n--- stdout ---\n${captured.stdout}\n\n--- stderr ---\n${captured.stderr}\n`)
 
       if (timedOut) {
-        resolve({
+        finish({
           name: scriptPath,
           status: 'FAIL',
           duration,
           error: `Test timed out after ${timeoutMs}ms`,
-          stdout,
-          stderr
+          logFile,
+          ...captured
         })
         return
       }
 
       if (signal) {
-        resolve({
+        finish({
           name: scriptPath,
           status: 'FAIL',
           duration,
           error: `Process terminated by signal ${signal}`,
-          stdout,
-          stderr
+          logFile,
+          ...captured
         })
         return
       }
 
-      const isSkipped = code === 0 && stdout.includes('SKIP:')
+      // A visible skip is only honoured on a clean exit and must be announced on
+      // its own line. Failures can never be reported as skips.
+      const isSkipped = code === 0 && /^\s*SKIP:/m.test(stdout.text())
       if (isSkipped) {
-        resolve({
+        finish({
           name: scriptPath,
           status: 'SKIP',
           duration,
-          stdout,
-          stderr
+          logFile,
+          ...captured
         })
         return
       }
 
       if (code !== 0) {
-        resolve({
+        finish({
           name: scriptPath,
           status: 'FAIL',
           duration,
           error: `Process exited with code ${code}`,
-          stdout,
-          stderr
+          logFile,
+          ...captured
         })
         return
       }
 
-      resolve({
+      finish({
         name: scriptPath,
         status: 'PASS',
         duration,
-        stdout,
-        stderr
+        logFile,
+        ...captured
       })
     })
 
     child.on('error', (err) => {
-      clearTimeout(timer)
       const duration = Math.round(performance.now() - startTime)
-      resolve({
+      const captured = collect()
+      finish({
         name: scriptPath,
         status: 'FAIL',
         duration,
         error: `Failed to spawn process: ${err.message}`,
-        stdout,
-        stderr
+        ...captured
       })
     })
   })
+}
+
+function printFailureDetails(result) {
+  if (result.error) console.log(`      ${result.error}`)
+  if (result.logFile) console.log(`      Log: ${path.relative(ROOT_DIR, result.logFile)}`)
+
+  const stderrTail = (result.stderr || '').trim()
+  const stdoutTail = (result.stdout || '').trim()
+
+  if (stderrTail) {
+    console.log('      --- stderr (tail) ---')
+    for (const line of stderrTail.split('\n').slice(-30)) console.log(`      ${line}`)
+  }
+  if (stdoutTail) {
+    console.log('      --- stdout (tail) ---')
+    for (const line of stdoutTail.split('\n').slice(-30)) console.log(`      ${line}`)
+  }
+  if (!stderrTail && !stdoutTail) console.log('      (test produced no output)')
 }
 
 async function main() {
@@ -363,16 +473,7 @@ async function main() {
       console.log(`\x1b[33mSKIP\x1b[0m (${(res.duration / 1000).toFixed(2)}s)`)
     } else {
       console.log(`\x1b[31mFAIL\x1b[0m (${(res.duration / 1000).toFixed(2)}s)`)
-      if (res.error) {
-        console.log(`      Error: ${res.error}`)
-      }
-      if (res.stderr && res.stderr.trim()) {
-        const lines = res.stderr.trim().split('\n').slice(-10)
-        console.log('      Stderr tail:')
-        for (const line of lines) {
-          console.log(`        ${line}`)
-        }
-      }
+      printFailureDetails(res)
     }
   }
 
@@ -390,6 +491,7 @@ async function main() {
     console.log('\nFailed tests:')
     for (const r of results.filter(r => r.status === 'FAIL')) {
       console.log(`  - ${r.name}: ${r.error || 'Unknown failure'}`)
+      if (r.logFile) console.log(`      log: ${path.relative(ROOT_DIR, r.logFile)}`)
     }
     console.log('='.repeat(70) + '\n')
     process.exit(1)

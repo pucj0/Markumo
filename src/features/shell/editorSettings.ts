@@ -4,7 +4,7 @@ import type { CaretAnimation } from '../../editor/core/caretMotion'
 import { defaultUpdatePreferences, type UpdatePreferences } from './updater/UpdatePreferences'
 import { defaultImageRules, imageRulesFrom, type ImageRules } from '../../editor/markdown/imageImport'
 import { bracketModes, type BracketMode } from '../../editor/core/brackets'
-import { syntaxStyles, type SyntaxStyle } from '../../editor/core/syntaxTheme'
+import { normalizeSyntaxStyle, type SyntaxStyle } from '../../editor/core/syntaxTheme'
 import { defaultMarkdownTypography, defaultMarkdownClipboard, type MarkdownClipboardSettings, type MarkdownTypography } from '../../editor/markdown/wysiwyg/contracts'
 import {
   type KeymapPresetId,
@@ -76,7 +76,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
   if (!raw || typeof raw !== 'object') return defaults
   const s = raw as Partial<EditorSettings>
   if (bracketModes.includes(s.bracketMode as BracketMode)) defaults.bracketMode = s.bracketMode!
-  if (syntaxStyles.includes(s.syntaxStyle as SyntaxStyle)) defaults.syntaxStyle = s.syntaxStyle!
+  defaults.syntaxStyle = normalizeSyntaxStyle(s.syntaxStyle)
   if (s.caretAnimation === 'off' || s.caretAnimation === 'quick' || s.caretAnimation === 'smooth') defaults.caretAnimation = s.caretAnimation
   if (Number.isInteger(s.outlineWidth) && s.outlineWidth! >= 160 && s.outlineWidth! <= 520) defaults.outlineWidth = s.outlineWidth!
   if (s.markdownClipboard && typeof s.markdownClipboard === 'object') {

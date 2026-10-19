@@ -30,10 +30,6 @@
   --syntax-deleted:#dba1ac;
   --syntax-heading:#b4afd5;
   --syntax-link:#9ebbd8;
-  --syntax-bracket-1:#b8b49a;
-  --syntax-bracket-2:#9eafb9;
-  --syntax-bracket-3:#b5a2b6;
-  --syntax-bracket-4:#9eb3a5;
   --syntax-bracket-match:#d4dce7;
   --syntax-bracket-invalid:#dfa7aa;
 }
@@ -67,10 +63,6 @@ body.light {
   --syntax-deleted:#aa4f60;
   --syntax-heading:#655c98;
   --syntax-link:#436f9b;
-  --syntax-bracket-1:#78704e;
-  --syntax-bracket-2:#5c7380;
-  --syntax-bracket-3:#806980;
-  --syntax-bracket-4:#5b7766;
   --syntax-bracket-match:#394f6b;
   --syntax-bracket-invalid:#a44d56;
 }
@@ -104,10 +96,6 @@ body[data-syntax-style="standard"] {
   --syntax-deleted:#e9a0b2;
   --syntax-heading:#bfade8;
   --syntax-link:#8dbfe8;
-  --syntax-bracket-1:#c8bd90;
-  --syntax-bracket-2:#9db9d3;
-  --syntax-bracket-3:#c1a3ce;
-  --syntax-bracket-4:#9dc4b1;
   --syntax-bracket-match:#e2e9f3;
   --syntax-bracket-invalid:#e69aa5;
 }
@@ -141,10 +129,6 @@ body.light[data-syntax-style="standard"] {
   --syntax-deleted:#b84260;
   --syntax-heading:#6d4da4;
   --syntax-link:#2b6da9;
-  --syntax-bracket-1:#887331;
-  --syntax-bracket-2:#406f98;
-  --syntax-bracket-3:#8a579a;
-  --syntax-bracket-4:#387459;
   --syntax-bracket-match:#294e7c;
   --syntax-bracket-invalid:#b33f51;
 }
@@ -178,10 +162,6 @@ body[data-syntax-style="vivid"] {
   --syntax-deleted:#ef9eaf;
   --syntax-heading:#c8adea;
   --syntax-link:#8dc9e8;
-  --syntax-bracket-1:#d3bd87;
-  --syntax-bracket-2:#91c4d8;
-  --syntax-bracket-3:#c6a0d5;
-  --syntax-bracket-4:#a1c9ae;
   --syntax-bracket-match:#eef1f8;
   --syntax-bracket-invalid:#ee9ca8;
 }
@@ -215,12 +195,30 @@ body.light[data-syntax-style="vivid"] {
   --syntax-deleted:#bb3e5a;
   --syntax-heading:#8450b0;
   --syntax-link:#2178a0;
-  --syntax-bracket-1:#907322;
-  --syntax-bracket-2:#286e92;
-  --syntax-bracket-3:#9155a2;
-  --syntax-bracket-4:#367948;
   --syntax-bracket-match:#244d7c;
   --syntax-bracket-invalid:#be3f55;
+}
+
+/* Keep nesting colors distinct even with the soft syntax style. */
+:root {
+  --syntax-bracket-1:#ffd700;
+  --syntax-bracket-2:#47c4ff;
+  --syntax-bracket-3:#d68cff;
+  --syntax-bracket-4:#68de8e;
+  --syntax-bracket-5:#ffa657;
+  --syntax-bracket-6:#45d9df;
+  --syntax-bracket-7:#ff82b2;
+  --syntax-bracket-8:#b8df59;
+}
+body.light {
+  --syntax-bracket-1:#9a6700;
+  --syntax-bracket-2:#006bb3;
+  --syntax-bracket-3:#9c32bc;
+  --syntax-bracket-4:#147b3c;
+  --syntax-bracket-5:#b24b00;
+  --syntax-bracket-6:#007982;
+  --syntax-bracket-7:#b52873;
+  --syntax-bracket-8:#537600;
 }
 
 /* Shared stable classes for CodeMirror, Markdown previews and exports. */
@@ -261,11 +259,15 @@ body.light[data-syntax-style="vivid"] {
 .mk-syntax-link { text-decoration:underline }
 .cm-content, .md-preview-fence code { color:var(--syntax-foreground, inherit) }
 
-/* Marks change neither text metrics nor selection/search backgrounds. Matching
-   wins even when CM nests the syntax/rainbow spans in either order. */
-.cm-content .mk-bracket-1 { color:var(--syntax-bracket-1, var(--syntax-punctuation)) }
-.cm-content .mk-bracket-2 { color:var(--syntax-bracket-2, var(--syntax-punctuation)) }
-.cm-content .mk-bracket-3 { color:var(--syntax-bracket-3, var(--syntax-punctuation)) }
-.cm-content .mk-bracket-4 { color:var(--syntax-bracket-4, var(--syntax-punctuation)) }
-.cm-content .mk-bracket-match, .cm-content .mk-bracket-match * { color:var(--syntax-bracket-match, var(--syntax-foreground));text-decoration:underline;text-decoration-thickness:1.5px;text-underline-offset:3px }
+/* Reach the glyph even when syntax spans are nested inside a rainbow mark.
+   Matching adds an underline without replacing the nesting color. */
+.cm-content .mk-bracket-1, .cm-content .mk-bracket-1 * { color:var(--syntax-bracket-1, var(--syntax-punctuation)) }
+.cm-content .mk-bracket-2, .cm-content .mk-bracket-2 * { color:var(--syntax-bracket-2, var(--syntax-punctuation)) }
+.cm-content .mk-bracket-3, .cm-content .mk-bracket-3 * { color:var(--syntax-bracket-3, var(--syntax-punctuation)) }
+.cm-content .mk-bracket-4, .cm-content .mk-bracket-4 * { color:var(--syntax-bracket-4, var(--syntax-punctuation)) }
+.cm-content .mk-bracket-5, .cm-content .mk-bracket-5 * { color:var(--syntax-bracket-5, var(--syntax-punctuation)) }
+.cm-content .mk-bracket-6, .cm-content .mk-bracket-6 * { color:var(--syntax-bracket-6, var(--syntax-punctuation)) }
+.cm-content .mk-bracket-7, .cm-content .mk-bracket-7 * { color:var(--syntax-bracket-7, var(--syntax-punctuation)) }
+.cm-content .mk-bracket-8, .cm-content .mk-bracket-8 * { color:var(--syntax-bracket-8, var(--syntax-punctuation)) }
+.cm-content .mk-bracket-match { text-decoration:underline;text-decoration-color:var(--syntax-bracket-match);text-decoration-thickness:1.5px;text-underline-offset:3px }
 .cm-content .mk-bracket-invalid, .cm-content .mk-bracket-invalid * { color:var(--syntax-bracket-invalid, var(--syntax-invalid));text-decoration:underline wavy;text-decoration-thickness:1px;text-underline-offset:3px }
