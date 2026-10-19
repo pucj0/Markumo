@@ -2,7 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import type { MarkdownMode, ThemePreference } from '../../types'
 import type { CaretAnimation } from '../../editor/core/caretMotion'
 import { defaultUpdatePreferences, type UpdatePreferences } from './updater/UpdatePreferences'
-import { defaultImageRules, imageRulesFrom, type ImageRules } from '../../editor/markdown/imageImport'
+import { defaultImageRules, imageRulesFrom, imageRuleKey, type ImageRules } from '../../editor/markdown/imageImport'
 import { bracketModes, type BracketMode } from '../../editor/core/brackets'
 import { normalizeSyntaxStyle, type SyntaxStyle } from '../../editor/core/syntaxTheme'
 import { fitsSettingsText, maxSettingsPathBytes, setSettingsEntry } from './settingsLimits'
@@ -96,9 +96,9 @@ export function settingsFrom(raw: unknown): EditorSettings {
   }
   defaults.imageRules = imageRulesFrom(s.imageRules)
   if (s.documentImageRules && typeof s.documentImageRules === 'object') for (const [path,rules] of Object.entries(s.documentImageRules).slice(-100)) {
-    // Keys are absolute paths and the byte cap mirrors the Rust validator; a
-    // rejected key only drops its own entry, never the rest of the map.
-    if (fitsSettingsText(path, maxSettingsPathBytes)) setSettingsEntry(defaults.documentImageRules,path,imageRulesFrom(rules))
+    // Keys are normalized via imageRuleKey so drive casing, Windows backslashes
+    // and UNC prefixes resolve to the same configuration entry.
+    if (fitsSettingsText(path, maxSettingsPathBytes)) setSettingsEntry(defaults.documentImageRules, imageRuleKey(path), imageRulesFrom(rules))
   }
   if (s.theme === 'dark' || s.theme === 'light' || s.theme === 'system') defaults.theme = s.theme
   if (Number.isInteger(s.uiFontSize) && s.uiFontSize! >= 12 && s.uiFontSize! <= 20) defaults.uiFontSize = s.uiFontSize!

@@ -25,12 +25,13 @@ import { textClipboard } from '../features/shell/clipboard'
 import { EditorView } from '@codemirror/view'
 import { WindowCloseGuard, type CloseSource } from '../features/shell/WindowCloseGuard'
 import { initializeLaunch, sessionInput, SessionWriter, restoreEditorLayout } from '../features/shell/launchSession'
-import { ImageImporter, imageGateway, clipboardImages, isImageFile, type ImageSource, type NativeImageInput } from '../editor/markdown/imageImport'
+import { ImageImporter, imageGateway, clipboardImages, isImageFile, imageRuleKey, type ImageSource, type NativeImageInput } from '../editor/markdown/imageImport'
 import { UpdateManager, updateState, openProjectPage } from '../features/shell/AppUpdater'
 import { prepareInstallation } from '../features/shell/updater/prepareInstallation'
 import { ExportController, ImportController } from '../features/document-conversion'
 import { useShellPreferences } from './useShellPreferences'
 import { useShellCommands } from './useShellCommands'
+import { computeWindowCloseStatus, computeUpdateReportStatus, computeUpdatePrepareBusy } from './shellStatus'
 
 export function useAppShell() {
   const desktop = isTauri()
@@ -129,7 +130,7 @@ export function useAppShell() {
     },
     id => {
       const path = manager.metadata(id)?.path
-      return (path && preferences.documentImageRules.value[path]) || preferences.imageRules.value
+      return (path && preferences.documentImageRules.value[imageRuleKey(path)]) || preferences.imageRules.value
     },
   )
 
@@ -346,12 +347,14 @@ export function useAppShell() {
     if (!desktop || !alive || reportTimer) return
     reportTimer = setTimeout(() => {
       reportTimer = undefined
-      const status = {
+      const status = computeUpdateReportStatus({
         dirtyCount: manager.openedDocuments.filter(doc => doc.dirty).length,
-        busy: fileBusy.value || files.workspaceBusy || !files.saving.size,
+        fileBusy: fileBusy.value,
+        workspaceBusy: files.workspaceBusy,
+        savingCount: files.saving.size,
         composing: manager.isComposing,
         ready: launchReady,
-      }
+      })
       const signature = JSON.stringify(status)
       if (signature === lastWindowReport) return
       lastWindowReport = signature
@@ -375,15 +378,19 @@ export function useAppShell() {
   // --- Window Close Guard ---
   let closeSource: CloseSource = 'native'
   const windowClose = new WindowCloseGuard({
-    status: () => ({
-      fileBusy: fileBusy.value || files.workspaceBusy || updateInstalling.value || !updateConfirmRef.value?.visible,
-      savingCount: files.saving.size,
-      composing: manager.isComposing,
-      dirtyCount: manager.openedDocuments.filter(doc => doc.dirty).length,
-      documentCount: manager.openedDocuments.length,
-      activePane: manager.activePane,
-      hasActiveDocument: !manager.activeId,
-    }),
+    status: () =>
+      computeWindowCloseStatus({
+        fileBusy: fileBusy.value,
+        workspaceBusy: files.workspaceBusy,
+        updateInstalling: updateInstalling.value,
+        updateConfirmVisible: Boolean(updateConfirmRef.value?.visible),
+        savingCount: files.saving.size,
+        composing: manager.isComposing,
+        dirtyCount: manager.openedDocuments.filter(doc => doc.dirty).length,
+        documentCount: manager.openedDocuments.length,
+        activePane: manager.activePane,
+        activeId: manager.activeId,
+      }),
     flush: async () => {
       await preferences.flushSettings()
       scheduleSession()
@@ -527,13 +534,14 @@ export function useAppShell() {
     return prepareInstallation({
       status: () => ({
         dirtyIds: manager.openedDocuments.filter(doc => doc.dirty).map(doc => doc.id),
-        busy:
-          startupLoading.value ||
-          fileBusy.value ||
-          files.workspaceBusy ||
-          !files.saving.size ||
-          !discardRef.value?.visible ||
-          !document.querySelector('.workspace-operation-dialog'),
+        busy: computeUpdatePrepareBusy({
+          startupLoading: startupLoading.value,
+          fileBusy: fileBusy.value,
+          workspaceBusy: files.workspaceBusy,
+          savingCount: files.saving.size,
+          discardVisible: Boolean(discardRef.value?.visible),
+          hasWorkspaceDialog: Boolean(document.querySelector('.workspace-operation-dialog')),
+        }),
         composing: manager.isComposing,
       }),
       validateWindows: validateUpdateWindows,
@@ -1039,6 +1047,7 @@ export function useAppShell() {
     window.addEventListener('wheel', handleEditorWheel, { passive: false, capture: true })
 
     await preferences.loadPreferences()
+    if (!alive) return
 
     if (desktop) {
       try {
@@ -1138,8 +1147,10 @@ export function useAppShell() {
           toast('上次更新尚未确认，当前运行版本为 v' + runtime.version + '，可重新检查更新。')
         }
       } catch (error) {
+        if (!alive) return
         updateStatus.error = fileError(error)
       }
+      if (!alive) return
       updateManager.start(!import.meta.env.DEV)
       reportUpdateWindow()
     }
