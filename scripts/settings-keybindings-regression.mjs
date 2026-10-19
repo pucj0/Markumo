@@ -8,14 +8,16 @@ fs.writeFileSync(`${output}/index.html`,'<!doctype html><meta charset="utf-8"><l
 fs.writeFileSync(`${output}/fixture.js`, `
 import {createApp,nextTick} from 'vue';import App from '/src/App.vue';
 import * as keys from '/src/features/shell/keybindings/index.ts';import * as settings from '/src/features/shell/editorSettings.ts';
+import {DoubleShiftShortcut} from '/src/features/shell/keybindings/DoubleShiftShortcut.ts';
 import {mainMenu} from '/src/features/shell/mainMenu.ts';import {resolveMenu} from '/src/features/shell/menuModel.ts';
 import {imageRulesFrom} from '/src/editor/markdown/imageImport.ts';
 import {EditorView} from '@codemirror/view';import {EditorSelection} from '@codemirror/state';
 import '/src/styles/reset.css';import '/src/styles/variables.css';import '/src/styles/main.css';import '/src/editor/markdown/styles.css';import '/src/editor/core/searchPanel.css';
-const app=createApp(App);app.mount('#app');window.s=app._instance.setupState;window.f={...keys,...settings,mainMenu,resolveMenu,imageRulesFrom,EditorView,EditorSelection,nextTick};
+const app=createApp(App);app.mount('#app');window.s=app._instance.setupState;window.f={...keys,...settings,DoubleShiftShortcut,mainMenu,resolveMenu,imageRulesFrom,EditorView,EditorSelection,nextTick};
 window.doc=async(text,kind='txt',mode='source')=>{const m=window.s.manager;m.mergeAllPanes();m.createUntitled(kind);const id=m.activeId;m.dispatch(id,{changes:{from:0,to:m.getState(id).doc.length,insert:text},selection:{anchor:0}});if(kind==='md')m.setMarkdownMode(id,mode);await nextTick();return id};
 `)
-const server=await createServer({server:{host:'127.0.0.1',port:1434,strictPort:true}});await server.listen()
+const port=Number(process.env.MARKUMO_TEST_PORT||1434)
+const server=await createServer({server:{host:'127.0.0.1',port,strictPort:true}});await server.listen()
 const browser=await chromium.launch({executablePath:process.env.MARKUMO_CHROME,headless:true,ignoreDefaultArgs:['--hide-scrollbars'],args:['--no-sandbox']})
 const page=await browser.newPage({viewport:{width:1200,height:850},reducedMotion:'reduce'})
 const errors=[],results=[];page.on('pageerror',error=>errors.push(error.message))
@@ -87,7 +89,7 @@ const row=id=>page.locator('.shortcut-item-row').filter({has:page.locator(`[data
 async function edit(id,key){await page.getByRole('textbox',{name:'搜索快捷键',exact:true}).fill(id);const target=row(id);await target.locator('.keycap-container').click();await page.keyboard.press(key);return target}
 async function text(){return page.evaluate(()=>window.s.manager.getState(window.s.manager.activeId).doc.toString())}
 try{
- await page.goto('http://127.0.0.1:1434/test-results/settings-keybindings/index.html');await page.waitForFunction(()=>window.s?.manager&&window.f)
+ await page.goto(`http://127.0.0.1:${port}/test-results/settings-keybindings/index.html`);await page.waitForFunction(()=>window.s?.manager&&window.f)
  await test('catalog defaults, presets, every command has an actual shell entry',async()=>{
    const result=await page.evaluate(()=>{const f=window.f;return {missing:f.allCommands.filter(c=>!window.s.commandRegistry.get(c.id)).map(c=>c.id),presets:['markumo','fleet','typora'].map(id=>({id,errors:f.validatePresetConflicts(f.getPresetBindings(id)),validation:f.validateShortcuts(f.getPresetBindings(id))})),count:Object.keys(f.defaultSettings().shortcuts).length,catalog:f.allCommands.length}})
    assert.deepEqual(result.missing,[]);assert.equal(result.count,result.catalog);for(const preset of result.presets){assert.deepEqual(preset.errors,[]);assert.equal(preset.validation,null)}
@@ -338,5 +340,76 @@ try{
  await test('restore entire active preset and changed/unbound filters reflect the committed config',async()=>{
    await page.getByRole('textbox',{name:'搜索快捷键',exact:true}).fill('');await page.getByRole('radiogroup',{name:'筛选快捷键'}).getByRole('radio',{name:'已修改',exact:true}).click();assert.ok(await page.locator('.shortcut-item-row').count()>0);await page.getByRole('button',{name:'恢复默认',exact:true}).first().click();await page.getByRole('button',{name:'确认应用',exact:true}).click();await page.waitForTimeout(60);assert.equal(await page.locator('.shortcut-item-row').count(),0);await page.waitForFunction(()=>{const saved=JSON.parse(localStorage.getItem('markumo.settings.v1')||'{}');return Object.entries(window.s.shortcuts).every(([id,binding])=>saved.shortcuts?.[id]===binding)});await closeSettings();await page.reload();await page.waitForFunction(()=>window.s?.shortcuts?.table==='Mod+T');assert.deepEqual(await page.evaluate(()=>window.s.shortcuts),await page.evaluate(()=>window.f.getPresetBindings(window.s.keymapPreset)))
  })
+ await test('double Shift requires two clean short taps and rejects holds, modifiers, IME and overlapping keys',async()=>{
+   const result=await page.evaluate(()=>{
+     const runs={};
+     for(const kind of ['clean','right','repeat','hold','slow','letter','modifier','composing','overlap','blocked']){
+       let now=0,hits=0;const detector=new window.f.DoubleShiftShortcut(()=>hits++,()=>kind!=='blocked',()=>now);
+       const down=(key='Shift',extras={})=>detector.keydown(new KeyboardEvent('keydown',{key,...extras}));
+       const up=(key='Shift',extras={})=>detector.keyup(new KeyboardEvent('keyup',{key,...extras}));
+       down();now+=20;up();now+=30;
+       if(kind==='letter'){down();down('A',{shiftKey:true});up('A',{shiftKey:true});up();}
+       else if(kind==='modifier'){down('Control',{ctrlKey:true});up('Control');}
+       else if(kind==='composing'){down('Shift',{isComposing:true});up('Shift',{isComposing:true});}
+       else if(kind==='overlap'){down();down('Shift',{code:'ShiftRight'});up('Shift',{shiftKey:true});up();}
+       else {if(kind==='slow')now+=500;down('Shift',{code:kind==='right'?'ShiftRight':'ShiftLeft'});if(kind==='repeat'){now+=500;down('Shift',{repeat:true});}if(kind==='hold')now+=500;now+=20;up();}
+       runs[kind]=hits;
+     }
+     return runs;
+   });
+   assert.deepEqual(result,{clean:1,right:1,repeat:0,hold:0,slow:0,letter:0,modifier:0,composing:0,overlap:0,blocked:0});
+ })
+ await test('real double Shift focuses file-only search, filters files and opens the selected document',async()=>{
+   await closeSettings();
+   const target=await page.evaluate(async()=>{await window.doc('double Shift target');const m=window.s.manager,target={id:m.activeId,name:m.activeDocument.name};await window.doc('other document');m.activeEditorView.focus();return target;});
+   await page.keyboard.press('ShiftLeft');assert.equal(await page.evaluate(()=>window.s.paletteRef.visible),false);
+   await page.keyboard.press('ShiftRight');await page.getByRole('textbox',{name:'搜索文件或命令',exact:true}).waitFor();
+   const search=page.getByRole('textbox',{name:'搜索文件或命令',exact:true});assert.equal(await search.evaluate(el=>el===document.activeElement),true);
+   assert.equal(await page.getByRole('button',{name:'快速打开文件',exact:true}).count(),0);
+   await search.fill(target.name);await page.keyboard.press('ShiftLeft');await page.keyboard.press('ShiftLeft');assert.equal(await search.inputValue(),target.name);
+   await page.screenshot({path:`${output}/double-shift-files.png`});await search.press('Enter');
+   await page.waitForFunction(id=>window.s.manager.activeId===id,target.id);assert.equal(await page.evaluate(()=>window.s.manager.getText(window.s.manager.activeId)),'double Shift target');
+   await page.keyboard.press('Control+p');await search.waitFor();await page.keyboard.press('Escape');
+ })
+ await test('Shift selection, window blur, pointer use, IME and settings never cause accidental file search',async()=>{
+   await page.evaluate(()=>window.s.manager.activeEditorView.focus());
+   await page.keyboard.press('Shift+ArrowRight');assert.ok(await page.evaluate(()=>!window.s.manager.activeEditorView.state.selection.main.empty));
+   await page.keyboard.press('ShiftLeft');assert.equal(await page.evaluate(()=>window.s.paletteRef.visible),false);
+   for(const resetEvent of ['blur','pointerdown','compositionstart']){
+     await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.keyboard.press('ShiftLeft');
+     await page.evaluate(type=>window.dispatchEvent(new Event(type)),resetEvent);await page.keyboard.press('ShiftLeft');assert.equal(await page.evaluate(()=>window.s.paletteRef.visible),false,resetEvent);
+   }
+   await page.evaluate(()=>{window.dispatchEvent(new Event('blur'));for(let i=0;i<2;i++)for(const type of ['keydown','keyup'])document.activeElement.dispatchEvent(new KeyboardEvent(type,{key:'Shift',isComposing:true,bubbles:true,cancelable:true}));});
+   assert.equal(await page.evaluate(()=>window.s.paletteRef.visible),false);
+   await openSettings('shortcuts');await page.keyboard.press('ShiftLeft');await page.keyboard.press('ShiftLeft');assert.equal(await page.evaluate(()=>window.s.paletteRef.visible),false);await closeSettings();
+ })
+  await test('settings lifecycle: rapid modifications debounce, flush forces write, save errors are surfaced', async () => {
+    await page.evaluate(async () => {
+      const s = window.s
+      s.fontSize = 15
+      s.fontSize = 16
+      s.fontSize = 18
+    })
+    await page.waitForFunction(() => {
+      const saved = JSON.parse(localStorage.getItem('markumo.settings.v1') || '{}')
+      return saved.fontSize === 18
+    })
+    const errorSurfaced = await page.evaluate(async () => {
+      const originalSet = localStorage.setItem
+      let toastMsg = ''
+      const originalToast = window.s.toastRef.show
+      window.s.toastRef.show = (msg) => { toastMsg = msg }
+      try {
+        localStorage.setItem = () => { throw new Error('QuotaExceeded') }
+        window.s.fontSize = 20
+        await new Promise(r => setTimeout(r, 350))
+        return toastMsg.includes('QuotaExceeded') || toastMsg.includes('首选项保存失败')
+      } finally {
+        localStorage.setItem = originalSet
+        window.s.toastRef.show = originalToast
+      }
+    })
+    assert.equal(errorSurfaced, true)
+  })
  assert.deepEqual(errors,[]);console.log(`PASS ${results.length} settings/keybinding regressions`)
 }finally{fs.writeFileSync(`${output}/results.json`,JSON.stringify({results,errors},null,2));await browser.close();await server.close()}

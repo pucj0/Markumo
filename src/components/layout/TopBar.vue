@@ -7,7 +7,7 @@
 
     <button
       class="quickbtn"
-      :title="`${shortcutLabel(quickShortcut)} 快速打开`"
+      :title="`${shortcutLabel(quickShortcut)} 或双击 Shift 快速搜索文件`"
       @click="$emit('open-palette', 'file')"
     >
       <Icon name="search" />

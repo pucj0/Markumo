@@ -22,7 +22,7 @@ const definitions: Omit<KeybindingCommand,'executeId'|'supported'|'contexts'|'us
     id: 'quick-open',
     label: '快速打开文件',
     category: 'file',
-    description: '通过文件名快速检索并打开文件',
+    description: '通过文件名快速检索并打开文件，也可双击 Shift 打开',
     scope: 'workspace',
     defaultBinding: 'Mod+P',
   },
