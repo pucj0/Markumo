@@ -47,6 +47,9 @@ export interface EditorSettings extends UpdatePreferences {
   shortcuts: Record<ShortcutAction, string>; fileModes: Record<string, MarkdownMode>
 }
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
+/** Per-document maps are capped by the Rust validator too: keeping the same
+ * limits avoids dropping entries that the desktop side already stored. */
+export const maxSettingsPathLength = 16384
 export function defaultSettings(): EditorSettings {
   const markdownClipboard = defaultMarkdownClipboard(), outlineWidth = 240
   return { bracketMode: 'matching', syntaxStyle: 'soft', ...defaultUpdatePreferences(), caretAnimation: 'smooth', outlineWidth, markdownClipboard, markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 4, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, treeClickMode: 'single', autoFollowActiveFile: false, smartExpand: true, compactFolders: false, keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: currentShortcutVersion, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
@@ -94,7 +97,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
   }
   defaults.imageRules = imageRulesFrom(s.imageRules)
   if (s.documentImageRules && typeof s.documentImageRules === 'object') for (const [path,rules] of Object.entries(s.documentImageRules).slice(-100)) {
-    if (path && path.length <= 4096 && !['__proto__','constructor','prototype'].includes(path)) Object.defineProperty(defaults.documentImageRules,path,{value:imageRulesFrom(rules),enumerable:true,configurable:true,writable:true})
+    if (path && path.length <= maxSettingsPathLength && !['__proto__','constructor','prototype'].includes(path)) Object.defineProperty(defaults.documentImageRules,path,{value:imageRulesFrom(rules),enumerable:true,configurable:true,writable:true})
   }
   if (s.theme === 'dark' || s.theme === 'light' || s.theme === 'system') defaults.theme = s.theme
   if (Number.isInteger(s.uiFontSize) && s.uiFontSize! >= 12 && s.uiFontSize! <= 20) defaults.uiFontSize = s.uiFontSize!
@@ -146,7 +149,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
   }
   defaults.customShortcuts = [...explicit]
   defaults.shortcuts = shortcuts
-  for (const [path,mode] of Object.entries(s.fileModes || {}).slice(-100)) if (path.length <= 4096 && ['live','source','split'].includes(mode)) defaults.fileModes[path] = mode
+  for (const [path,mode] of Object.entries(s.fileModes || {}).slice(-100)) if (path.length <= maxSettingsPathLength && ['live','source','split'].includes(mode)) defaults.fileModes[path] = mode
   return defaults
 }
 export function macPlatform(platform = globalThis.navigator?.platform || '') { return /Mac|iPhone|iPad/i.test(platform) }

@@ -8,9 +8,11 @@ fs.writeFileSync(`${output}/index.html`,'<!doctype html><meta charset="utf-8"><l
 fs.writeFileSync(`${output}/fixture.js`, `
 import {createApp,nextTick} from 'vue';import App from '/src/App.vue';
 import * as keys from '/src/features/shell/keybindings/index.ts';import * as settings from '/src/features/shell/editorSettings.ts';
+import {mainMenu} from '/src/features/shell/mainMenu.ts';import {resolveMenu} from '/src/features/shell/menuModel.ts';
+import {imageRulesFrom} from '/src/editor/markdown/imageImport.ts';
 import {EditorView} from '@codemirror/view';import {EditorSelection} from '@codemirror/state';
 import '/src/styles/reset.css';import '/src/styles/variables.css';import '/src/styles/main.css';import '/src/editor/markdown/styles.css';import '/src/editor/core/searchPanel.css';
-const app=createApp(App);app.mount('#app');window.s=app._instance.setupState;window.f={...keys,...settings,EditorView,EditorSelection,nextTick};
+const app=createApp(App);app.mount('#app');window.s=app._instance.setupState;window.f={...keys,...settings,mainMenu,resolveMenu,imageRulesFrom,EditorView,EditorSelection,nextTick};
 window.doc=async(text,kind='txt',mode='source')=>{const m=window.s.manager;m.mergeAllPanes();m.createUntitled(kind);const id=m.activeId;m.dispatch(id,{changes:{from:0,to:m.getState(id).doc.length,insert:text},selection:{anchor:0}});if(kind==='md')m.setMarkdownMode(id,mode);await nextTick();return id};
 `)
 const server=await createServer({server:{host:'127.0.0.1',port:1434,strictPort:true}});await server.listen()
@@ -89,6 +91,66 @@ try{
  await test('catalog defaults, presets, every command has an actual shell entry',async()=>{
    const result=await page.evaluate(()=>{const f=window.f;return {missing:f.allCommands.filter(c=>!window.s.commandRegistry.get(c.id)).map(c=>c.id),presets:['markumo','fleet','typora'].map(id=>({id,errors:f.validatePresetConflicts(f.getPresetBindings(id)),validation:f.validateShortcuts(f.getPresetBindings(id))})),count:Object.keys(f.defaultSettings().shortcuts).length,catalog:f.allCommands.length}})
    assert.deepEqual(result.missing,[]);assert.equal(result.count,result.catalog);for(const preset of result.presets){assert.deepEqual(preset.errors,[]);assert.equal(preset.validation,null)}
+ })
+ await test('command catalog, palette and menus expose exactly one entry per command',async()=>{
+  const result=await page.evaluate(()=>{
+    const s=window.s,f=window.f,registry=s.commandRegistry,actions=s.paletteActions
+    const ids=actions.map(action=>action.id)
+    const duplicateIds=ids.filter((id,index)=>ids.indexOf(id)!==index)
+    const byDefinition=new Map()
+    for(const action of actions){const definition=f.commandDefinition(action.id);if(!definition)continue;const list=byDefinition.get(definition.id)||[];list.push(action.id);byDefinition.set(definition.id,list)}
+    const sharedActions=[...byDefinition].filter(([,list])=>list.length>1).map(([id,list])=>id+':'+list.join(','))
+    const missingCommands=f.allCommands.filter(command=>!registry.get(command.id)).map(command=>command.id)
+    // Every palette row that represents a configurable command must show the
+    // binding the user actually configured, formatted for this platform.
+    const paletteShortcuts=actions.flatMap(action=>{
+      const definition=f.commandDefinition(action.id);if(!definition)return []
+      const expected=f.shortcutLabel(s.shortcuts[definition.id]||'')
+      return action.detail===expected?[]:[action.id+':'+action.detail+' != '+expected]
+    })
+    const state={sidebar:true,outline:false,wrap:false,split:false,focus:false,markdown:true,markdownMode:'live',composing:false,recentFiles:[],recentWorkspaces:[],canExport:true}
+    const menuItems=[]
+    const walk=nodes=>{for(const node of nodes){if(node.type==='separator')continue;menuItems.push(node);if(node.children)walk(node.children)}}
+    for(const group of f.mainMenu(state))walk(f.resolveMenu(group.items,registry))
+    // A menu entry is dead when its command id is not registered: the item
+    // renders but cannot execute.
+    const deadMenu=menuItems.filter(node=>node.commandId&&!registry.get(node.commandId)).map(node=>node.commandId)
+    const menuShortcuts=menuItems.flatMap(node=>{
+      if(!node.commandId)return []
+      const definition=f.commandDefinition(node.commandId);if(!definition)return []
+      const expected=s.shortcuts[definition.id]||''
+      return (node.shortcut||'')===expected?[]:[node.commandId+':'+(node.shortcut||'')+' != '+expected]
+    })
+    return {duplicateIds,sharedActions,missingCommands,paletteShortcuts,deadMenu,menuShortcuts,menuItemCount:menuItems.length}
+  })
+  assert.deepEqual(result.duplicateIds,[])
+  assert.deepEqual(result.sharedActions,[])
+  assert.deepEqual(result.missingCommands,[])
+  assert.deepEqual(result.paletteShortcuts,[])
+  assert.deepEqual(result.deadMenu,[])
+  assert.deepEqual(result.menuShortcuts,[])
+  assert.ok(result.menuItemCount>40,'menu resolution lost items')
+ })
+ await test('desktop and web settings share fields, enumerations and limits',async()=>{
+  const rust=fs.readFileSync('src-tauri/src/commands/settings.rs','utf8')
+  const struct=/pub struct EditorSettings \{([\s\S]*?)\n\}/.exec(rust)[1]
+  const rustFields=[...struct.matchAll(/^ {4}([a-z_]+):/gm)].map(match=>match[1].replace(/_([a-z])/g,(_,letter)=>letter.toUpperCase())).sort()
+  const webFields=await page.evaluate(()=>Object.keys(window.f.persistedSettings(window.f.defaultSettings())).sort())
+  assert.deepEqual(rustFields,webFields)
+  const enums={bracketMode:['off','matching','rainbow'],theme:['dark','light','system'],caretAnimation:['off','quick','smooth'],treeClickMode:['single','double'],keymapPreset:['markumo','fleet','typora'],defaultMdMode:['live','source','split'],fontFamily:['system','consolas','cascadia']}
+  for(const [key,values] of Object.entries(enums)){
+    for(const value of values)assert.ok(rust.includes(`"${value}"`),`Rust rejects ${key}=${value}`)
+    assert.deepEqual(await page.evaluate(([key,values])=>values.map(value=>window.f.settingsFrom({[key]:value})[key]),[key,values]),values)
+    const fallback=await page.evaluate(key=>window.f.settingsFrom({[key]:'__unsupported__'})[key],key)
+    assert.ok(values.includes(fallback),`${key} fell back to an unsupported value: ${fallback}`)
+  }
+  // Numeric caps must agree, otherwise a value accepted here is dropped by the
+  // other side on the next save.
+  const directoryLimit=Number(/custom_directory\.len\(\)\s*<=\s*(\d+)/.exec(rust)[1])
+  assert.deepEqual(await page.evaluate(limit=>[window.f.imageRulesFrom({customDirectory:'x'.repeat(limit)}).customDirectory.length,window.f.imageRulesFrom({customDirectory:'x'.repeat(limit+1)}).customDirectory.length],directoryLimit),[directoryLimit,'./assets/'.length])
+  const pathLimit=Number(/path\.len\(\)\s*>\s*(\d+)/.exec(rust)[1])
+  assert.deepEqual(await page.evaluate(limit=>Object.keys(window.f.settingsFrom({fileModes:{['a'.repeat(limit)]:'source'}}).fileModes).map(key=>key.length),pathLimit),[pathLimit])
+  assert.equal(await page.evaluate(limit=>Object.keys(window.f.settingsFrom({fileModes:{['a'.repeat(limit+1)]:'source'}}).fileModes).length,pathLimit),0)
  })
  await test('per-entry legacy migration preserves custom/cleared/full-map bindings and added prefs',async()=>{
   const result=await page.evaluate(()=>{const f=window.f,s=f.settingsFrom({shortcutVersion:3,keymapPreset:'fleet',shortcuts:{new:'Mod+Alt+N',bold:'',table:'Mod+Alt+T','delete-line':'Mod+Y'},customShortcuts:['new','bold','table'],caretAnimation:'quick',autoDownloadUpdates:true});const round=f.settingsFrom(f.persistedSettings(s));const old=f.settingsFrom({shortcutVersion:1,shortcuts:{sidebar:'Mod+B',replace:'Mod+H'}});const bad=f.settingsFrom({shortcuts:{new:'Mod+Alt+N',bold:'invalid key'}});return {bindings:round.shortcuts,custom:round.customShortcuts,prefs:[round.caretAnimation,round.autoDownloadUpdates],old:[old.shortcuts.sidebar,old.shortcuts.replace],bad:bad.shortcuts.new}})
@@ -183,7 +245,7 @@ try{
  await test('Typora fence key executes in live and source modes; menus show canonical custom bindings',async()=>{
    await page.evaluate(()=>{window.s.updateKeymap({preset:'typora',bindings:window.f.getPresetBindings('typora')});return window.doc('example','md','live')});await page.waitForSelector('.md-prose');await page.locator('.md-prose').click();await page.keyboard.press('Control+Shift+K');await page.waitForSelector('.md-code-block .cm-content');assert.ok((await text()).includes('example'))
    await page.evaluate(()=>window.doc('source','md','source'));await page.waitForSelector('.cm-content');await page.evaluate(()=>window.s.manager.activeEditorView.focus());await page.keyboard.press('Control+Shift+K');assert.ok((await text()).includes('\x60\x60\x60'))
-   const hints=await page.evaluate(()=>{const s=window.s;s.updateShortcuts({...s.shortcuts,table:'Mod+Alt+T'});return [s.commandRegistry.get('format-table').shortcut,s.commandRegistry.get('table').shortcut,s.commandRegistry.get('close-pane').id]});assert.deepEqual(hints,['Mod+Alt+T','Mod+Alt+T','close-pane'])
+   const hints=await page.evaluate(()=>{const s=window.s;s.updateShortcuts({...s.shortcuts,table:'Mod+Alt+T'});const state={sidebar:true,outline:false,wrap:false,split:false,focus:false,markdown:true,markdownMode:'live',composing:false,recentFiles:[],recentWorkspaces:[],canExport:true};const group=window.f.mainMenu(state).find(item=>item.id==='format');const resolved=window.f.resolveMenu(group.items,s.commandRegistry);const tableItem=resolved.find(node=>node.commandId==='table');return [tableItem?.shortcut,s.commandRegistry.get('table').shortcut,s.commandRegistry.get('close-pane').id,resolved.map(node=>node.id).join(',')]});assert.deepEqual(hints.slice(0,3),['Mod+Alt+T','Mod+Alt+T','close-pane'],hints[3])
  })
  await test('native redo alias follows default, conflicts when reassigned, and stops after clear',async()=>{
    await closeSettings();await page.evaluate(()=>{window.s.updateKeymap({preset:'markumo',bindings:window.f.getPresetBindings('markumo')});return window.doc('before')});await page.evaluate(()=>window.s.manager.activeEditorView.focus());await page.keyboard.press('End');await page.keyboard.type('!');await page.keyboard.press('Control+Z');assert.equal(await text(),'before');await page.keyboard.press('Control+Shift+Z');assert.equal(await text(),'before!');await page.keyboard.press('Control+Z');await page.evaluate(()=>{const s=window.s;s.updateShortcuts({...s.shortcuts,redo:''})});await page.keyboard.press('Control+Shift+Z');assert.equal(await text(),'before')

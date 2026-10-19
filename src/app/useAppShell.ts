@@ -592,12 +592,18 @@ export function useAppShell() {
       { id:'copy',title:'复制',detail:shortcutLabel('Mod+C'),category:'action',disabled:!activeDoc.value,action:()=>{void clipboardAction('copy')} },
       { id:'paste',title:'粘贴',detail:shortcutLabel('Mod+V'),category:'action',disabled:!activeDoc.value || activeDoc.value.kind==='javaClass',action:()=>{void clipboardAction('paste')} },
       { id:'select-all',title:'全选',detail:shortcutLabel('Mod+A'),category:'action',disabled:!activeDoc.value,action:()=>{void clipboardAction('select-all')} },
-      { id:'outline',title:'显示文档大纲',detail:'',category:'action',disabled:!activeDoc.value,action:()=>{showOutline.value=!showOutline.value} },
       { id:'wrap',title:'自动换行',detail:'',category:'action',action:()=>{wordWrap.value=!wordWrap.value} },
-      { id:'focus',title:'专注模式',detail:'',category:'action',action:toggleFocus },
       { id:'explorer',title:'资源管理器',detail:'',category:'action',action:()=>{focusMode.value=false;appMode.value='workspace';sidebarPanel.value='files';sidebarVisible.value=true} },
-      ...(['live','source','split'] as const).map(mode=>({id:`md-${mode}`,title:{live:'Markdown 实时排版',source:'Markdown 源码编辑',split:'Markdown 双栏预览'}[mode],detail:'',category:'action' as const,disabled:!activeDoc.value?.mode || manager.isComposing,action:()=>setMarkdownMode(mode)})),
-      ...markdownFormats.map(([id,title])=>({id:id==='bold'||id==='italic'?id:`format-${id}`,title,detail:'',category:'action' as const,disabled:activeDoc.value?.kind==='javaClass'||!activeDoc.value?.mode||manager.isComposing||(id==='image'&&(!desktop||fileBusy.value||!!activeDoc.value?.readOnly)),action:()=>{if(id==='image')void chooseImages();else manager.formatMarkdown(id)}})),
+      // One palette entry per command: the id and label come from the command
+      // catalog, so the palette, the menus and the shortcut settings cannot
+      // drift apart or list the same action twice under different ids.
+      ...markdownFormats.map(([format,fallbackTitle])=>{
+        const definition=commandDefinition(format)
+        return {id:definition?.id ?? `format-${format}`,title:definition?.label ?? fallbackTitle,detail:'',category:'action' as const,
+          disabled:activeDoc.value?.kind==='javaClass'||!activeDoc.value?.mode||manager.isComposing||(format==='image'&&(!desktop||fileBusy.value||!!activeDoc.value?.readOnly)),
+          action:()=>{if(format==='image'&&desktop){if(fileBusy.value||activeDoc.value?.readOnly)return;void chooseImages()}else manager.formatMarkdown(format)}}
+      }),
+      ...(['live','source','split'] as const).map(mode=>({id:`md-mode-${mode}`,title:{live:'Markdown 实时排版',source:'Markdown 源码编辑',split:'Markdown 双栏预览'}[mode],detail:'',category:'action' as const,disabled:!activeDoc.value?.mode || manager.isComposing,action:()=>setMarkdownMode(mode)})),
       { id: 'open', title: '打开文件', detail: desktop ? 'Ctrl+O' : '需要 Tauri 桌面版', category: 'file', disabled: !desktop || fileBusy.value, action: () => void openFile() },
       { id: 'save', title: '保存文件', detail: 'Ctrl+S', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass', action: () => void saveActive() },
       { id: 'save-as', title: '另存为', detail: 'Ctrl+Shift+S', category: 'action', disabled: !desktop || fileBusy.value || activeDoc.value?.kind === 'javaClass', action: () => void saveActive(true) },
@@ -620,7 +626,6 @@ export function useAppShell() {
       { id: 'lowercase', title: '选区转小写', detail: 'Ctrl+Alt+L', category: 'action', action: () => manager.transformSelection(false) },
       { id: 'goto-line', title: '转到指定行', detail: 'Ctrl+G', category: 'action', action: openGotoLine },
       { id: 'split-editor', title: '向右拆分分栏', detail: '', category: 'action', action: () => manager.splitPane('right') },
-      { id: 'split-right', title: '向右拆分', detail: '', category: 'action', action: () => manager.splitPane('right') },
       { id: 'split-down', title: '向下拆分', detail: '', category: 'action', action: () => manager.splitPane('bottom') },
       { id: 'split-left', title: '向左拆分', detail: '', category: 'action', action: () => manager.splitPane('left') },
       { id: 'split-up', title: '向上拆分', detail: '', category: 'action', action: () => manager.splitPane('top') },
@@ -635,7 +640,7 @@ export function useAppShell() {
       { id: 'comment-line', title: '切换行注释', detail: 'Ctrl+/', category: 'action', action: () => manager.command('comment-line') },
       { id: 'fold-code', title: '折叠当前代码块', detail: 'Ctrl+Alt+[', category: 'action', action: () => manager.command('fold-code') },
       { id: 'unfold-code', title: '展开当前代码块', detail: 'Ctrl+Alt+]', category: 'action', action: () => manager.command('unfold-code') },
-      { id: 'next-tab', title: '切换到下一标签', detail: 'Ctrl+Alt+Right', category: 'action', action: () => {
+      { id: 'next-tab', title: '切换到下一标签', detail: '', category: 'action', action: () => {
         const group = manager.paneGroup(manager.activePane)
         const tabs = group.tabs
         if (tabs.length > 1 && group.activeId) {
@@ -644,7 +649,7 @@ export function useAppShell() {
           if (next) manager.select(next.documentId, manager.activePane)
         }
       }},
-      { id: 'previous-tab', title: '切换到上一标签', detail: 'Ctrl+Alt+Left', category: 'action', action: () => {
+      { id: 'previous-tab', title: '切换到上一标签', detail: '', category: 'action', action: () => {
         const group = manager.paneGroup(manager.activePane)
         const tabs = group.tabs
         if (tabs.length > 1 && group.activeId) {
@@ -655,23 +660,6 @@ export function useAppShell() {
       }},
       { id: 'toggle-outline', title: '显示/隐藏大纲', detail: '', category: 'action', action: () => { showOutline.value = !showOutline.value } },
       { id: 'toggle-focus', title: '切换专注模式', detail: 'F8', category: 'action', action: toggleFocus },
-      { id: 'table', title: '插入表格', detail: 'Ctrl+T', category: 'action', action: () => manager.formatMarkdown('table') },
-      { id: 'code-block', title: '插入代码块', detail: 'Ctrl+Shift+K', category: 'action', action: () => manager.formatMarkdown('code-block') },
-      { id: 'quote', title: '插入引用块', detail: 'Ctrl+Shift+Q', category: 'action', action: () => manager.formatMarkdown('quote') },
-      { id: 'link', title: '插入/编辑链接', detail: 'Ctrl+K', category: 'action', action: () => manager.formatMarkdown('link') },
-      { id: 'image', title: '插入图片', detail: 'Ctrl+Shift+I', category: 'action', action: () => { if (fileBusy.value || activeDoc.value?.readOnly) return; if (desktop) void chooseImages(); else manager.formatMarkdown('image') } },
-      { id: 'inline-code', title: '插入行内代码', detail: 'Ctrl+Shift+`', category: 'action', action: () => manager.formatMarkdown('inline-code') },
-      { id: 'strike', title: '删除线', detail: 'Alt+Shift+5', category: 'action', action: () => manager.formatMarkdown('strike') },
-      { id: 'heading-1', title: '一级标题 (H1)', detail: 'Ctrl+1', category: 'action', action: () => manager.formatMarkdown('heading-1') },
-      { id: 'heading-2', title: '二级标题 (H2)', detail: 'Ctrl+2', category: 'action', action: () => manager.formatMarkdown('heading-2') },
-      { id: 'heading-3', title: '三级标题 (H3)', detail: 'Ctrl+3', category: 'action', action: () => manager.formatMarkdown('heading-3') },
-      { id: 'heading-4', title: '四级标题 (H4)', detail: 'Ctrl+4', category: 'action', action: () => manager.formatMarkdown('heading-4') },
-      { id: 'heading-5', title: '五级标题 (H5)', detail: 'Ctrl+5', category: 'action', action: () => manager.formatMarkdown('heading-5') },
-      { id: 'heading-6', title: '六级标题 (H6)', detail: 'Ctrl+6', category: 'action', action: () => manager.formatMarkdown('heading-6') },
-      { id: 'heading-0', title: '普通段落', detail: 'Ctrl+0', category: 'action', action: () => manager.formatMarkdown('heading-0') },
-      { id: 'md-mode-live', title: 'Markdown 实时排版', detail: 'Ctrl+Alt+1', category: 'action', action: () => setMarkdownMode('live') },
-      { id: 'md-mode-source', title: 'Markdown 源码编辑', detail: 'Ctrl+Alt+2', category: 'action', action: () => setMarkdownMode('source') },
-      { id: 'md-mode-split', title: 'Markdown 双栏预览', detail: 'Ctrl+Alt+3', category: 'action', action: () => setMarkdownMode('split') },
       { id: 'focus-left-pane', title: '聚焦左侧分栏', detail: '', category: 'action', action: () => manager.layout.focusDirection('left') },
       { id: 'focus-right-pane', title: '聚焦右侧分栏', detail: '', category: 'action', action: () => manager.layout.focusDirection('right') },
       { id: 'focus-up-pane', title: '聚焦上方分栏', detail: '', category: 'action', action: () => manager.layout.focusDirection('up') },
@@ -691,7 +679,7 @@ export function useAppShell() {
       { id: 'refresh-workspace', title: '刷新工作区目录树', detail: '工作区', category: 'action', disabled: !workspace.rootPath, action: () => void workspace.refreshDirectory() },
       { id: 'single', title: '切换到单文件模式', detail: '布局', category: 'action', action: () => setMode('single') },
       { id: 'workspace', title: '切换到工作区模式', detail: '布局', category: 'action', action: () => setMode('workspace') },
-      { id: 'sidebar', title: '显示/隐藏侧边栏', detail: 'Ctrl+B', category: 'action', action: toggleSidebar },
+      { id: 'sidebar', title: '显示/隐藏侧边栏', detail: '', category: 'action', action: toggleSidebar },
       { id: 'theme', title: '切换主题：深色 / 浅色 / 跟随系统', detail: '外观', category: 'action', action: toggleTheme },
       { id: 'settings', title: '打开首选项', detail: '设置', category: 'action', action: openSettings },
     ]
