@@ -202,7 +202,7 @@ try{
     assert.deepEqual(await page.evaluate(async()=>{const f=window.f;let bad=true;const writer=new f.SessionWriter(async()=>{if(bad)throw Error('full disk')},()=>{}),input={kind:'single',tabs:[],activeToken:null,layout:{mode:'single',sidebarVisible:false,sidebarWidth:254}};writer.schedule(input);let rejected=false;try{await writer.flush(true)}catch{rejected=true}bad=false;writer.schedule(input);await writer.flush(true);writer.dispose();return {rejected}}),{rejected:true})
   })
   await test('automatic check starts at 10s, repeats at 4h and respects disabled preference/disposal',async()=>{
-    await setup({noUpdate:true});await page.clock.install();await page.evaluate(()=>{const m=window.f.item.manager;m.configure({autoCheckUpdates:true,autoDownloadUpdates:false});m.start()});await page.clock.fastForward(9999);assert.equal((await snapshot()).checks,0)
+    await setup({noUpdate:true});await page.clock.install({time:new Date('2026-01-01T00:00:00Z')});await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));await page.evaluate(()=>{const m=window.f.item.manager;m.configure({autoCheckUpdates:true,autoDownloadUpdates:false});m.start()});await page.clock.fastForward(9999);assert.equal((await snapshot()).checks,0)
     await page.clock.fastForward(2);assert.equal((await snapshot()).checks,1);await page.clock.fastForward(4*60*60*1000);assert.equal((await snapshot()).checks,2)
     await page.evaluate(()=>window.f.item.manager.configure({autoCheckUpdates:false,autoDownloadUpdates:false}));await page.clock.fastForward(4*60*60*1000);assert.equal((await snapshot()).checks,2)
     await page.evaluate(()=>window.f.item.manager.dispose());await page.clock.resume()

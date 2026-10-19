@@ -83,6 +83,8 @@ export function useShellPreferences(host: ShellPreferencesHost) {
   let settingsTimer: ReturnType<typeof setTimeout> | undefined
   let settingsWrites: Promise<void> = Promise.resolve()
   let settingsError: unknown = null
+  let disposed = false
+  let loadGeneration = 0
 
   const currentDocumentImageRules = computed(() => {
     const doc = host.getActiveDoc()
@@ -328,10 +330,12 @@ export function useShellPreferences(host: ShellPreferencesHost) {
 
   // --- Load Settings on Startup ---
 
-  async function loadPreferences() {
+  async function loadPreferences(current = () => true, read = loadEditorSettings) {
+    const generation = ++loadGeneration
+    const canApply = () => !disposed && host.isAlive() && current() && generation === loadGeneration
     try {
-      const settings = await loadEditorSettings()
-      if (!host.isAlive()) return
+      const settings = await read()
+      if (!canApply()) return
       uiFontSize.value = settings.uiFontSize
       theme.value = settings.theme
       fontSize.value = settings.fontSize
@@ -367,9 +371,11 @@ export function useShellPreferences(host: ShellPreferencesHost) {
       }
       await nextTick()
     } catch (error) {
+      if (!canApply()) return
+      if (host.desktop) throw error
       host.toast(`首选项读取失败，使用默认值：${fileError(error)}`)
     }
-    settingsReady.value = true
+    if (canApply()) settingsReady.value = true
   }
 
   function toggleTheme() {
@@ -389,6 +395,9 @@ export function useShellPreferences(host: ShellPreferencesHost) {
   }
 
   function dispose() {
+    if (disposed) return
+    disposed = true
+    loadGeneration++
     systemTheme.removeEventListener('change', updateSystemTheme)
     if (settingsTimer) clearTimeout(settingsTimer)
     void flushSettings()

@@ -1,5 +1,5 @@
 <template>
-  <div class="app" :class="{ focus: focusMode }" :inert="updateInstalling || undefined">
+  <div class="app" :class="{ focus: focusMode }" :inert="updateInstalling || startupLoading || undefined">
     <!-- 顶部标题栏 -->
     <TopBar
       v-if="!focusMode"
@@ -152,9 +152,13 @@
     />
 
     <!-- 操作提示 Toast -->
-    <DiscardDialog ref="discardRef" :can-save="desktop" :busy="fileBusy" @save="savePending" @discard="discardPending" @cancel="cancelPendingClose" />
     <Toast ref="toastRef" />
   </div>
+  <div v-if="startupLoading" class="startup-overlay" role="status" :aria-busy="!startupError">
+    <p>{{ startupError || '正在安全初始化设置和会话…' }}</p>
+    <button @click="quitApp('titlebar')">关闭窗口</button>
+  </div>
+  <DiscardDialog ref="discardRef" :can-save="desktop" :busy="fileBusy" @save="savePending" @discard="discardPending" @cancel="cancelPendingClose" />
   <UpdatePanel v-if="updatePanelOpen" :state="updateStatus" @close="updatePanelOpen=false" @check="updateManager.checkForUpdates()" @download="updateManager.downloadUpdate()" @install="updateManager.installUpdate()" @release="openUpdateRelease" @link="openUpdateLink" />
   <UpdateConfirm ref="updateConfirmRef" />
   <div v-if="updateInstalling" class="update-install-overlay" role="status">{{ updateStatus.phase==='preparing' ? '正在保存文档和工作现场…' : '正在安装更新，请稍候…' }}</div>
@@ -181,7 +185,8 @@ const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,update
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,
   reopenEncoding, convertEncoding, saveAsEncoding,
   gotoLineRef, handleGotoLine, revealInExplorerToken,
-  desktop, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading,updateInstalling } = useAppShell()
+  desktop, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading, startupError, settingsReady, updateInstalling } = useAppShell()
+defineExpose({ settingsReady })
 
 const activeDocLineCount = computed(() => {
   if (!activeDoc.value) return 1
@@ -193,6 +198,8 @@ const activeRoot = computed(() => appMode.value === 'workspace' && activeDoc.val
 
 <style scoped>
 .update-install-overlay {position:fixed;inset:0;z-index:2000;display:grid;place-items:center;background:var(--app);color:var(--ink);font-size:15px}
+.startup-overlay {position:fixed;inset:0;z-index:900;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px;background:var(--app);color:var(--ink)}
+.startup-overlay button {padding:8px 16px;background:var(--soft);color:var(--ink);border-radius:6px}
 .app {
   height: 100vh;
   display: flex;

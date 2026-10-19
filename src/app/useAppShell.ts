@@ -1,6 +1,6 @@
 import { ref, computed, watch, onMounted, onUnmounted, markRaw, reactive, nextTick } from 'vue'
 import { isTauri, invoke } from '@tauri-apps/api/core'
-import type { UnlistenFn } from '@tauri-apps/api/event'
+import { DesktopStartup } from './desktopStartup'
 import { DocumentManager } from '../editor/core/DocumentManager'
 import { sampleDocuments } from '../features/tabs/sampleDocuments'
 import type { LanguageName } from '../editor/languages'
@@ -72,6 +72,7 @@ export function useAppShell() {
     manager,
     files,
     () =>
+      startupLoading.value ||
       updateInstalling.value ||
       fileBusy.value ||
       !!discardRef.value?.visible ||
@@ -169,6 +170,7 @@ export function useAppShell() {
   }
 
   const startupLoading = ref(desktop)
+  const startupError = ref('')
 
   // --- File Links, Paste & Drag/Drop ---
   async function openRelativeLink(event: Event) {
@@ -215,6 +217,7 @@ export function useAppShell() {
   async function nativeFileDrop(payload: { inputs: NativeDropInput[]; x: number; y: number }) {
     const tokens = payload.inputs.map(input => input.token)
     try {
+      if (startupLoading.value) return
       let inputs = payload.inputs
       if (inputs.some(input => input.isDirectory)) {
         if (fileBusy.value || files.workspaceBusy || files.saving.size || manager.isComposing || discardRef.value?.visible || settingsRef.value?.visible) {
@@ -271,21 +274,12 @@ export function useAppShell() {
   // --- Window Closing, Save Queue & Lifecycle State ---
   let pendingClose: { kind: 'document'; id: string; pane: string } | { kind: 'window' } | { kind: 'reopen'; id: string; encoding: FileOpenEncoding } | null = null
   let tabCloseQueue: { id: string; pane: string }[] = []
-  let unlistenWindow: UnlistenFn | undefined
-  let unlistenPending: UnlistenFn | undefined
-  let unlistenActivate: UnlistenFn | undefined
-  let unlistenDrop: UnlistenFn | undefined
   let layoutTimer: ReturnType<typeof setTimeout> | undefined
   let preferencesReady = false
   let pendingDrain = false
   let draining = false
   let sessionWriter: SessionWriter | undefined
   let launchReady = false
-  // A never-settling native IPC (settings load or session restore) must not pin
-  // the window on the welcome page's "正在打开…" state forever: the editor stays
-  // blocked because every command refuses to run while startup is in flight.
-  let startupWatchdog: ReturnType<typeof setTimeout> | undefined
-  let startupTimedOut = false
 
   // --- Update Manager ---
   const updateStatus = reactive(updateState())
@@ -381,7 +375,6 @@ export function useAppShell() {
   )
 
   // --- Window Close Guard ---
-  let closeSource: CloseSource = 'native'
   const windowClose = new WindowCloseGuard({
     status: () =>
       computeWindowCloseStatus({
@@ -397,9 +390,7 @@ export function useAppShell() {
         activeId: manager.activeId,
       }),
     flush: async () => {
-      await preferences.flushSettings()
-      scheduleSession()
-      await sessionWriter?.flush()
+      await flushCloseState()
     },
     confirmDirty: () => {
       if (pendingClose?.kind === 'window' && discardRef.value?.visible) return
@@ -409,7 +400,10 @@ export function useAppShell() {
       discardRef.value?.open('当前窗口中的文档')
     },
     destroy: async () => {
-      if (alive) await (await import('@tauri-apps/api/window')).getCurrentWindow().destroy()
+      if (alive) {
+        startup.exit()
+        await (await import('@tauri-apps/api/window')).getCurrentWindow().destroy()
+      }
     },
     blocked: reason => toast(reason === 'composing' ? '请先完成当前输入法输入，再关闭窗口。' : '请等待当前文件操作完成后再关闭。'),
     failed: () => toast('关闭窗口失败，编辑内容仍保留在当前窗口。'),
@@ -435,6 +429,7 @@ export function useAppShell() {
   }
 
   async function openFile(encoding?: FileOpenEncoding) {
+    if (startupLoading.value) return
     if (!desktop) {
       toast('浏览器仅支持内存编辑；请使用 Tauri 桌面版打开或保存磁盘文件。')
       return
@@ -454,6 +449,7 @@ export function useAppShell() {
   }
 
   async function openRecent(path: string) {
+    if (startupLoading.value) return
     if (fileBusy.value || manager.isComposing) {
       composingHint()
       return
@@ -508,11 +504,9 @@ export function useAppShell() {
 
   async function quitApp(source: CloseSource = 'command') {
     if (!desktop) return
-    closeSource = source
     try {
-      await (await import('@tauri-apps/api/window')).getCurrentWindow().close()
+      await windowClose.request(source)
     } catch (error) {
-      closeSource = 'native'
       toast(`退出失败：${fileError(error)}`)
     }
   }
@@ -800,12 +794,12 @@ export function useAppShell() {
       }
     } else if (pending?.kind === 'window') {
       try {
-        await preferences.flushSettings()
-        await sessionWriter?.flush()
+        await flushCloseState()
         if (fileBusy.value || files.saving.size || files.workspaceBusy || manager.isComposing) {
           pendingClose = pending
           return
         }
+        startup.exit()
         await (await import('@tauri-apps/api/window')).getCurrentWindow().destroy()
       } catch {
         toast('关闭窗口失败，编辑内容仍保留在当前窗口。')
@@ -948,6 +942,13 @@ export function useAppShell() {
     )
   }
 
+  async function flushCloseState() {
+    await startup.flushForClose(
+      () => preferences.flushSettings(true),
+      sessionWriter ? async () => { scheduleSession(); await sessionWriter!.flush(true) } : undefined,
+    )
+  }
+
   watch([revision, appMode, sidebarVisible, sidebarWidth], scheduleSession)
 
   function editorNotice(event: Event) {
@@ -955,7 +956,7 @@ export function useAppShell() {
   }
 
   watch([appMode, sidebarVisible, sidebarWidth], () => {
-    if (!desktop || !preferencesReady) return
+    if (!desktop || !launchReady || !preferencesReady) return
     if (layoutTimer) clearTimeout(layoutTimer)
     layoutTimer = setTimeout(() => {
       void tauriFiles
@@ -1039,8 +1040,52 @@ export function useAppShell() {
   })
 
   // --- Global Lifecycle (Mount / Unmount) ---
+  const startup = new DesktopStartup({
+    protect: scope => scope.register('close', async () =>
+      (await import('@tauri-apps/api/window')).getCurrentWindow().onCloseRequested(async event => {
+        event.preventDefault()
+        if (!alive) return
+        await windowClose.request('native')
+      })),
+    loadPreferences: current => preferences.loadPreferences(current),
+    initialize: initializeLaunch,
+    adopt: async (launch, current) => {
+      if (launch.kind === 'app' && !launch.ownsSession) throw Error('主会话所有权未确认，已停止恢复。')
+      workspace.restoreSession(launch.roots)
+      files.acceptBatch(launch.files)
+      const selected = manager.openedDocuments.find(doc => doc.path === launch.activePath) || manager.openedDocuments[0]
+      if (selected) manager.select(selected.id, 'main')
+      restoreEditorLayout(manager, launch.editorLayout)
+      appMode.value = launch.kind === 'file' ? 'single' : launch.layout.mode
+      sidebarWidth.value = launch.layout.sidebarWidth
+      sidebarVisible.value = launch.kind === 'app' && !!workspace.rootPath && launch.layout.sidebarVisible && !wasNarrow
+      if (launch.warnings.length) toast(launch.warnings.join('\n'))
+      if (launch.ownsSession) {
+        sessionWriter = new SessionWriter(
+          input => invoke('persist_session', { input }),
+          error => toast(`会话记录失败：${fileError(error)}`),
+        )
+        // Confirm native persistence before exposing an editable owner window.
+        sessionWriter.schedule(sessionInput(manager, workspace.roots, {
+          mode: appMode.value, sidebarVisible: sidebarVisible.value, sidebarWidth: sidebarWidth.value,
+        }))
+        await sessionWriter.flush(true)
+      }
+      if (current()) await nextTick()
+      return launch.ownsSession ? 'owner' : 'temporary'
+    },
+    release: async launch => {
+      const adopted = new Set(manager.openedDocuments.map(doc => doc.fileToken))
+      await Promise.all(launch.files.files.filter(file => !adopted.has(file.token)).map(file => tauriFiles.release(file.token)))
+    },
+    changed: state => {
+      launchReady = state.phase === 'ready'
+      startupLoading.value = !launchReady
+      startupError.value = state.error
+    },
+  })
+
   onMounted(async () => {
-    if (desktop) fileBusy.value = true
     window.addEventListener('editor-notice', editorNotice)
     window.addEventListener('markdown-open-relative', openRelativeLink)
     window.addEventListener('paste', imagePaste, true)
@@ -1052,100 +1097,35 @@ export function useAppShell() {
     window.addEventListener('wheel', handleEditorWheel, { passive: false, capture: true })
 
     if (desktop) {
-      startupWatchdog = setTimeout(() => {
-        startupWatchdog = undefined
-        if (!alive || !startupLoading.value) return
-        startupTimedOut = true
-        startupLoading.value = false
-        fileBusy.value = false
-        console.warn('[Markumo] startup timed out; continuing without full session restore')
-        toast('启动超时：已跳过未完成的设置或会话恢复，可直接继续操作。若反复出现，请重新启动应用。')
-      }, 20000)
-    }
-
-    await preferences.loadPreferences()
-    if (!alive) return
-
-    if (desktop) {
+      await startup.start()
+      if (!alive || !launchReady) return
       try {
-        const launch = await initializeLaunch()
-        if (!alive || startupTimedOut) return
-        workspace.restoreSession(launch.roots)
-        files.acceptBatch(launch.files)
-        const selected = manager.openedDocuments.find(doc => doc.path === launch.activePath) || manager.openedDocuments[0]
-        if (selected) manager.select(selected.id, 'main')
-        restoreEditorLayout(manager, launch.editorLayout)
-        appMode.value = launch.kind === 'file' ? 'single' : launch.layout.mode
-        sidebarWidth.value = launch.layout.sidebarWidth
-        sidebarVisible.value = launch.kind === 'app' && !!workspace.rootPath && launch.layout.sidebarVisible && !wasNarrow
-        if (launch.warnings.length) toast(launch.warnings.join('\n'))
-        if (launch.ownsSession) {
-          sessionWriter = new SessionWriter(
-            input => invoke('persist_session', { input }),
-            error => toast(`会话记录失败：${fileError(error)}`),
-          )
-          sessionWriter.prime(
-            sessionInput(manager, workspace.roots, {
-              mode: appMode.value,
-              sidebarVisible: sidebarVisible.value,
-              sidebarWidth: sidebarWidth.value,
-            }),
-          )
-        }
-        await nextTick()
-        launchReady = true
-      } catch (error) {
-        toast(`启动文件/会话恢复失败：${fileError(error)}`)
-      } finally {
-        if (startupWatchdog) clearTimeout(startupWatchdog)
-        startupWatchdog = undefined
-        fileBusy.value = false
-        startupLoading.value = false
-      }
-
-      try {
-        const unlisten = await (await import('@tauri-apps/api/window')).getCurrentWindow().onCloseRequested(async event => {
-          event.preventDefault()
-          const source = closeSource
-          closeSource = 'native'
-          await windowClose.request(source)
-        })
-        if (alive) unlistenWindow = unlisten
-        else unlisten()
-      } catch {
-        toast('窗口关闭保护注册失败；请勿关闭含未保存修改的窗口。')
-      }
-
-      try {
-        const unlisten = await (await import('@tauri-apps/api/window')).getCurrentWindow().listen('files-pending', () => void drainPending())
-        if (alive) unlistenPending = unlisten
-        else unlisten()
-
-        const stopActivate = await (await import('@tauri-apps/api/window')).getCurrentWindow().listen<string[]>('external-activate', event => {
+        await startup.listeners.register('pending', async () => (await import('@tauri-apps/api/window')).getCurrentWindow().listen('files-pending', () => void drainPending()))
+        if (!alive || !launchReady) return
+        await startup.listeners.register('activate', async () => (await import('@tauri-apps/api/window')).getCurrentWindow().listen<string[]>('external-activate', event => {
           void activateExternal(event.payload)
-        })
-        if (alive) unlistenActivate = stopActivate
-        else stopActivate()
-
-        const stopDrop = await (await import('@tauri-apps/api/window')).getCurrentWindow().listen<{ inputs: NativeDropInput[]; x: number; y: number }>('native-file-drop', event => {
+        }))
+        if (!alive || !launchReady) return
+        await startup.listeners.register('drop', async () => (await import('@tauri-apps/api/window')).getCurrentWindow().listen<{ inputs: NativeDropInput[]; x: number; y: number }>('native-file-drop', event => {
           void nativeFileDrop(event.payload).catch(error => toast(fileError(error)))
-        })
-        if (alive) unlistenDrop = stopDrop
-        else stopDrop()
-
+        }))
+        if (!alive || !launchReady) return
         const prefs = await tauriFiles.preferences()
         if (alive) {
           recentFiles.value = prefs.recent
           if (prefs.warning) toast(prefs.warning)
           await nextTick()
+          if (!alive || !launchReady) return
           preferencesReady = true
           await drainPending()
         }
       } catch (error) {
-        toast(fileError(error))
+        if (alive) toast(fileError(error))
       }
+    } else {
+      await preferences.loadPreferences()
     }
-
+    if (!alive) return
     autoSaver.configure(desktop && preferences.autoSave.value, preferences.autoSaveDelay.value)
 
     if (desktop && alive) {
@@ -1181,13 +1161,9 @@ export function useAppShell() {
     window.removeEventListener('paste', imagePaste, true)
     window.removeEventListener('resize', adaptWindowWidth)
     alive = false
+    if (desktop) startup.dispose()
     updateManager.dispose()
     if (reportTimer) clearTimeout(reportTimer)
-    if (startupWatchdog) clearTimeout(startupWatchdog)
-    unlistenWindow?.()
-    unlistenPending?.()
-    unlistenActivate?.()
-    unlistenDrop?.()
     if (layoutTimer) clearTimeout(layoutTimer)
     preferences.dispose()
     commands.unmountListeners(window)
@@ -1305,6 +1281,8 @@ export function useAppShell() {
     saveActive,
     quitApp,
     startupLoading,
+    startupError,
+    settingsReady: preferences.settingsReady,
     updateInstalling,
     prepareUpdate,
   }

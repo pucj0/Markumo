@@ -115,24 +115,36 @@ try {
     assert.ok(value.visual>value.start&&value.visual<value.target,JSON.stringify(value));await aligned()
   })
   await test('real build.bat clicks animate from line 6 end to line 12 end, middle and empty lines', async () => {
-    await cmReset(fs.readFileSync('build.bat','utf8').replace(/\r\n/g,'\n'))
-    const point=async(line,end=true)=>page.evaluate(({line,end})=>{const v=window.f.cm(),text=v.state.doc.line(line),pos=end?text.to:Math.min(text.to,text.from+3),rect=v.coordsAtPos(pos);return {x:rect.left+(end?50:0),y:(rect.top+rect.bottom)/2,pos}}, {line,end})
-    for(const mode of ['smooth','quick']) {
-      await page.evaluate(mode=>window.f.manager.setCaretAnimation(mode),mode)
-      for(const [from,to,end] of [[6,12,true],[12,6,true],[6,12,false],[12,17,true]]) {
-        const startPoint=await point(from,end),targetPoint=await point(to,end)
-        await page.mouse.click(startPoint.x,startPoint.y);await aligned();await page.waitForTimeout(30)
-        const start=await page.evaluate(()=>window.f.visible()[0].firstChild.getBoundingClientRect().top)
-        await page.mouse.click(targetPoint.x,targetPoint.y)
-        assert.equal(await page.evaluate(()=>window.f.cm().state.selection.main.head),targetPoint.pos)
-        await page.waitForTimeout(45)
-        const value=await page.evaluate(()=>{const f=window.f,v=f.cm();return {visual:f.visible()[0]?.firstChild.getBoundingClientRect().top,target:v.coordsAtPos(v.state.selection.main.head).top}})
-        const progress=(value.visual-start)/(value.target-start)
-        assert.ok(progress>0&&progress<.99,JSON.stringify({mode,from,to,end,start,...value,progress}))
-        await aligned()
+    // Isolate the virtual clock so later real-time idle/rAF checks still observe
+    // the original page. Browser protocol round trips must not age a 45ms sample.
+    const page=await browser.newPage({viewport:{width:1200,height:800}})
+    page.on('pageerror',error=>errors.push(error.message))
+    page.on('console',message=>{if(message.type()==='error'&&!message.text().includes('favicon'))errors.push(message.text())})
+    try {
+      await page.clock.install({time:new Date('2026-01-01T00:00:00Z')})
+      await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'))
+      await page.goto('http://localhost:1431/'+output+'/index.html')
+      await page.waitForFunction(()=>window.f)
+      await page.evaluate(source=>window.f.reset(source),fs.readFileSync('build.bat','utf8').replace(/\r\n/g,'\n'))
+      const aligned=async()=>{await page.clock.runFor(500);assert.equal(await page.evaluate(()=>window.f.aligned()),true)}
+      await page.evaluate(()=>window.f.cm().focus());await aligned()
+      const point=async(line,end=true)=>page.evaluate(({line,end})=>{const v=window.f.cm(),text=v.state.doc.line(line),pos=end?text.to:Math.min(text.to,text.from+3),rect=v.coordsAtPos(pos);return {x:rect.left+(end?50:0),y:(rect.top+rect.bottom)/2,pos}}, {line,end})
+      for(const mode of ['smooth','quick']) {
+        await page.evaluate(mode=>window.f.manager.setCaretAnimation(mode),mode)
+        for(const [from,to,end] of [[6,12,true],[12,6,true],[6,12,false],[12,17,true]]) {
+          const startPoint=await point(from,end),targetPoint=await point(to,end)
+          await page.mouse.click(startPoint.x,startPoint.y);await aligned()
+          const start=await page.evaluate(()=>window.f.visible()[0].firstChild.getBoundingClientRect().top)
+          await page.mouse.click(targetPoint.x,targetPoint.y)
+          assert.equal(await page.evaluate(()=>window.f.cm().state.selection.main.head),targetPoint.pos)
+          await page.clock.runFor(45)
+          const value=await page.evaluate(()=>{const f=window.f,v=f.cm();return {visual:f.visible()[0]?.firstChild.getBoundingClientRect().top,target:v.coordsAtPos(v.state.selection.main.head).top}})
+          const progress=(value.visual-start)/(value.target-start)
+          assert.ok(progress>0&&progress<.99,JSON.stringify({mode,from,to,end,start,...value,progress}))
+          await aligned()
+        }
       }
-    }
-    await page.evaluate(()=>window.f.manager.setCaretAnimation('smooth'))
+    } finally { await page.close() }
   })
   await test('CM nonempty/multi-range selections preserve drawSelection and native cursors', async () => {
     await page.evaluate(()=>window.f.cm().dispatch({selection:{anchor:1,head:8}}))

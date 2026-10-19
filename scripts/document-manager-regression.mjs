@@ -20,6 +20,7 @@ fs.writeFileSync(
   `${output}/fixture.js`,
   `
 import { DocumentManager } from '/src/editor/core/DocumentManager.ts';
+import { FileController } from '/src/features/files/FileController.ts';
 import { EditorState, EditorSelection, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { isolateHistory } from '@codemirror/commands';
@@ -27,6 +28,7 @@ import { sameFilePath } from '/src/features/files/pathKey.ts';
 
 window.f = {
   DocumentManager,
+  FileController,
   EditorState,
   EditorSelection,
   Transaction,
@@ -150,9 +152,12 @@ try {
       const undidText = dm.getText(id1)
 
       // 3. Media document reopen with equivalent path must also deduplicate
-      const media1 = { token: 'tok-img-1', name: 'photo.png', path: initialPath + '.png', kind: 'image' }
+      // Use complete filenames; an extension after a separator names another file.
+      const initialMediaPath = isCaseInsensitive ? 'C:/docs/photo.png' : '/docs/workspace/photo.png'
+      const secondMediaPath = isCaseInsensitive ? 'c:\\DOCS\\PHOTO.PNG' : '/docs\\workspace\\photo.png/'
+      const media1 = { token: 'tok-img-1', name: 'photo.png', path: initialMediaPath, kind: 'image' }
       const mid1 = dm.openFile(media1)
-      const media2 = { token: 'tok-img-2', name: 'photo.png', path: secondPath + '.png', kind: 'image' }
+      const media2 = { token: 'tok-img-2', name: 'photo.png', path: secondMediaPath, kind: 'image' }
       const mid2 = dm.openFile(media2)
 
       return {
@@ -182,6 +187,60 @@ try {
     assert.equal(res.isStillDirty, true, 'Dirty state must not be cleared on reopen')
     assert.equal(res.undidText, 'Initial text', 'Undo history must survive reopening')
   })
+
+  for (const platform of ['Windows', 'Linux', 'macOS']) {
+    await test(`A2 media ownership on ${platform}: equivalent paths, one record, token release after last pane`, async () => {
+      const platformPage = await browser.newPage()
+      platformPage.on('pageerror', err => errors.push(err.message))
+      try {
+        // Exercise the production platform strategy on every CI host.
+        await platformPage.addInitScript(platform => {
+          Object.defineProperty(navigator, 'platform', { value: platform === 'Windows' ? 'Win32' : platform === 'macOS' ? 'MacIntel' : 'Linux x86_64' })
+          Object.defineProperty(navigator, 'userAgentData', { value: { platform } })
+        }, platform)
+        await platformPage.goto(`http://127.0.0.1:${port}/${output}/index.html`)
+        await platformPage.waitForFunction(() => window.f?.DocumentManager)
+        const res = await platformPage.evaluate(async platform => {
+          const dm = window.f.createManager()
+          const released = []
+          const notices = []
+          const fc = new window.f.FileController(dm, { release: async token => { released.push(token) } }, msg => notices.push(msg))
+          const firstPath = platform === 'Windows' ? 'C:/docs/photo.png' : '/docs/photo.png'
+          const equivalentPath = platform === 'Windows' ? 'c:\\DOCS\\PHOTO.PNG' : '/docs\\photo.png/'
+          const file = { token: 'original', path: firstPath, name: 'photo.png', kind: 'image', text: '', version: 'v1', encoding: 'Binary', bom: false, eol: 'LF', readOnly: true, media: { byteLength: 100, mime: 'image/png', format: 'PNG' } }
+          fc.accept(file)
+          const id = dm.activeId
+          const pane2 = dm.splitPane('right', 'main', id)
+          const sameId = dm.openFile({ ...file, token: 'direct-unused', path: equivalentPath }) === id
+          fc.accept({ ...file, token: 'unused', path: equivalentPath })
+          await Promise.resolve()
+          const afterReopen = [...released]
+          const count = dm.openedDocuments.length
+          const retainedToken = dm.metadata(id).fileToken
+          fc.close(id, false, 'main')
+          const afterFirstClose = [...released]
+          fc.close(id, false, pane2)
+          await Promise.resolve()
+          const afterLastClose = [...released]
+          const remaining = dm.openedDocuments.length
+          // POSIX comparison must preserve case rather than merging distinct paths.
+          const caseMatch = window.f.sameFilePath(firstPath, firstPath.toUpperCase())
+          fc.dispose()
+          dm.dispose()
+          return { sameId, count, retainedToken, afterReopen, afterFirstClose, afterLastClose, remaining, caseMatch, notices }
+        }, platform)
+        assert.equal(res.sameId, true)
+        assert.equal(res.count, 1, 'Duplicate opens must not create a second media record')
+        assert.equal(res.retainedToken, 'original')
+        assert.deepEqual(res.afterReopen, ['unused'], 'FileController releases the unadopted token')
+        assert.deepEqual(res.afterFirstClose, ['unused'], 'Original token remains owned by the other pane')
+        assert.deepEqual(res.afterLastClose, ['unused', 'original'], 'Last reference releases original token exactly once')
+        assert.equal(res.remaining, 0)
+        assert.equal(res.caseMatch, platform === 'Windows')
+        assert.deepEqual(res.notices, [])
+      } finally { await platformPage.close() }
+    })
+  }
 
   await test('A3. Multi-pane sharing & reference counting: closing one pane does not release document until last reference', async () => {
     const res = await page.evaluate(() => {

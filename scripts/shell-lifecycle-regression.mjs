@@ -19,6 +19,10 @@ import { imageRuleKey, defaultImageRules } from '/src/editor/markdown/imageImpor
 import { settingsFrom } from '/src/features/shell/editorSettings.ts';
 import { UpdateManager } from '/src/features/shell/updater/UpdateManager.ts';
 import { updateState } from '/src/features/shell/updater/UpdateState.ts';
+import { DesktopStartup, NativeListenerScope } from '/src/app/desktopStartup.ts';
+import { useShellPreferences } from '/src/app/useShellPreferences.ts';
+import { DocumentManager } from '/src/editor/core/DocumentManager.ts';
+import { SessionWriter } from '/src/features/shell/launchSession.ts';
 
 const app = createApp(App);
 app.mount('#app');
@@ -36,7 +40,131 @@ window.f = {
   settingsFrom,
   UpdateManager,
   updateState,
+  DesktopStartup,
+  NativeListenerScope,
+  SessionWriter,
+  deferred() {
+    let resolve, reject;
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no });
+    return { promise, resolve, reject };
+  },
+  async until(predicate) {
+    for (let i = 0; i < 100; i++) { if (predicate()) return; await Promise.resolve() }
+    throw Error('Controlled asynchronous startup did not reach expected state');
+  },
+  startupHarness(options = {}) {
+    const timers = new Map();
+    const events = [];
+    const releases = [];
+    const model = { documents: [], workspace: '', dirtyCount: 0, confirmations: 0, destroyed: 0, writes: 0, settingsWrites: 0, registrations: 0, unlistens: 0 };
+    let timerId = 0, writer, nativeClose;
+    let startup;
+    const guard = new WindowCloseGuard({
+      status: () => ({ fileBusy: false, savingCount: 0, composing: false, dirtyCount: model.dirtyCount,
+        documentCount: model.documents.length, activePane: 'main', hasActiveDocument: !!model.documents.length }),
+      flush: () => startup.flushForClose(async () => { model.settingsWrites++ }, writer ? () => writer.flush(true) : undefined),
+      confirmDirty: () => { model.confirmations++ }, destroy: async () => { startup.exit(); model.destroyed++ },
+      blocked() {}, failed() {}, diagnose() {},
+    });
+    startup = new DesktopStartup({
+      setTimer(callback, ms) { if (ms !== 20000) throw Error('Unexpected startup deadline'); timers.set(++timerId, callback); return timerId },
+      clearTimer(id) { timers.delete(id) },
+      protect: scope => scope.register('close', async () => {
+        model.registrations++;
+        if (options.protection) await options.protection;
+        nativeClose = () => guard.request('native');
+        return () => { model.unlistens++ };
+      }),
+      loadPreferences: current => { events.push('settings'); return options.loadPreferences ? options.loadPreferences(current) : Promise.resolve() },
+      initialize: () => { events.push('launch'); return options.launch || Promise.resolve({ owner: true, documents: ['restored'], workspace: 'restored-root' }) },
+      adopt: async launch => {
+        events.push('adopt');
+        model.documents = [...launch.documents]; model.workspace = launch.workspace;
+        if (!launch.owner) return 'temporary';
+        writer = new SessionWriter(async () => { model.writes++; if (options.persist) await options.persist }, () => {});
+        writer.schedule({ restored: true });
+        await writer.flush(true);
+        return 'owner';
+      },
+      release: async launch => { releases.push(...launch.documents) },
+      changed: state => { events.push(state.phase) },
+    });
+    return { startup, model, timers, events, releases,
+      timeout() { const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(fn => fn()) },
+      close() { if (!nativeClose) throw Error('Native close is not protected'); return nativeClose() },
+      dispose() { startup.dispose(); writer?.dispose() },
+    };
+  },
+  createPreferences() {
+    const manager = new DocumentManager([]);
+    let preferences;
+    let alive = true;
+    const container = document.createElement('div');
+    document.body.append(container);
+    const instance = createApp({ setup() {
+      preferences = useShellPreferences({ desktop: false, isAlive: () => alive, toast: () => {}, manager,
+        workspace: {}, autoSaver: { configure() {} }, revision: ref(0), getActiveDoc: () => null });
+      return () => null;
+    } });
+    instance.mount(container);
+    return { preferences, dispose() { alive = false; instance.unmount(); preferences.dispose(); manager.dispose(); container.remove(); } };
+  },
   nextTick
+};
+`)
+
+// Tauri's official SDK mocks intercept every IPC; these pages mount the actual
+// desktop App/useAppShell branch without native file, install or restart actions.
+fs.writeFileSync(`${output}/desktop.html`, '<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><div id="app"></div><script type="module" src="./desktop.js"></script>')
+fs.writeFileSync(`${output}/desktop.js`, `
+import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
+import { createApp } from 'vue';
+import App from '/src/App.vue';
+window.isTauri = true;
+mockWindows('main');
+const mode = new URLSearchParams(location.search).get('mode');
+const calls = [], listeners = new Map(), released = [];
+let settingsResolve, launchResolve, persistedResolve, deadline;
+const settingsPending = new Promise(resolve => { settingsResolve = resolve });
+const launchPending = new Promise(resolve => { launchResolve = resolve });
+const persistedPending = new Promise(resolve => { persistedResolve = resolve });
+const launch = { kind: mode === 'temporary' ? 'file' : 'app', ownsSession: !['no-owner', 'temporary'].includes(mode), files: { files: [], errors: [] }, roots: [], activePath: null,
+  layout: { mode: 'single', sidebarWidth: 254, sidebarVisible: false }, warnings: [] };
+const originalSetTimeout = window.setTimeout, originalClearTimeout = window.clearTimeout;
+window.setTimeout = (callback, ms, ...args) => {
+  const id = originalSetTimeout(callback, ms, ...args);
+  if (ms === 20000) deadline = { id, callback };
+  return id;
+};
+mockIPC((command, args) => {
+  calls.push({ command, args });
+  if (command === 'plugin:event|listen') { listeners.set(args.handler, args.event); return args.handler }
+  if (command === 'plugin:event|unlisten') { listeners.delete(args.eventId); return }
+  if (command === 'load_editor_settings') return mode === 'settings-hang' ? settingsPending : {};
+  if (command === 'initialize_launch') return mode === 'launch-hang' ? launchPending : launch;
+  if (command === 'persist_session') {
+    if (mode === 'persist-fail') throw Error('native persistence denied');
+    return mode === 'persist-hang' ? persistedPending : undefined;
+  }
+  if (command === 'get_recent_workspaces') return [];
+  if (command === 'file_preferences') return { recent: [], layout: launch.layout };
+  if (command === 'drain_pending') return { files: [], errors: [] };
+  if (command === 'release_file') { released.push(args.token); return }
+  if (command === 'plugin:window|set_theme' || command === 'plugin:window|destroy' || command === 'report_update_window' || command === 'save_editor_settings' || command === 'persist_layout') return;
+  if (command === 'update_runtime') return { version: '1.0.4', platform: 'linux', installSupported: false };
+  if (command === 'confirm_update_startup') return null;
+  throw Error('Unapproved test IPC: ' + command);
+});
+const app = createApp(App);
+app.mount('#app');
+window.nativeTest = { app, setup: app._instance.setupState, calls, listeners, released,
+  timeout() { originalClearTimeout(deadline.id); deadline.callback() },
+  settingsResolve, launchResolve, persistedResolve, launch,
+  close() {
+    const entry = [...listeners].find(([, event]) => event === 'tauri://close-requested');
+    if (!entry) throw Error('Product close listener missing');
+    window.__TAURI_INTERNALS__.runCallback(entry[0], { event: entry[1], id: entry[0], payload: null });
+  },
 };
 `)
 
@@ -60,7 +188,7 @@ try {
   page.on('pageerror', err => errors.push(err.message))
 
   await page.goto(`http://127.0.0.1:${port}/${output}/index.html`)
-  await page.waitForFunction(() => window.s?.manager && window.f)
+  await page.waitForFunction(() => window.s?.manager && window.s.settingsReady && window.f)
 
   const test = async (name, fn) => {
     try {
@@ -443,6 +571,19 @@ try {
     const res = await page.evaluate(async () => {
       const { createApp, App, nextTick } = window.f
       localStorage.removeItem('markumo.settings.v1')
+      const writes = []
+      const origSetItem = Storage.prototype.setItem
+      Storage.prototype.setItem = function(k, v) {
+        if (this === localStorage && k === 'markumo.settings.v1') writes.push(JSON.parse(v))
+        return origSetItem.call(this, k, v)
+      }
+      const until = async predicate => {
+        for (let i = 0; i < 200; i++) {
+          if (predicate()) return
+          await new Promise(resolve => setTimeout(resolve, 5))
+        }
+        throw Error('Settings persistence did not reach the expected state')
+      }
 
       // 1. Mount real App.vue
       const container = document.createElement('div')
@@ -452,12 +593,11 @@ try {
       instance.mount(container)
       await nextTick()
 
-      // Wait a moment for loadPreferences() to settle
-      await new Promise(r => setTimeout(r, 60))
-
       const setup = instance._instance.setupState
+      await until(() => setup.settingsReady)
       // 2. Modify a reactive setting
       setup.fontSize = 22
+      await nextTick()
 
       // Verify that at this exact instant (<250ms), localStorage has NOT yet been written by debounce timer
       const beforeUnmountRaw = localStorage.getItem('markumo.settings.v1')
@@ -470,29 +610,25 @@ try {
       await nextTick()
 
       // 4. Wait for the flush promise (which was synchronously triggered by preferences.dispose()) to complete write
-      await new Promise(r => setTimeout(r, 80))
+      await until(() => writes.some(settings => settings.fontSize === 22))
 
       const afterUnmountRaw = localStorage.getItem('markumo.settings.v1')
       const afterUnmountParsed = afterUnmountRaw ? JSON.parse(afterUnmountRaw) : null
       const savedAfterUnmount = afterUnmountParsed?.fontSize === 22
 
       // 5. Track writes over the next 350ms to ensure no delayed second write occurs
-      let delayedWriteCount = 0
-      const origSetItem = localStorage.setItem
-      localStorage.setItem = function(k, v) {
-        if (k === 'markumo.settings.v1') delayedWriteCount++
-        return origSetItem.call(localStorage, k, v)
-      }
+      const flushedWriteCount = writes.length
       try {
         await new Promise(r => setTimeout(r, 350))
       } finally {
-        localStorage.setItem = origSetItem
+        Storage.prototype.setItem = origSetItem
       }
 
       return {
         savedBeforeUnmount,
         savedAfterUnmount,
-        delayedWriteCount,
+        delayedWriteCount: writes.length - flushedWriteCount,
+        flushedWriteCount,
         finalFontSize: afterUnmountParsed?.fontSize,
       }
     })
@@ -500,6 +636,7 @@ try {
     assert.equal(res.savedBeforeUnmount, false, 'Debounce must not have fired before unmount')
     assert.equal(res.savedAfterUnmount, true, 'Unmount must flush pending settings immediately to storage')
     assert.equal(res.finalFontSize, 22, 'Persisted setting must match the modified value')
+    assert.equal(res.flushedWriteCount, 1, 'Prototype interceptor must observe the real flush write exactly once')
     assert.equal(res.delayedWriteCount, 0, 'No delayed second write should happen after unmount')
   })
 
@@ -570,45 +707,376 @@ try {
     assert.equal(res.markPendingCalls, 0, 'Disposed UpdateManager must never mark pending')
   })
 
-  await test('D4. Lifecycle: async native event listeners returning after unmount are unlistened immediately', async () => {
+  await test('D3b. In-flight update check returns after dispose: release resource, preserve state, cancel timers', async () => {
     const res = await page.evaluate(async () => {
-      let alive = true
-      let unlistenCalled = false
-      let registeredWhileAlive = false
-
-      // Create an async listener registration promise that takes 60ms to resolve
-      const pendingRegistration = new Promise(resolve => {
-        setTimeout(() => {
-          resolve(() => {
-            unlistenCalled = true
-          })
-        }, 60)
+      const { UpdateManager, updateState } = window.f
+      let resolveCheck, started
+      const checkingStarted = new Promise(resolve => { started = resolve })
+      const pending = new Promise(resolve => { resolveCheck = resolve })
+      const timers = new Set()
+      let schedules = 0, releases = 0, unsafeCalls = 0
+      const oldSetTimeout = window.setTimeout, oldClearTimeout = window.clearTimeout
+      const oldSetInterval = window.setInterval, oldClearInterval = window.clearInterval
+      window.setTimeout = (...args) => { schedules++; const id = oldSetTimeout(...args); timers.add(id); return id }
+      window.clearTimeout = id => { timers.delete(id); oldClearTimeout(id) }
+      window.setInterval = (...args) => { schedules++; const id = oldSetInterval(...args); timers.add(id); return id }
+      window.clearInterval = id => { timers.delete(id); oldClearInterval(id) }
+      const state = updateState()
+      const mgr = new UpdateManager(state, {
+        check: () => { started(); return pending },
+        prepare: async () => { unsafeCalls++; return false }, finishPreparation() {},
+        acquire: async () => { unsafeCalls++ }, release: async () => {},
+        markPending: async () => { unsafeCalls++ }, clearPending: async () => {},
+        relaunch: async () => { unsafeCalls++ }, notify: () => { unsafeCalls++ },
       })
-
-      // Component unmounts while registration is still in flight
-      setTimeout(() => {
-        alive = false
-      }, 20)
-
-      // When the native listener registration finally resolves:
-      const unlisten = await pendingRegistration
-      if (alive) {
-        registeredWhileAlive = true
-      } else {
-        unlisten()
-      }
-
-      return {
-        registeredWhileAlive,
-        unlistenCalled,
-        aliveAtResolution: alive,
+      try {
+        mgr.start(true)
+        mgr.configure({ autoCheckUpdates: true, autoDownloadUpdates: true }, true)
+        const checking = mgr.checkForUpdates()
+        await checkingStarted
+        mgr.dispose()
+        const atDispose = JSON.stringify(state)
+        const schedulesAtDispose = schedules
+        resolveCheck({ version: '9.9.9', body: 'late', close: async () => { releases++ },
+          download: async () => { unsafeCalls++ }, install: async () => { unsafeCalls++ } })
+        await checking
+        await Promise.resolve()
+        mgr.start(true)
+        mgr.configure({ autoCheckUpdates: true, autoDownloadUpdates: true }, true)
+        await mgr.checkForUpdates()
+        return { phaseAtDispose: JSON.parse(atDispose).phase, unchanged: JSON.stringify(state) === atDispose,
+          releases, unsafeCalls, pendingTimers: timers.size, schedulesAtDispose, schedules }
+      } finally {
+        mgr.dispose()
+        window.setTimeout = oldSetTimeout; window.clearTimeout = oldClearTimeout
+        window.setInterval = oldSetInterval; window.clearInterval = oldClearInterval
       }
     })
-
-    assert.equal(res.registeredWhileAlive, false, 'Should not store listener when component was unmounted')
-    assert.equal(res.aliveAtResolution, false, 'Component should be marked dead')
-    assert.equal(res.unlistenCalled, true, 'Late returned listener must be unlistened immediately')
+    assert.equal(res.phaseAtDispose, 'checking', 'Dispose must occur after the actual asynchronous check starts')
+    assert.equal(res.unchanged, true)
+    assert.equal(res.releases, 1)
+    assert.equal(res.unsafeCalls, 0)
+    assert.equal(res.pendingTimers, 0)
+    assert.equal(res.schedulesAtDispose, 1, 'Observe initial scheduling before disposal')
+    assert.equal(res.schedules, res.schedulesAtDispose, 'Late completion must not reschedule checks')
   })
+
+  await test('D4. Product NativeListenerScope: late registration, duplicate keys, disposal, and failed registration', async () => {
+    const res = await page.evaluate(async () => {
+      const { NativeListenerScope } = window.f
+      const scope = new NativeListenerScope()
+      let resolve, registered = 0, stopped = 0
+      const listen = () => { registered++; return new Promise(r => { resolve = r }) }
+      const first = scope.register('close', listen)
+      const second = scope.register('close', listen)
+      await Promise.resolve()
+      scope.dispose()
+      resolve(() => { stopped++ })
+      await first
+      scope.dispose()
+      await scope.register('after-dispose', listen)
+      const active = new NativeListenerScope()
+      await active.register('pending', async () => { registered++; return () => { stopped++ } })
+      await active.register('pending', listen)
+      active.dispose(); active.dispose()
+      const retry = new NativeListenerScope()
+      let actualError = ''
+      try { await retry.register('close', async () => { throw Error('IPC registration failed') }) }
+      catch (error) { actualError = error.message }
+      await retry.register('close', async () => { registered++; return () => { stopped++ } })
+      retry.dispose()
+      return { samePromise: first === second, registered, stopped, actualError }
+    })
+    assert.equal(res.samePromise, true)
+    assert.equal(res.registered, 3, 'Duplicate and disposed registrations must never invoke native services')
+    assert.equal(res.stopped, 3, 'Every accepted or late listener must unlisten exactly once')
+    assert.equal(res.actualError, 'IPC registration failed')
+  })
+
+  await test('E1. Product startup: preferences, restore, confirmed session persistence, then ready', async () => {
+    const res = await page.evaluate(async () => {
+      const f = window.f, prefs = f.createPreferences(), persist = f.deferred()
+      const h = f.startupHarness({ loadPreferences: current => prefs.preferences.loadPreferences(current, async () => f.settingsFrom({ fontSize: 18 })), persist: persist.promise })
+      try {
+        const starting = h.startup.start()
+        await f.until(() => h.model.writes === 1)
+        const beforePersistence = h.startup.state.phase
+        persist.resolve()
+        await starting
+        const result = { beforePersistence, state: { ...h.startup.state }, events: [...h.events], writes: h.model.writes,
+          settingsReady: prefs.preferences.settingsReady.value, fontSize: prefs.preferences.fontSize.value, timers: h.timers.size }
+        let missingWriterError = ''
+        try { await h.startup.flushForClose(async () => {}) } catch (error) { missingWriterError = error.message }
+        return { ...result, missingWriterError }
+      } finally { h.dispose(); prefs.dispose() }
+    })
+    assert.equal(res.beforePersistence, 'initializing', 'A pending session write cannot be declared ready')
+    assert.deepEqual(res.state, { phase: 'ready', error: '', closeProtected: true, session: 'owner' })
+    assert.equal(res.settingsReady, true)
+    assert.equal(res.fontSize, 18)
+    assert.equal(res.writes, 1)
+    assert.equal(res.timers, 0)
+    assert(res.events.indexOf('settings') < res.events.indexOf('launch'))
+    assert(res.events.indexOf('launch') < res.events.indexOf('adopt'))
+    assert.match(res.missingWriterError, /会话保存能力/)
+  })
+
+  for (const stage of ['settings', 'launch']) {
+    await test(`E2/E3/E7. ${stage} IPC never settles: timeout locks editing, protected dirty close cannot discard`, async () => {
+      const res = await page.evaluate(async stage => {
+        const f = window.f, forever = f.deferred()
+        const h = f.startupHarness(stage === 'settings' ? { loadPreferences: () => forever.promise } : { launch: forever.promise })
+        const starting = h.startup.start()
+        await f.until(() => h.events.includes(stage))
+        h.timeout()
+        await starting
+        const phase = h.startup.state.phase
+        const error = h.startup.state.error
+        const protectedClose = h.startup.state.closeProtected
+        h.model.documents = ['defensive-unsaved-draft']; h.model.dirtyCount = 1
+        await h.close()
+        const afterClose = { ...h.model }
+        h.dispose()
+        return { phase, error, protectedClose, afterClose, finalPhase: h.startup.state.phase, timers: h.timers.size, unlistens: h.model.unlistens }
+      }, stage)
+      assert.equal(res.phase, 'failed')
+      assert.match(res.error, /启动超时.*编辑已锁定/)
+      assert.equal(res.protectedClose, true)
+      assert.equal(res.afterClose.confirmations, 1)
+      assert.equal(res.afterClose.destroyed, 0)
+      assert.equal(res.afterClose.writes, 0)
+      assert.equal(res.afterClose.settingsWrites, 0)
+      assert.equal(res.afterClose.dirtyCount, 1)
+      assert.equal(res.finalPhase, 'disposed')
+      assert.equal(res.timers, 0)
+      assert.equal(res.unlistens, 1)
+    })
+  }
+
+  await test('E4. Late launch after timeout cannot replace user documents/workspace or write a session', async () => {
+    const res = await page.evaluate(async () => {
+      const f = window.f, launch = f.deferred(), h = f.startupHarness({ launch: launch.promise })
+      const starting = h.startup.start()
+      await f.until(() => h.events.includes('launch'))
+      h.timeout(); await starting
+      h.model.documents = ['user-draft']; h.model.workspace = 'user-root'
+      launch.resolve({ owner: true, documents: ['stale-file'], workspace: 'stale-root' })
+      await f.until(() => h.releases.length === 1)
+      const result = { state: { ...h.startup.state }, model: { ...h.model }, releases: [...h.releases], adopted: h.events.includes('adopt') }
+      h.dispose()
+      return result
+    })
+    assert.equal(res.state.phase, 'failed')
+    assert.equal(res.state.session, 'pending')
+    assert.deepEqual(res.model.documents, ['user-draft'])
+    assert.equal(res.model.workspace, 'user-root')
+    assert.equal(res.model.writes, 0)
+    assert.equal(res.adopted, false)
+    assert.deepEqual(res.releases, ['stale-file'])
+  })
+
+  await test('E5. Actual preferences reader returning after timeout cannot replace newer settings or enable persistence', async () => {
+    const res = await page.evaluate(async () => {
+      const f = window.f, read = f.deferred(), prefs = f.createPreferences()
+      let returned = false
+      const before = localStorage.getItem('markumo.settings.v1')
+      const h = f.startupHarness({ loadPreferences: current => prefs.preferences.loadPreferences(current, () => read.promise).then(() => { returned = true }) })
+      try {
+        const starting = h.startup.start()
+        await f.until(() => h.events.includes('settings'))
+        h.timeout(); await starting
+        prefs.preferences.fontSize.value = 23
+        read.resolve(f.settingsFrom({ fontSize: 10 }))
+        await f.until(() => returned)
+        return { fontSize: prefs.preferences.fontSize.value, settingsReady: prefs.preferences.settingsReady.value,
+          storageUnchanged: localStorage.getItem('markumo.settings.v1') === before, phase: h.startup.state.phase, writes: h.model.writes }
+      } finally { h.dispose(); prefs.dispose() }
+    })
+    assert.equal(res.fontSize, 23)
+    assert.equal(res.settingsReady, false)
+    assert.equal(res.storageUnchanged, true)
+    assert.equal(res.phase, 'failed')
+    assert.equal(res.writes, 0)
+  })
+
+  await test('E6/E8. Unmount during native registration releases late listener and deadline; restart uses one registration', async () => {
+    const res = await page.evaluate(async () => {
+      const f = window.f, protection = f.deferred(), h = f.startupHarness({ protection: protection.promise })
+      const starting = h.startup.start()
+      const repeated = h.startup.start()
+      await f.until(() => h.model.registrations === 1)
+      h.dispose(); await starting
+      protection.resolve()
+      await f.until(() => h.model.unlistens === 1)
+      await h.startup.start()
+      h.dispose()
+      const next = f.startupHarness()
+      await next.startup.start(); await next.startup.start()
+      const nextRegistrations = next.model.registrations
+      next.dispose(); next.dispose()
+      return { sameAttempt: starting === repeated, phase: h.startup.state.phase, registrations: h.model.registrations,
+        unlistens: h.model.unlistens, timers: h.timers.size, writes: h.model.writes,
+        nextRegistrations, nextUnlistens: next.model.unlistens, nextTimers: next.timers.size }
+    })
+    assert.equal(res.sameAttempt, true)
+    assert.equal(res.phase, 'disposed')
+    assert.equal(res.registrations, 1)
+    assert.equal(res.unlistens, 1)
+    assert.equal(res.timers, 0)
+    assert.equal(res.writes, 0)
+    assert.equal(res.nextRegistrations, 1)
+    assert.equal(res.nextUnlistens, 1)
+    assert.equal(res.nextTimers, 0)
+  })
+
+  for (const stage of ['settings', 'launch', 'persist', 'protection']) {
+    await test(`E9/E10. ${stage} failure retains actual IPC error and never reports ready`, async () => {
+      const res = await page.evaluate(async stage => {
+        const f = window.f
+        const bad = () => Promise.reject(Error(`injected ${stage} IPC failure`))
+        const options = stage === 'settings' ? { loadPreferences: bad } : stage === 'launch' ? { launch: bad() }
+          : stage === 'persist' ? { persist: bad() } : { protection: bad() }
+        // Attach immediately to controlled rejections before sequential startup reaches them.
+        for (const value of Object.values(options)) if (value instanceof Promise) value.catch(() => {})
+        const h = f.startupHarness(options)
+        await h.startup.start()
+        const result = { ...h.startup.state, timers: h.timers.size }
+        h.dispose()
+        return result
+      }, stage)
+      assert.equal(res.phase, 'failed')
+      assert.match(res.error, new RegExp(`injected ${stage} IPC failure`))
+      assert.equal(res.session, 'pending')
+      assert.equal(res.timers, 0)
+    })
+  }
+
+  await test('E exit is distinct from timeout and disposal; late restore remains ignored', async () => {
+    const res = await page.evaluate(async () => {
+      const f = window.f, launch = f.deferred(), h = f.startupHarness({ launch: launch.promise })
+      const starting = h.startup.start()
+      await f.until(() => h.events.includes('launch'))
+      await h.close(); await starting
+      const phaseAfterClose = h.startup.state.phase
+      launch.resolve({ owner: true, documents: ['late'], workspace: 'late-root' })
+      await f.until(() => h.releases.length === 1)
+      const result = { phaseAfterClose, phaseAfterLate: h.startup.state.phase, timers: h.timers.size, destroyed: h.model.destroyed, writes: h.model.writes }
+      h.dispose()
+      return result
+    })
+    assert.equal(res.phaseAfterClose, 'exiting')
+    assert.equal(res.phaseAfterLate, 'exiting')
+    assert.equal(res.timers, 0)
+    assert.equal(res.destroyed, 1)
+    assert.equal(res.writes, 0)
+  })
+
+  for (const mode of ['normal', 'temporary', 'settings-hang', 'launch-hang', 'persist-hang', 'persist-fail', 'no-owner']) {
+    await test(`F. Real desktop App with controlled IPC: ${mode}`, async () => {
+      const nativePage = await browser.newPage({ viewport: { width: 1200, height: 800 } })
+      nativePage.on('pageerror', err => errors.push(err.message))
+      try {
+        await nativePage.goto(`http://127.0.0.1:${port}/${output}/desktop.html?mode=${mode}`)
+        await nativePage.waitForFunction(() => window.nativeTest?.listeners && [...window.nativeTest.listeners.values()].includes('tauri://close-requested'))
+        const command = mode === 'settings-hang' ? 'load_editor_settings' : mode === 'persist-hang' ? 'persist_session' : 'initialize_launch'
+        await nativePage.waitForFunction(command => window.nativeTest.calls.some(call => call.command === command), command)
+        if (mode.endsWith('-hang')) {
+          await nativePage.evaluate(() => window.nativeTest.timeout())
+        }
+        if (mode === 'normal' || mode === 'temporary') {
+          await nativePage.waitForFunction(() => !window.nativeTest.setup.startupLoading)
+          assert.equal(await nativePage.locator('.app').evaluate(el => el.inert), false)
+          assert.equal(await nativePage.evaluate(() => window.nativeTest.calls.filter(call => call.command === 'persist_session').length), mode === 'normal' ? 1 : 0)
+        } else {
+          await nativePage.waitForFunction(() => !!window.nativeTest.setup.startupError)
+          assert.equal(await nativePage.locator('.app').evaluate(el => el.inert), true)
+          assert.equal(await nativePage.evaluate(() => window.nativeTest.setup.startupLoading), true)
+          if (mode === 'persist-fail') assert.match(await nativePage.locator('.startup-overlay').innerText(), /native persistence denied/)
+          if (mode === 'no-owner') assert.match(await nativePage.locator('.startup-overlay').innerText(), /所有权未确认/)
+          if (mode === 'settings-hang' || mode === 'launch-hang') {
+            const before = await nativePage.evaluate(() => {
+              const { setup, calls } = window.nativeTest
+              setup.createNewDoc()
+              return { docs: setup.manager.openedDocuments.length, writes: calls.filter(call => call.command === 'persist_session').length }
+            })
+            assert.deepEqual(before, { docs: 0, writes: 0 }, 'Product command and session write gates must stay closed')
+          }
+          // Defensive dirty content proves the real native listener reaches the
+          // actual product WindowCloseGuard/DiscardDialog, even after failure.
+          await nativePage.evaluate(() => {
+            const { setup } = window.nativeTest
+            const id = setup.manager.createUntitled('txt')
+            setup.manager.dispatch(id, { changes: { from: 0, insert: 'unsaved' } })
+            window.nativeTest.close()
+          })
+          await nativePage.waitForFunction(() => !!document.querySelector('[aria-label="未保存修改确认"]'))
+          assert.equal(await nativePage.locator('.discard-overlay').evaluate(el => el.closest('[inert]') === null), true)
+          assert.equal(await nativePage.evaluate(() => window.nativeTest.calls.some(call => call.command === 'plugin:window|destroy')), false)
+          if (mode === 'settings-hang') {
+            await nativePage.evaluate(() => { window.nativeTest.setup.fontSize = 23; window.nativeTest.settingsResolve({ fontSize: 10 }) })
+            await nativePage.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)))
+            assert.equal(await nativePage.evaluate(() => window.nativeTest.setup.fontSize), 23)
+          }
+          if (mode === 'launch-hang') {
+            await nativePage.evaluate(() => window.nativeTest.launchResolve({ ...window.nativeTest.launch, files: { files: [
+              { token: 'late-token', path: '/stale.txt', name: 'stale.txt', text: 'stale', version: 'v1', encoding: 'UTF-8', eol: 'LF', bom: false, readOnly: false }
+            ], errors: [] } }))
+            await nativePage.waitForFunction(() => window.nativeTest.released.includes('late-token'))
+            assert.equal(await nativePage.evaluate(() => window.nativeTest.setup.manager.openedDocuments.length), 1)
+            assert.equal(await nativePage.evaluate(() => window.nativeTest.setup.manager.getText(window.nativeTest.setup.manager.activeId)), 'unsaved')
+          }
+          if (mode === 'persist-hang') {
+            await nativePage.evaluate(() => window.nativeTest.persistedResolve())
+            await nativePage.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)))
+            assert.equal(await nativePage.evaluate(() => window.nativeTest.setup.startupLoading), true)
+            assert.match(await nativePage.evaluate(() => window.nativeTest.setup.startupError), /启动超时/)
+          }
+        }
+        await nativePage.evaluate(() => window.nativeTest.app.unmount())
+        await nativePage.waitForFunction(() => window.nativeTest.listeners.size === 0)
+        const counts = await nativePage.evaluate(() => ({
+          closeRegistrations: window.nativeTest.calls.filter(call => call.command === 'plugin:event|listen' && call.args.event === 'tauri://close-requested').length,
+          closeUnlistens: window.nativeTest.calls.filter(call => call.command === 'plugin:event|unlisten' && call.args.event === 'tauri://close-requested').length,
+        }))
+        assert.deepEqual(counts, { closeRegistrations: 1, closeUnlistens: 1 })
+      } finally { await nativePage.close() }
+    })
+  }
+
+  for (const mode of ['settings-hang', 'launch-hang']) {
+    await test(`F unmount before ${mode} settles: no late preferences, restore, listener or timer revival`, async () => {
+      const nativePage = await browser.newPage()
+      nativePage.on('pageerror', err => errors.push(err.message))
+      try {
+        await nativePage.goto(`http://127.0.0.1:${port}/${output}/desktop.html?mode=${mode}`)
+        const command = mode === 'settings-hang' ? 'load_editor_settings' : 'initialize_launch'
+        await nativePage.waitForFunction(command => window.nativeTest?.calls.some(call => call.command === command), command)
+        await nativePage.evaluate(() => window.nativeTest.app.unmount())
+        await nativePage.waitForFunction(() => window.nativeTest.listeners.size === 0)
+        await nativePage.evaluate(mode => {
+          const t = window.nativeTest
+          t.timeout() // Even a queued, cancelled deadline must be harmless.
+          if (mode === 'settings-hang') t.settingsResolve({ fontSize: 10 })
+          else t.launchResolve({ ...t.launch, files: { files: [
+            { token: 'disposed-token', path: '/disposed.txt', name: 'disposed.txt', text: '', version: 'v1', encoding: 'UTF-8', eol: 'LF', bom: false, readOnly: false }
+          ], errors: [] } })
+        }, mode)
+        if (mode === 'launch-hang') await nativePage.waitForFunction(() => window.nativeTest.released.includes('disposed-token'))
+        const res = await nativePage.evaluate(() => ({
+          ready: window.nativeTest.setup.settingsReady,
+          documents: window.nativeTest.setup.manager.openedDocuments.length,
+          error: window.nativeTest.setup.startupError,
+          writes: window.nativeTest.calls.filter(call => call.command === 'persist_session').length,
+          listeners: window.nativeTest.listeners.size,
+        }))
+        assert.equal(res.documents, 0)
+        assert.equal(res.error, '')
+        assert.equal(res.writes, 0)
+        assert.equal(res.listeners, 0)
+        if (mode === 'settings-hang') assert.equal(res.ready, false)
+      } finally { await nativePage.close() }
+    })
+  }
 
   assert.deepEqual(errors, [])
   console.log(`PASS all ${results.length} shell lifecycle and status regressions`)
