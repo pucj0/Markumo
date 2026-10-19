@@ -127,7 +127,7 @@ try {
       assert.equal(value.simple.html,value.native.html);
     }
   })
-  await test('partial cross-paragraph selection retains structure; a single final newline stays plain',async()=>{
+  await test('partial cross-paragraph selection and a selected final newline retain Markdown',async()=>{
     await reset('# 标题一\n\n**正文二**\n\n不要复制的段落');
     const partial=await page.evaluate(async()=>{
       const f=window.f;let title,body;
@@ -137,7 +137,52 @@ try {
     assert.equal(partial.native.text,'# 题一\n\n**正文**');assert.equal(partial.menu.text,partial.native.text);
     await reset('**第一行**\n第二行');
     const line=await page.evaluate(()=>{const f=window.f;let at;f.view().state.doc.descendants((node,pos)=>{if(node.isText&&node.text==='第一行')at=pos;});f.range(at,at+4);return f.native();});
-    assert.equal(line.text,'第一行\n');assert.doesNotMatch(line.text,/\*\*/);
+    assert.equal(line.text,'**第一行**\n');
+  })
+  await test('an endpoint at the next paragraph start copies Markdown without its first character',async()=>{
+    const source='# 标题边界\n\n下一段正文';await reset(source);
+    const value=await page.evaluate(async()=>{
+      const f=window.f,v=f.view();let title,body;
+      v.state.doc.descendants((node,at)=>{if(node.type.name==='heading')title=at+1;if(node.type.name==='paragraph')body=at+1;});
+      const results=[];
+      for(const [anchor,head] of [[title,body],[body,title]]){
+        f.range(anchor,head);const native=f.native();await f.live().clipboard('copy');
+        results.push({native,menu:f.copied(),to:v.state.selection.to,toOffset:v.state.selection.$to.parentOffset});
+      }
+      return {results,source:f.source()};
+    });
+    for(const item of value.results){assert.match(item.native.text,/^# 标题边界/);assert.doesNotMatch(item.native.text,/下一段正文/);assert.equal(item.menu.text,item.native.text);assert.equal(item.toOffset,0);}
+    assert.equal(value.source,source);
+  })
+  await test('real App mouse dragging lands at the next line start and copies the crossed boundary',async()=>{
+    const app=await browser.newPage({viewport:{width:1100,height:800}});app.on('pageerror',e=>errors.push(e.message));
+    await app.goto(`http://localhost:${port}/`);
+    await app.waitForFunction(()=>document.getElementById('app').__vue_app__?._instance?.setupState?.manager);
+    const source='# 基于SpringBoot+Vue的摄影约拍管理系统\n\n项目获取地址：https://example.com/project\n\n项目体验地址：https://example.com/demo';
+    await app.evaluate(source=>{
+      const s=document.getElementById('app').__vue_app__._instance.setupState,m=s.manager;m.createUntitled('md');const id=m.activeId;
+      m.dispatch(id,{changes:{from:0,to:m.getState(id).doc.length,insert:source}});m.setMarkdownMode(id,'live');window.testManager=m;
+    },source);
+    await app.locator('.md-prose h1').waitFor();
+    const geometry=await app.evaluate(()=>{
+      const v=window.testManager.activeLiveEditor.view;let title,body;v.state.doc.descendants((node,at)=>{if(node.type.name==='heading')title=at+1;if(node.type.name==='paragraph'&&body===undefined)body=at+1;});
+      return {title,body,start:v.coordsAtPos(title),end:v.coordsAtPos(body)};
+    });
+    const start={x:geometry.start.left+1,y:(geometry.start.top+geometry.start.bottom)/2},end={x:geometry.end.left,y:(geometry.end.top+geometry.end.bottom)/2};
+    for(const reverse of [false,true]){
+      // Start a fresh selection gesture rather than double-clicking the previous
+      // mouseup point or dragging the text that is still selected.
+      await app.evaluate(({title})=>{const v=window.testManager.activeLiveEditor.view;v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.create(v.state.doc,title)));},geometry);
+      await app.waitForTimeout(550);
+      const from=reverse?end:start,to=reverse?start:end;await app.mouse.move(from.x,from.y);await app.mouse.down();await app.mouse.move(to.x,to.y,{steps:16});await app.mouse.up();
+      await app.waitForFunction(({title,body})=>{const s=window.testManager.activeLiveEditor.view.state.selection;return s.from===title&&s.to===body},geometry);
+      const value=await app.evaluate(()=>{
+        const m=window.testManager,v=m.activeLiveEditor.view,s=v.state.selection,data=new DataTransfer();v.dom.dispatchEvent(new ClipboardEvent('copy',{bubbles:true,cancelable:true,clipboardData:data}));
+        return {offset:s.$to.parentOffset,text:data.getData('text/plain'),html:data.getData('text/html'),source:m.getText(m.activeId)};
+      });
+      assert.equal(value.offset,0);assert.match(value.text,/^# 基于SpringBoot\+Vue的摄影约拍管理系统/);assert.doesNotMatch(value.text,/项目获取地址/);assert.match(value.html,/<h1>/);assert.equal(value.source,source,reverse?'reverse drag':'forward drag');
+    }
+    await app.screenshot({path:`${output}/next-line-start-selection.png`});await app.close();
   })
   const tableSource = '| 角色 | 测试账号 | 测试密码 |\n| --- | --- | --- |\n| 系统管理员 | admin | 123456 |\n| 普通用户 | zhangsan | 123456 |'
   await reset(tableSource)

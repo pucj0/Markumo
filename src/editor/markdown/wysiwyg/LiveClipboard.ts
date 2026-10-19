@@ -74,9 +74,10 @@ export class LiveClipboard {
       rich = container.innerHTML
     }
     const html = DOMPurify.sanitize(rich, { USE_PROFILES: { html: true } })
-    // Count logical lines in the selected content, not serializer newlines or
-    // screen wrapping. A final line terminator still belongs to a single line.
-    const multipleLines = /[\r\n]/.test(plain.replace(/(?:\r\n|\r|\n)$/, ''))
+    // Ending at the next textblock's offset zero still selects the paragraph
+    // boundary, even though no character in that next block was selected.
+    const crossesBlocks = selection instanceof TextSelection && !selection.$from.sameParent(selection.$to)
+    const multipleLines = crossesBlocks || /[\r\n]/.test(plain)
     const useMarkdown = table || multipleLines || this.settings().copyMarkdown
     return { selection, markdown, plain, html, text: useMarkdown ? markdown : plain }
   }

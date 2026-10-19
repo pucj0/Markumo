@@ -7,7 +7,7 @@
 
 复制按选区区分：单元格内的单行文字选区只输出选中的文字；框选单元格、整行、整列或独立表格时输出表格。表格的 `text/plain` 为可粘回 Markdown 编辑器的表格源码，`text/html` 为只包含所选行列的语义化表格。只选数据行时，HTML 保留数据单元格，Markdown 回退补一个空表头，不把首行数据冒充表头。显式“复制内容并简化格式”仍可取得无表格标记的文字。
 
-行数按选区内容中的真实换行判断，包括段落边界、软换行和硬换行，不按窗口宽度产生的视觉折行判断，也不按 Markdown 序列化器补出的空行、标题标记或代码围栏判断。单行末尾的一个换行符不切换为 Markdown。因此整份文档只有一个标题时，普通复制也是标题文字；同时选中标题和正文则输出 Markdown。
+行数按选区跨过的真实边界判断，包括段落边界、软换行和硬换行，不按窗口宽度产生的视觉折行判断，也不按 Markdown 序列化器补出的空行、标题标记或代码围栏判断。从标题拖到下一段开头（偏移 0、没有选中下一段首字）也算跨段，输出 Markdown；末尾实际选中的换行符不能丢掉后再判断。只选标题文字、或整份文档只有一个标题时，普通复制仍是标题文字。正向、反向拖选采用相同规则。
 
 多格式剪贴板参考 [Typora 官方复制说明](https://support.typora.io/Copy-and-Paste/)：同时提供文本和 HTML，由目标应用选择。单行与跨行的自动规则按用户观察到的使用习惯实现，官方说明未明确列出这条判定细节。
 
@@ -44,7 +44,7 @@ Markdown 富文本正文提供 Google 搜索、剪切/复制/粘贴/删除图标
 - 前后端首选项模型增加 `markdownClipboard`；Tauri 仅增加 `clipboard-manager:allow-write-html` 权限。
 - 无新依赖，PDF.js 和富文本控制器仍动态加载。
 
-执行 `node scripts/rich-clipboard-regression.mjs` 运行 25 项无界面浏览器验证（按现有测试约定可设置 `MARKUMO_PLAYWRIGHT_MODULE`、`MARKUMO_CHROME` 和 `MARKUMO_TEST_PORT`）。覆盖单行标题、视觉折行、跨段落与真实换行、单行末尾换行、单元格文字、网址与命名链接、鼠标框选表头与数据行、部分列与矩形区域、完整表格、表格复制粘贴往返与剪切撤销、历史设置迁移及新选项持久化。测试使用隔离剪贴板，不读取或修改用户的系统剪贴板。截图和结果写入忽略目录 `test-results/rich-clipboard/`。
+执行 `node scripts/rich-clipboard-regression.mjs` 运行 27 项无界面浏览器验证（按现有测试约定可设置 `MARKUMO_PLAYWRIGHT_MODULE`、`MARKUMO_CHROME` 和 `MARKUMO_TEST_PORT`）。覆盖单行标题、视觉折行、跨段落与真实换行、下一段首字前的边界、完整应用中的正反向鼠标拖选、末尾换行、单元格文字、网址与命名链接、鼠标框选表头与数据行、部分列与矩形区域、完整表格、表格复制粘贴往返与剪切撤销、历史设置迁移及新选项持久化。测试使用隔离剪贴板，不读取或修改用户的系统剪贴板。截图和结果写入忽略目录 `test-results/rich-clipboard/`。
 
 另已执行 `pnpm typecheck`、`pnpm build`、Cargo check/test（9 项通过），以及空 Markdown、发布控制器和 20 轮媒体切换回归。真实 Windows/macOS/Linux 应用之间的系统剪贴板互通仍需桌面人工验收。
 
