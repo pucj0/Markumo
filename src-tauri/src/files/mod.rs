@@ -66,18 +66,29 @@ pub struct FileIdentity { pub volume: u32, pub index: u64 }
 pub(crate) fn file_identity(path: &Path) -> Option<FileIdentity> {
     #[cfg(windows)]
     {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
         let file = fs::File::open(path).ok()?;
-        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-        if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 { return None; }
-        Some(FileIdentity {
-            volume: info.dwVolumeSerialNumber,
-            index: ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
-        })
+        file_identity_from_handle(&file)
     }
     #[cfg(not(windows))]
-    { let _ = path; None }
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// Same identity policy as [`file_identity`], but for an already-open handle.
+/// Media change detection reuses this so routing and preview do not grow two
+/// different interpretations of the Windows file identity.
+#[cfg(windows)]
+pub(crate) fn file_identity_from_handle(file: &fs::File) -> Option<FileIdentity> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 { return None; }
+    Some(FileIdentity {
+        volume: info.dwVolumeSerialNumber,
+        index: ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+    })
 }
 
 #[derive(Clone)]

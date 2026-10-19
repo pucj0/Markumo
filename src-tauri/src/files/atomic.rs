@@ -11,10 +11,15 @@ mod fault {
     pub const TEMP_SYNC: u32 = 1 << 2;
     pub const REPLACE: u32 = 1 << 3;
     pub const RACE_TARGET: u32 = 1 << 4;
+    #[cfg(windows)]
     pub const BACKUP_CREATE: u32 = 1 << 5;
+    #[cfg(windows)]
     pub const TARGET_WRITE: u32 = 1 << 6;
+    #[cfg(windows)]
     pub const TARGET_SYNC: u32 = 1 << 7;
+    #[cfg(windows)]
     pub const PARTIAL_WRITE: u32 = 1 << 8;
+    #[cfg(windows)]
     pub const ROLLBACK_FAIL: u32 = 1 << 9;
 
     thread_local! {
@@ -32,6 +37,7 @@ mod fault {
     }
     /// A one-shot fault, so a write failure can be followed by a successful
     /// rollback within the same test.
+    #[cfg(windows)]
     pub fn take(bit: u32) -> bool {
         ACTIVE.with(|active| {
             let current = active.get();

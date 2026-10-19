@@ -206,6 +206,24 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 
 `cargo check --manifest-path src-tauri/Cargo.toml --all-targets` 通过，无编译错误。
 
+## Phase 06.1 follow-up
+
+Phase 06.1 (`806114e` 之后的媒体版本修复) 进一步收紧了 F-05/R-06：
+
+- 媒体版本现在除长度、mtime、Windows volume+file index / Unix dev+ino 外，还包含
+  creation time、Unix ctime（含 nsec）或 Windows `FILE_BASIC_INFO.ChangeTime`，
+  以及文件首/尾各 4 KiB 的 SHA-256 采样。
+- 采样是固定上限的，不读取整份媒体文件，也不对每个 256 KiB chunk 做全文件哈希；
+  详细数据、测试和残余限制见
+  [Phase 06.1 媒体版本审计](phase-06.1-media-version-audit.md)。
+- Windows 文件身份保存策略、token/owner 校验和 `read_media_chunk` 的 `conflict`
+  行为均未改变。
+- Phase 06.1 最终测试：Windows 76 项、Linux 73 项全部通过（Linux 基线 69 项，另新增 4 项媒体测试）。
+
+
+
+---
+
 ## 10. 文件与人工决策点
 
 本阶段修改的 Rust 文件：
