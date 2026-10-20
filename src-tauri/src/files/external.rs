@@ -14,6 +14,23 @@ struct Targets { owners: HashMap<String, (u64, HashMap<String, PathBuf>)> }
 #[serde(rename_all="camelCase")]
 pub struct WatchStatus { pub watcher_count: usize, pub directory_count: usize, pub file_count: usize }
 
+// Both normal and deadline-boundary events obey the same filtering and budget.
+// In particular, a late access event must not start another hash/read cycle.
+fn collect_event(event: notify::Result<notify::Event>, paths: &mut HashSet<PathBuf>, error: &mut Option<String>) -> bool {
+    match event {
+        Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => {
+            let mut overflow = false;
+            for path in event.paths {
+                if paths.len() < 4096 || paths.contains(&path) { paths.insert(path); }
+                else { overflow = true; }
+            }
+            overflow
+        }
+        Ok(_) => false,
+        Err(e) => { *error = Some(format!("实时监测发生错误，已改用窗口焦点检查：{e}")); false }
+    }
+}
+
 pub struct ExternalWatcher {
     watcher: Option<RecommendedWatcher>,
     targets: Arc<Mutex<Targets>>,
@@ -30,7 +47,10 @@ impl ExternalWatcher {
         let (tx, rx) = mpsc::sync_channel(256);
         let overflow = Arc::new(AtomicBool::new(false));
         let full = overflow.clone();
-        let watcher = notify::recommended_watcher(move |event| {
+        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            // Do not let read-only activity fill the bounded channel and turn
+            // its overflow fallback into another full-document check cycle.
+            if event.as_ref().is_ok_and(|event| matches!(event.kind, notify::EventKind::Access(_))) { return; }
             if tx.try_send(event).is_err() { full.store(true, Ordering::Release); }
         }).map_err(|e| FileError::new("watch", &e.to_string()))?;
         let worker = std::thread::spawn(move || {
@@ -41,20 +61,12 @@ impl ExternalWatcher {
                 let mut next = Some(first);
                 loop {
                     if let Some(event) = next.take() {
-                        match event {
-                            Ok(event) => {
-                                // Reads must not generate a new check/read feedback loop.
-                                if !matches!(event.kind, notify::EventKind::Access(_)) {
-                                    for path in event.paths { if paths.len() < 4096 { paths.insert(path); } else { overflow.store(true, Ordering::Release); } }
-                                }
-                            }
-                            Err(e) => error = Some(format!("实时监测发生错误，已改用窗口焦点检查：{e}")),
-                        }
+                        if collect_event(event, &mut paths, &mut error) { overflow.store(true, Ordering::Release); }
                     }
                     match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                         Ok(event) if Instant::now() < deadline => next = Some(event),
                         Ok(event) => { // Preserve the boundary event rather than dropping it.
-                            if let Ok(event) = event { paths.extend(event.paths.into_iter().take(4096)); }
+                            if collect_event(event, &mut paths, &mut error) { overflow.store(true, Ordering::Release); }
                             break;
                         }
                         Err(_) => break,
@@ -104,6 +116,46 @@ impl Drop for ExternalWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn own_native_save_hints_reach_both_windows_with_shared_directory_and_new_baseline() {
+        let dir = tempfile::tempdir().unwrap(); let path = dir.path().join("note.md");
+        std::fs::write(&path, "old").unwrap();
+        let mut service = crate::files::FileService::default(); service.set_owner("first");
+        let opened = service.open_selected(path, None).unwrap();
+        let path = PathBuf::from(&opened.metadata.path); let token = opened.metadata.token;
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = ExternalWatcher::with_sink(move |owner, hint| { let _ = tx.send((owner.to_owned(), hint)); }).unwrap();
+        watcher.set("first", 1, HashMap::from([(token.clone(), path.clone())])).unwrap();
+        let status = watcher.set("second", 2, HashMap::from([("other-window-token".into(), path)])).unwrap();
+        assert_eq!(status.directory_count, 1); assert_eq!(status.file_count, 2);
+        let saved = service.save(&token, "# own save", Some(&opened.metadata.version), "UTF-8", false).unwrap();
+        let mut owners = HashSet::new();
+        while owners.len() < 2 {
+            let (owner, hint) = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            if owner == "first" { assert_eq!(hint.generation, 1); assert!(hint.tokens.contains(&token)); }
+            else { assert_eq!(hint.generation, 2); assert!(hint.tokens.contains(&"other-window-token".into())); }
+            owners.insert(owner);
+        }
+        assert_eq!(service.check_external(&token).unwrap(), saved.version);
+        watcher.release("first", None); assert_eq!(watcher.directories.len(), 1);
+        watcher.release("second", None); assert!(watcher.directories.is_empty());
+    }
+    #[test]
+    fn duplicate_hints_access_events_and_deadline_errors_share_one_bounded_batch() {
+        let mut paths = HashSet::new(); let mut error = None;
+        for _ in 0..100 {
+            assert!(!collect_event(Ok(notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any)).add_path("note.txt".into())), &mut paths, &mut error));
+        }
+        assert_eq!(paths.len(), 1);
+        assert!(!collect_event(Ok(notify::Event::new(notify::EventKind::Access(notify::event::AccessKind::Any)).add_path("access-only.txt".into())), &mut paths, &mut error));
+        assert_eq!(paths.len(), 1);
+        assert!(!collect_event(Err(notify::Error::generic("boundary failure")), &mut paths, &mut error));
+        assert!(error.unwrap().contains("boundary failure"));
+        let mut error = None;
+        for n in 0..4095 { collect_event(Ok(notify::Event::new(notify::EventKind::Any).add_path(format!("file-{n}").into())), &mut paths, &mut error); }
+        assert!(collect_event(Ok(notify::Event::new(notify::EventKind::Any).add_path("overflow".into())), &mut paths, &mut error));
+        assert_eq!(paths.len(), 4096);
+    }
     #[test]
     fn native_parent_watcher_detects_atomic_replacement_and_releases_resources() {
         let dir = tempfile::tempdir().unwrap();

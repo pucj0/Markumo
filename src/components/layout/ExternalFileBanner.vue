@@ -1,6 +1,10 @@
 <template>
-  <aside v-if="revision >= 0 && state && state.conflictValid" class="external-banner" role="status" aria-live="polite">
-    <template v-if="state.hidden">
+  <aside v-if="revision >= 0 && state && (state.conflictValid || state.phase === 'unavailable')" class="external-banner" role="status" aria-live="polite">
+    <template v-if="!state.conflictValid">
+      <div class="explanation"><strong>磁盘检查暂时失败</strong><span>{{ state.error }} 保存时仍会校验磁盘版本，可重试保存。</span></div>
+      <div class="actions"><button :disabled="busy" @click="external.check(id)">重新检查</button></div>
+    </template>
+    <template v-else-if="state.hidden">
       <button class="summary" @click="external.keep(id, false)">⚠ {{ title }} · 查看处理选项</button>
     </template>
     <template v-else>
@@ -20,11 +24,10 @@ import { computed } from 'vue'
 import type { FileController } from '../../features/files/FileController'
 const props = defineProps<{ files: FileController; id: string }>()
 const external = props.files.external
-// `state()` returns a mutable binding object. Vue 3.5 only notifies a computed's
-// subscribers when the computed value itself changes, so a field-only change
-// (keep/hide) would leave this banner stale. Track the revision ref directly.
+// Copy the mutable state so phase/operation changes also invalidate derived
+// titles and button gates, not only the template's direct revision dependency.
 const revision = external.revision
-const state = computed(() => external.state(props.id))
+const state = computed(() => { const value = external.state(props.id); return value && { ...value } })
 const busy = computed(() => !!state.value?.operation)
 const doc = computed(() => { external.revision.value; return props.files.manager.metadata(props.id) })
 const title = computed(() => state.value?.phase === 'deleted' ? '原文件已被删除或移动' : state.value?.phase === 'unavailable' ? '暂时无法读取磁盘文件' : '文件已在外部修改')

@@ -21,17 +21,19 @@ import Diff from '/src/components/modals/ExternalFileDiff.vue'
 window.f={DocumentManager,FileController,AutoSaveController,RecoveryController,diffWithinBudget,EditorSelection,undoDepth,isolateHistory,createApp,h,nextTick,Banner,Dialogs,Diff}
 window.ok=(value,message='assertion failed')=>{if(!value)throw Error(message)}
 window.defer=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}}
+window.flushChecks=async t=>{clearTimeout(t.external.timer);t.external.timer=undefined;await t.external.drain()}
+window.flushAuto=async t=>{clearTimeout(t.auto.timer);t.auto.timer=undefined;await t.auto.flush();clearTimeout(t.auto.timer);t.auto.timer=undefined}
 window.make=(options={})=>{
  const manager=new DocumentManager([],async()=>[]), notices=[],released=[],writes=[],subscriptions=[]
  let serial=1, content=options.text??'one\\ntwo\\n', disk={token:'token',path:'E:/isolated/note.'+(options.extension||'txt'),name:'note.'+(options.extension||'txt'),encoding:options.encoding||'UTF-8',bom:options.bom||false,eol:options.eol||'LF',readOnly:false,version:'hash1:8:1',text:content,kind:'text',...options}
  const t={manager,notices,released,writes,subscriptions,disk,checks:0,reads:0,error:null,readGate:null,checkGate:null,saveGate:null,listener:null}
  const gateway={release:async token=>released.push(token),
- checkExternal:async token=>{t.checks++;if(t.checkGate)await t.checkGate.promise;if(t.error)throw t.error;return t.disk.version},
+ checkExternal:async token=>{t.checks++;if(t.checkImpl)return t.checkImpl(token);const version=t.disk.version,error=t.error;if(t.checkGate)await t.checkGate.promise;if(error)throw error;return version},
  readExternal:async(token,version)=>{t.reads++;const snapshot={...t.disk};if(t.readGate)await t.readGate.promise;if(t.error)throw t.error;if(version!==t.disk.version)throw {code:'conflict',message:'disk changed'};return snapshot},
  watchExternal:async(tokens,generation)=>{subscriptions.push({tokens,generation});return {watcherCount:tokens.length?1:0,directoryCount:tokens.length?1:0,fileCount:tokens.length}},
  listenExternal:async listener=>{t.listener=listener;return ()=>{t.listener=null}},
  saveTarget:async()=>t.target??null,
- save:async(token,text,version,encoding,bom)=>{if(t.saveGate)await t.saveGate.promise;if(token==='token'&&version!==t.disk.version)throw {code:'conflict',message:'disk conflict'};writes.push({token,text,version,encoding,bom});const result={...t.disk,token,path:t.target?.path??t.disk.path,name:t.target?'copy.txt':t.disk.name,version:'saved'+(++serial)+':8:'+serial,text,encoding,bom};if(token==='token')t.disk=result;return result}
+ save:async(token,text,version,encoding,bom)=>{t.saveCalls=(t.saveCalls||0)+1;if(t.saveGate)await t.saveGate.promise;if(t.saveError)throw t.saveError;if(token==='token'&&version!==t.disk.version)throw {code:'conflict',message:'disk conflict'};writes.push({token,text,version,encoding,bom});const result={...t.disk,token,path:t.target?.path??t.disk.path,name:t.target?'copy.txt':t.disk.name,version:'saved'+(++serial)+':8:'+serial,text,encoding,bom};if(token==='token')t.disk=result;return result}
  }
  const files=new FileController(manager,gateway,message=>notices.push(message)),external=files.external
  files.accept(disk); const id=manager.activeId
@@ -40,7 +42,9 @@ window.make=(options={})=>{
 }
 `)
 const server=await createServer({server:{host:'127.0.0.1',port:1491,strictPort:true,hmr:false,watch:null}})
+console.log('Starting external-file regression server')
 await server.listen()
+console.log('External-file regression server ready')
 let browser
 const results=[], errors=[]
 try {
@@ -49,7 +53,132 @@ try {
  page.on('pageerror',e=>errors.push(e.message))
  await page.goto(`http://127.0.0.1:1491/${output}/index.html`)
  await page.waitForFunction(()=>window.make)
- const test=async(name,fn)=>{await page.evaluate(fn);results.push(name);console.log('PASS '+name)}
+ const test=async(name,fn)=>{let timer;try{await Promise.race([page.evaluate(fn),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Timed out: '+name)),20000)})]);results.push(name);console.log('PASS '+name)}finally{clearTimeout(timer)}}
+ await test('P0 manual save during checking accepts native result and ignores late V1, including errors',async()=>{
+   for(const reject of [false,true]) {const t=make();try {
+     t.edit();const text=t.manager.getText(t.id),depth=f.undoDepth(t.manager.getState(t.id)),gate=defer();
+     t.checkImpl=()=>gate.promise;const pending=t.external.check(t.id);
+     ok(t.external.state(t.id).phase==='checking');
+     const saved=await t.files.save(t.id);ok(saved,'checking must not reject Ctrl+S');
+     const version=t.manager.metadata(t.id).lastDiskVersion;
+     if(reject)gate.reject({code:'deleted',message:'obsolete missing file'});else gate.resolve('hash1:8:1');
+     await pending;ok(!t.external.blocked(t.id),'late V1/error must not lock saved V2');
+     ok(t.external.state(t.id).knownVersion===version);ok(t.external.state(t.id).operation===null);
+     ok(t.manager.getText(t.id)===text&&f.undoDepth(t.manager.getState(t.id))===depth);ok(!t.notices.length);
+     t.checkImpl=null;t.change('real change after V2');t.edit('new edit');await t.external.check(t.id);
+     ok(t.external.blocked(t.id));ok(!await t.files.save(t.id));ok(t.writes.length===1);
+   } finally {t.dispose()}}
+ })
+ await test('P0 ten Ctrl+S in source/live/split and shared panes retain canonical text and undo',async()=>{
+   for(const mode of ['source','live','split']){const t=make({extension:'md'});try{
+     t.manager.setMarkdownMode(t.id,mode);t.manager.splitPane('right',t.manager.activePane,t.id);t.edit();
+     const before=t.manager.getText(t.id),depth=f.undoDepth(t.manager.getState(t.id));
+     for(let n=0;n<10;n++){const gate=defer();t.checkImpl=()=>gate.promise;const check=t.external.check(t.id);ok(await t.files.save(t.id));gate.resolve('hash1:8:1');await check;ok(!t.external.blocked(t.id))}
+     ok(t.writes.length===10);ok(t.manager.openedDocuments.length===1);ok(t.manager.getText(t.id)===before);ok(f.undoDepth(t.manager.getState(t.id))===depth);ok(!t.notices.length);
+   }finally{t.dispose()}}
+ })
+ await test('P0 external content changes during checking or native save are still refused',async()=>{
+   for(const duringSave of [false,true]){const t=make();try{
+     t.edit();const depth=f.undoDepth(t.manager.getState(t.id));t.checkGate=defer();const check=t.external.check(t.id);
+     if(duringSave)t.saveGate=defer();else t.change('external during check');
+     const save=t.files.save(t.id);if(duringSave){t.change('external during native save');t.saveGate.resolve()}
+     ok(!await save);t.checkGate.resolve();await check;ok(t.external.blocked(t.id));ok(t.external.state(t.id).conflictValid);ok(t.writes.length===0);ok(t.manager.metadata(t.id).dirty);ok(f.undoDepth(t.manager.getState(t.id))===depth);
+   }finally{t.dispose()}}
+ })
+ await test('P0 native I/O and IPC failures permit a second manual attempt',async()=>{
+   for(const code of ['permission','read_only','io','busy','file_locked','ipc']){const t=make();try{
+     t.edit();t.saveError={code,message:code};ok(!await t.files.save(t.id));ok(!t.external.blocked(t.id));ok(!t.external.state(t.id).conflictValid);
+     t.saveError=null;ok(await t.files.save(t.id));ok(t.saveCalls===2);ok(t.external.state(t.id).phase==='normal');ok(t.notices.length===1);
+   }finally{t.dispose()}}
+ })
+ await test('P0 successful baseline is published before deferred or failed recovery bookkeeping',async()=>{
+   const t=make();try{t.edit();const gate=defer(),entered=defer();t.files.setSavedHandler(()=>{entered.resolve();return gate.promise});const save=t.files.save(t.id);await entered.promise;
+     ok(t.external.state(t.id).knownVersion===t.disk.version);ok(!t.external.blocked(t.id));gate.reject(Error('recovery unavailable'));ok(await save);ok(!t.external.blocked(t.id));ok(!t.manager.metadata(t.id).dirty);
+   }finally{t.dispose()}
+ })
+ await test('P0 autosave parks during check, resumes once and bounds I/O retries with deduplicated notices',async()=>{
+   const t=make(),now=Date.now;let time=now();Date.now=()=>time;
+   try{t.edit();t.auto=new f.AutoSaveController(t.manager,t.files);t.checkGate=defer();const check=t.external.check(t.id);t.auto.configure(true,0);
+     ok(!t.auto.timer,'autosave must await check completion without polling');ok(await t.files.autoSave(t.id)==='skipped');ok(!t.saveCalls);
+     t.checkGate.resolve();await check;await flushAuto(t);ok(t.writes.length===1);ok(!t.notices.length);
+     t.edit('retry');t.saveError={code:'permission',message:'permission denied'};
+     await flushAuto(t);ok(t.auto.failures.get(t.id).retryAt===time+1000);await flushAuto(t);ok(t.saveCalls===2);
+     time+=1000;await flushAuto(t);ok(t.auto.failures.get(t.id).retryAt===time+4000);
+     time+=4000;await flushAuto(t);ok(t.auto.failures.get(t.id).retryAt===Infinity);for(let n=0;n<10;n++){time+=10000;t.edit('x');await flushAuto(t)}
+     ok(t.saveCalls===4);ok(t.notices.length===1);ok(t.manager.metadata(t.id).dirty);ok(!t.external.blocked(t.id));
+     t.disk={...t.disk,version:t.disk.version.split(':').slice(0,2).join(':')+':999'};await t.external.check(t.id);await flushAuto(t);ok(t.saveCalls===4,'metadata-only watcher hints must not reset an exhausted failure budget');
+     t.saveError=null;ok(await t.files.save(t.id));t.edit('recovered');await flushAuto(t);ok(t.writes.length===3);ok(!t.manager.metadata(t.id).dirty);
+   }finally{Date.now=now;t.dispose()}
+ })
+ await test('P0 own-save watcher burst and focus check coalesce; a hint during a read is retained',async()=>{
+   const t=make();try{t.external.configure(true);await t.external.start();await flushChecks(t);t.edit();
+     const gate=defer();t.checkImpl=()=>gate.promise;t.external.focus(10000);const check=t.external.check(t.id);ok(await t.files.save(t.id));gate.resolve('hash1:8:1');await check;t.checkImpl=null;
+     const generation=t.subscriptions.at(-1).generation,before=t.checks;
+     for(let n=0;n<100;n++)t.listener({generation,tokens:['token']});await flushChecks(t);
+     ok(t.checks===before+1,'100 own-write hints should cost one hash read');ok(!t.external.blocked(t.id));ok(!t.notices.length);
+     t.edit('dirty');t.checkGate=defer();const running=t.external.check(t.id);t.change('real external change');
+     for(let n=0;n<100;n++)t.listener({generation,tokens:['token']});
+     t.checkGate.resolve();await running;t.checkGate=null;await flushChecks(t);ok(t.external.blocked(t.id));ok(!await t.files.save(t.id));ok(t.writes.length===1);
+   }finally{t.dispose()}
+ })
+ await test('P0 confirmed conflicts survive reads, disk revert, undo, errors and monitor toggles',async()=>{
+   const t=make();try{const original={...t.disk};t.edit();t.change();await t.external.check(t.id);t.disk=original;await t.external.check(t.id);ok(t.external.blocked(t.id));
+     t.error={code:'io',message:'temporary'};await t.external.check(t.id);ok(t.external.blocked(t.id));t.error=null;t.manager.command('undo');await t.external.check(t.id);ok(t.external.blocked(t.id));
+     t.external.configure(false);t.external.focus(20000);ok(!await t.files.save(t.id));ok(!t.writes.length);
+   }finally{t.dispose()}
+ })
+ await test('P0 save-as, close/reopen and late rejected checks cannot affect the new capability lifetime',async()=>{
+   const t=make();try{t.edit();const gate=defer();t.checkImpl=()=>gate.promise;const check=t.external.check(t.id);ok(await t.files.save(t.id));
+     t.target={token:'copy',path:'E:/isolated/copy.txt',version:null};ok(await t.files.save(t.id,true));ok(t.manager.metadata(t.id).fileToken==='copy');ok(t.released.includes('token'));
+     t.files.close(t.id,true);t.checkImpl=null;t.files.accept({...t.disk,token:'copy',path:t.target.path});const reopened=t.manager.activeId;
+     gate.reject({code:'deleted',message:'late old file'});await check;ok(t.external.state(reopened).phase==='normal');ok(!t.external.blocked(reopened));ok(!t.external.state(t.id));
+   }finally{t.dispose()}
+ })
+ await test('P0 reload/cancel and recovery errors without disk evidence never manufacture a conflict',async()=>{
+   const t=make();try{t.edit();await t.external.requestReload(t.id);ok(t.external.resolving(t.id));ok(!await t.files.save(t.id));ok(!await t.files.save(t.id,true));t.external.cancelReload();ok(!t.external.blocked(t.id));
+     await t.external.requestReload(t.id);t.external.setRecoveryCheckpoint(async()=>false);ok(!await t.external.confirmReload());ok(!t.external.blocked(t.id));ok(await t.files.save(t.id));
+   }finally{t.dispose()}
+ })
+ await test('P0 large Markdown checks are single-read and do not delay a manual native save',async()=>{
+   const t=make({extension:'md',text:'# large\\n'+'内容\\n'.repeat(300000)});try{t.edit();const gate=defer();t.checkImpl=()=>gate.promise;const check=t.external.check(t.id);ok(await t.files.save(t.id));gate.resolve('hash1:8:1');await check;t.checkImpl=null;const before=t.checks;await t.external.check(t.id);ok(t.checks===before+1);ok(!t.external.blocked(t.id));ok(!t.notices.length)}finally{t.dispose()}
+ })
+ await test('P1 checking has no warning/banner/Toast; transient errors accurately allow native save',async()=>{
+   const t=make();try{t.app=f.createApp({render:()=>f.h(f.Banner,{files:t.files,id:t.id})});t.app.mount('#fixture');t.edit();
+     t.checkGate=defer();t.error={code:'io',message:'temporary read failure'};const check=t.external.check(t.id);await f.nextTick();ok(!document.querySelector('.external-banner'));t.edit('safe input');
+     t.checkGate.resolve();await check;await f.nextTick();const banner=document.querySelector('.external-banner');ok(banner.textContent.includes('磁盘检查暂时失败'));ok(banner.textContent.includes('temporary read failure'));ok(!banner.textContent.includes('文件已在外部修改'));ok(!t.notices.length);
+     ok(await t.files.save(t.id));await f.nextTick();ok(!document.querySelector('.external-banner'));ok(!t.notices.length);
+   }finally{t.dispose()}
+ })
+ await test('P1 cancelling an obsolete check frees the shared queue before its IPC settles',async()=>{
+   const t=make();try{const second={...t.disk,token:'second',path:'E:/isolated/second.txt',name:'second.txt'};t.files.accept(second);const other=t.manager.activeId;
+     t.edit();const gate=defer();t.checkImpl=token=>token==='token'?gate.promise:Promise.resolve(second.version);
+     t.external.checkAll();const drain=flushChecks(t);ok(t.external.checking(t.id));ok(await t.files.save(t.id));await drain;
+     ok(t.external.state(other).checkedAt>0);ok(!t.external.checking(t.id));gate.reject(Error('old IPC error'));
+   }finally{t.dispose()}
+ })
+ await test('P1 an unstable writer is a bounded monitoring failure, and reload cancellation keeps newly confirmed changes',async()=>{
+   const t=make();try{t.edit();let n=0;t.checkImpl=async()=> 'changing:'+ ++n;await t.external.requestReload(t.id);ok(n===4);ok(!t.external.blocked(t.id));ok(t.external.state(t.id).phase==='unavailable');
+     t.checkImpl=null;ok(await t.files.save(t.id));t.change('new external version');await t.external.requestReload(t.id);t.external.cancelReload();ok(t.external.blocked(t.id));ok(!await t.files.save(t.id));ok(t.writes.length===1);
+   }finally{t.dispose()}
+ })
+ await test('P1 persistent banner titles and action gates follow check/reload/delete transitions',async()=>{
+   const t=make();try{t.edit();t.change();await t.external.check(t.id);t.app=f.createApp({render:()=>f.h(f.Banner,{files:t.files,id:t.id})});t.app.mount('#fixture');
+     t.checkGate=defer();const check=t.external.check(t.id);await f.nextTick();ok(document.querySelector('.actions button').disabled);t.checkGate.resolve();await check;await f.nextTick();ok(!document.querySelector('.actions button').disabled);
+     t.error={code:'deleted',message:'missing'};await t.external.check(t.id);await f.nextTick();ok(document.querySelector('strong').textContent==='原文件已被删除或移动');ok(t.external.blocked(t.id));
+   }finally{t.dispose()}
+ })
+ await test('P1 closing during an obsolete auto-reload read releases the queue before late read rejection',async()=>{
+   const t=make();try{const second={...t.disk,token:'second',path:'E:/isolated/second.txt',name:'second.txt'};t.files.accept(second);const other=t.manager.activeId;t.change('external clean reload');
+     t.readGate=defer();t.checkImpl=async token=>token==='token'?t.disk.version:second.version;t.external.checkAll();const drain=flushChecks(t);
+     for(let n=0;n<20&&t.reads===0;n++)await Promise.resolve();ok(t.reads===1);t.files.close(t.id,true);await drain;
+     ok(!t.external.state(t.id));ok(t.external.state(other).checkedAt>0);t.readGate.reject(Error('late disk read failure'));
+   }finally{t.dispose()}
+ })
+ await test('P1 alternating automatic errors notify once per error until a successful save',async()=>{
+   const t=make();try{t.edit();for(const code of ['permission','busy','permission']){t.saveError={code,message:code};ok(await t.files.autoSave(t.id)==='failed')}
+     ok(t.notices.length===2);t.saveError=null;ok(await t.files.save(t.id));t.edit('new failure episode');t.saveError={code:'permission',message:'permission'};ok(await t.files.autoSave(t.id)==='failed');ok(t.notices.length===3);
+   }finally{t.dispose()}
+ })
  await test('01 clean file reloads without save; retains source text and baseline',async()=>{const t=make();try{t.change('新内容\r\nnext');await t.external.check(t.id);ok(t.manager.getText(t.id)==='新内容\nnext');ok(t.manager.saveSnapshot(t.id).text==='新内容\r\nnext');ok(!t.manager.metadata(t.id).dirty);ok(t.external.state(t.id).phase==='normal');ok(t.writes.length===0)}finally{t.dispose()}})
  await test('02 dirty conflict persists across editing, undo, pane focus, setting toggles and keep-current',async()=>{const t=make();try{t.edit();const original=t.manager.getText(t.id),depth=f.undoDepth(t.manager.getState(t.id)),baseline=t.manager.metadata(t.id).lastDiskVersion;t.change();await t.external.check(t.id);t.external.keep(t.id);ok(await t.files.save(t.id)===false);ok(t.writes.length===0);ok(t.manager.getText(t.id)===original);ok(f.undoDepth(t.manager.getState(t.id))===depth);ok(t.manager.metadata(t.id).lastDiskVersion===baseline);t.edit('more');t.external.configure(false);t.external.configure(true);ok(t.external.blocked(t.id));t.manager.command('undo');ok(t.external.blocked(t.id))}finally{t.dispose()}})
  await test('03 native hint proactively checks; coalesces bursts; focus catches missed events and is throttled',async()=>{const t=make();try{t.external.configure(true);await t.external.start();await t.external.check(t.id);window.eventTest=t;t.change('event');const generation=t.subscriptions.at(-1).generation;for(let n=0;n<100;n++)t.listener({generation,tokens:['token']})}catch(e){t.dispose();throw e}})
@@ -73,7 +202,7 @@ try {
  await page.waitForFunction(()=>window.autoResume.writes.length===1&&!window.autoResume.manager.metadata(window.autoResume.id).dirty)
  await page.evaluate(()=>window.autoResume.dispose())
  await test('14 delete/rename retains dirty text; compare unavailable; recreated path can reload',async()=>{const t=make();try{t.edit();const before=t.manager.getText(t.id);t.error={code:'deleted',message:'missing'};await t.external.check(t.id);ok(t.external.state(t.id).phase==='deleted');await t.external.compare(t.id);ok(t.external.diff.value===null);ok(t.manager.getText(t.id)===before);t.error=null;t.change('recreated');await t.external.check(t.id);ok(t.external.state(t.id).phase==='conflict');await t.external.requestReload(t.id);ok(await t.external.confirmReload());ok(t.manager.getText(t.id)==='recreated')}finally{t.dispose()}})
- await test('15 permissions, unsupported encoding and unstable writers retain complete text',async()=>{for(const code of ['permission','encoding','io','conflict']){const t=make();try{const before=t.manager.getText(t.id);t.error={code,message:code};await t.external.check(t.id);ok(t.external.state(t.id).phase==='unavailable');ok(t.manager.getText(t.id)===before);ok(t.external.blocked(t.id))}finally{t.dispose()}}})
+ await test('15 temporary monitoring failures retain text without inventing persistent conflicts',async()=>{for(const code of ['permission','encoding','io','busy','file_locked','conflict','ipc']){const t=make();try{t.edit();const before=t.manager.getText(t.id),depth=f.undoDepth(t.manager.getState(t.id));t.error={code,message:code};await t.external.check(t.id);ok(t.external.state(t.id).phase==='unavailable');ok(!t.external.state(t.id).conflictValid);ok(!t.external.blocked(t.id));ok(!t.notices.length);t.error=null;await t.external.check(t.id);ok(t.external.state(t.id).phase==='normal');ok(await t.files.save(t.id));ok(t.manager.getText(t.id)===before);ok(f.undoDepth(t.manager.getState(t.id))===depth)}finally{t.dispose()}}})
  await test('16 source/live/split keep Markdown source, mode and per-pane selection; reset discarded undo',async()=>{for(const mode of ['source','live','split']){const t=make({extension:'md',text:'# 标题\n```mermaid\ngraph TD; A-->B\n```\n$$x^2$$\n![a](./a.png)'});try{t.manager.setMarkdownMode(t.id,mode);const other=t.manager.splitPane('right',t.manager.activePane,t.id);t.manager.setMarkdownMode(t.id,'source',other);t.change(t.disk.text+'\nexternal');await t.external.check(t.id);ok(t.manager.getMarkdownMode(t.id,t.manager.layout.getPrimaryPane().id)===mode);ok(t.manager.getMarkdownMode(t.id,other)==='source');ok(t.manager.getText(t.id).includes('```mermaid'));ok(t.manager.getText(t.id).includes('./a.png'));ok(t.external.state(t.id).phase==='normal');ok(t.manager.openedDocuments.length===1);ok(f.undoDepth(t.manager.getState(t.id))===0)}finally{t.dispose()}}})
  await test('17 stale checks after close or path binding change never recreate/overwrite documents',async()=>{const t=make();try{t.change();t.checkGate=defer();const pending=t.external.check(t.id);t.files.close(t.id,true);t.checkGate.resolve();await pending;ok(!t.manager.metadata(t.id));ok(!t.external.state(t.id))}finally{t.dispose()}})
  await test('18 old workspace generation events and disposed listener ignored; subscriptions cleaned',async()=>{const t=make();t.external.configure(true);await t.external.start();const generation=t.subscriptions.at(-1).generation;t.external.configure(false);const before=t.checks;t.external.hint({generation,tokens:['token']});ok(t.checks===before);t.dispose();await Promise.resolve();await Promise.resolve();ok(t.listener===null);ok(t.external.diff.value===null);ok(t.external.watchStatus.value?.fileCount===1||t.external.watchStatus.value===null)})

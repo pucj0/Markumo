@@ -1,6 +1,114 @@
 use super::*;
 
 #[test]
+fn own_saves_use_native_baselines_preserve_windows_identity_and_reject_later_writers() {
+    let dir = tempfile::tempdir().unwrap(); let path = dir.path().join("note.md");
+    fs::write(&path, "original").unwrap();
+    let mut s = FileService::default(); s.set_owner("first");
+    let opened = s.open_selected(path.clone(), None).unwrap();
+    let token = &opened.metadata.token; let mut version = opened.metadata.version;
+    #[cfg(windows)]
+    let identity = file_identity(&path);
+    for n in 0..10 {
+        let text = format!("# own save {n}");
+        let saved = s.save(token, &text, Some(&version), "UTF-8", false).unwrap();
+        version = saved.version;
+        assert_eq!(s.check_external(token).unwrap(), version);
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        #[cfg(windows)]
+        assert_eq!(file_identity(&path), identity);
+    }
+    // Each window has its own authority; observations never acknowledge a
+    // different window's saved baseline or relax its conditional write.
+    s.set_owner("second");
+    assert_eq!(s.check_external(token).unwrap_err().code, "scope");
+    let second = s.open_selected(path.clone(), None).unwrap();
+    s.save(&second.metadata.token, "second window", Some(&second.metadata.version), "UTF-8", false).unwrap();
+    s.set_owner("first");
+    assert_eq!(s.save(token, "stale first", Some(&version), "UTF-8", false).unwrap_err().code, "conflict");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "second window");
+}
+
+#[test]
+fn metadata_only_change_and_same_metadata_different_content_keep_sha256_protection() {
+    let dir = tempfile::tempdir().unwrap(); let path = dir.path().join("note.txt");
+    fs::write(&path, "one").unwrap();
+    let mut s = FileService::default(); s.set_owner("a");
+    let opened = s.open_selected(path.clone(), None).unwrap(); let token = &opened.metadata.token;
+    let changed_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    fs::File::options().write(true).open(&path).unwrap().set_times(fs::FileTimes::new().set_modified(changed_time)).unwrap();
+    let metadata_version = s.check_external(token).unwrap();
+    assert_ne!(metadata_version, opened.metadata.version);
+    assert_eq!(metadata_version.split(':').take(2).collect::<Vec<_>>(), opened.metadata.version.split(':').take(2).collect::<Vec<_>>());
+    // The frontend may acknowledge the SHA-equal metadata version, then save
+    // with that exact version. Native validation never uses size/mtime alone.
+    fs::write(&path, "two").unwrap();
+    fs::File::options().write(true).open(&path).unwrap().set_times(fs::FileTimes::new().set_modified(changed_time)).unwrap();
+    assert_ne!(s.check_external(token).unwrap(), metadata_version);
+    assert_eq!(s.save(token, "local", Some(&metadata_version), "UTF-8", false).unwrap_err().code, "conflict");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "two");
+}
+
+#[test]
+fn failed_native_io_is_retryable_without_releasing_or_regranting_the_token() {
+    let dir = tempfile::tempdir().unwrap(); let path = dir.path().join("note.txt");
+    fs::write(&path, "original").unwrap();
+    let mut s = FileService::default(); s.set_owner("a");
+    let opened = s.open_selected(path.clone(), None).unwrap(); let token = &opened.metadata.token;
+    #[cfg(windows)]
+    atomic::fault::set(atomic::fault::BACKUP_CREATE);
+    #[cfg(not(windows))]
+    atomic::fault::set(atomic::fault::TEMP_CREATE);
+    let failure = s.save(token, "local", Some(&opened.metadata.version), "UTF-8", false);
+    atomic::fault::clear();
+    assert_eq!(failure.unwrap_err().code, "io");
+    assert_eq!(s.check_external(token).unwrap(), opened.metadata.version);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+    let saved = s.save(token, "retry", Some(&opened.metadata.version), "UTF-8", false).unwrap();
+    assert_eq!(saved.token, *token); assert_eq!(s.check_external(token).unwrap(), saved.version);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "retry");
+}
+
+#[cfg(windows)]
+#[test]
+fn native_permission_and_sharing_errors_allow_retry_with_the_same_baseline() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let dir = tempfile::tempdir().unwrap(); let path = dir.path().join("note.txt");
+    fs::write(&path, "original").unwrap();
+    let mut s = FileService::default(); s.set_owner("a");
+    let opened = s.open_selected(path.clone(), None).unwrap(); let token = &opened.metadata.token;
+    let permissions = fs::metadata(&path).unwrap().permissions();
+    let mut readonly = permissions.clone(); readonly.set_readonly(true);
+    fs::set_permissions(&path, readonly).unwrap();
+    let failure = s.save(token, "local", Some(&opened.metadata.version), "UTF-8", false);
+    fs::set_permissions(&path, permissions).unwrap();
+    assert_eq!(failure.unwrap_err().code, "read_only");
+    let guard = fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
+    assert!(s.save(token, "local", Some(&opened.metadata.version), "UTF-8", false).is_err());
+    drop(guard);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+    let saved = s.save(token, "retry", Some(&opened.metadata.version), "UTF-8", false).unwrap();
+    assert_eq!(s.check_external(token).unwrap(), saved.version);
+}
+
+#[test]
+fn large_native_check_and_save_complete_with_content_protection_without_a_watcher() {
+    let dir = tempfile::tempdir().unwrap(); let path = dir.path().join("large.md");
+    let text = format!("# large {}\n", "a".repeat(1024)).repeat(8192);
+    fs::write(&path, &text).unwrap();
+    let mut s = FileService::default(); s.set_owner("a");
+    let opened = s.open_selected(path.clone(), None).unwrap(); let token = &opened.metadata.token;
+    assert!(s.external_watcher.is_none());
+    assert_eq!(s.check_external(token).unwrap(), opened.metadata.version);
+    let local = format!("{text}local");
+    let saved = s.save(token, &local, Some(&opened.metadata.version), "UTF-8", false).unwrap();
+    assert_eq!(s.check_external(token).unwrap(), saved.version);
+    fs::write(&path, &text).unwrap();
+    assert_eq!(s.save(token, &local, Some(&saved.version), "UTF-8", false).unwrap_err().code, "conflict");
+    assert_eq!(fs::read_to_string(&path).unwrap(), text);
+}
+
+#[test]
 fn external_reads_keep_authority_and_expected_version_without_advancing_a_save() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("note.md");

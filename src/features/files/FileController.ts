@@ -18,6 +18,7 @@ export class FileController {
   readonly saving = new Set<string>()
   workspaceBusy = false
   private disposed = false
+  private automaticErrors = new Map<string, Set<string>>()
   private readonly stopRelease: () => void
   constructor(readonly manager: DocumentManager, readonly gateway: FileGateway, private readonly notify: (message: string) => void, private saved?: (id: string) => void | Promise<void>) {
     this.stopRelease = manager.onFileRelease(token => { void gateway.release(token).catch(error => notify(fileError(error))) })
@@ -62,12 +63,12 @@ export class FileController {
   }
   async autoSave(id: string) {
     const doc = this.manager.metadata(id)
-    if (!doc?.fileToken || doc.kind === 'javaClass' || !doc.dirty || doc.readOnly || this.manager.isComposing || this.workspaceBusy || this.saving.has(id)) return 'skipped' as const
+    if (!doc?.fileToken || doc.kind === 'javaClass' || !doc.dirty || doc.readOnly || this.manager.isComposing || this.workspaceBusy || this.saving.has(id) || this.external.checking(id)) return 'skipped' as const
     return this.performSave(id, false, undefined, undefined, true)
   }
   private async performSave(id: string, saveAs: boolean, encoding: Encoding | undefined, bom: boolean | undefined, automatic: boolean): Promise<'saved' | 'changed' | 'failed' | 'skipped'> {
     if (this.external.resolving(id) || (!saveAs && this.external.blocked(id))) {
-      if (!automatic) { this.external.keep(id, false); this.notify('磁盘版本正在检查或已变化，请先比较差异、另存为或加载磁盘。') }
+      if (!automatic) this.external.keep(id, false)
       return 'skipped'
     }
     if (isMedia(this.manager.metadata(id))) return 'skipped'
@@ -80,6 +81,7 @@ export class FileController {
     const snapshot = this.manager.saveSnapshot(id)
     if (!snapshot) { if (!automatic) this.notify('请先完成输入法输入，再保存。'); return 'skipped' }
     this.saving.add(id)
+    const saveFailed = this.external.saveStarted(id)
     let targetToken: string | undefined
     const source = snapshot.metadata
     try {
@@ -104,19 +106,31 @@ export class FileController {
       const result = await this.gateway.save(token!, snapshot.text, version, targetEncoding, targetBom)
       targetToken = undefined
       const accepted = snapshot.complete(result)
+      // Publish the authoritative native version before any asynchronous
+      // recovery/release callback can let an older check run.
+      if (accepted) this.external.saved(id)
+      if (accepted) this.automaticErrors.delete(id)
       if (accepted && source.fileToken && source.fileToken !== result.token) await this.gateway.release(source.fileToken).catch(() => {})
       if (!accepted) await this.gateway.release(result.token).catch(() => {})
-      if (accepted) await this.saved?.(id)
-      if (accepted) this.external.saved(id)
+      if (accepted) await Promise.resolve().then(() => this.saved?.(id)).catch(error => this.notify(fileError(error)))
       if (accepted && result.warning) this.notify(result.warning)
       return !accepted ? 'skipped' : this.manager.metadata(id)?.dirty ? 'changed' : 'saved'
     } catch (error) {
-      if (!saveAs) this.external.saveFailed(id, error)
-      this.notify(`${automatic ? '自动保存已暂停：' : ''}${fileError(error)}\n内容仍保留；可使用另存为保存到其他文件。`)
+      if (!saveAs) saveFailed(error)
+      const signature = `${source.fileToken}|${fileError(error)}`
+      if (!automatic || !this.automaticErrors.get(id)?.has(signature)) {
+        if (automatic) {
+          const errors = this.automaticErrors.get(id) ?? new Set<string>()
+          errors.add(signature); this.automaticErrors.set(id, errors)
+        }
+        const prefix = !automatic ? '' : this.external.blocked(id) ? '自动保存已暂停：' : '自动保存失败，将有限重试；持续失败后暂停：'
+        this.notify(`${prefix}${fileError(error)}\n内容仍保留；可重试或使用另存为保存到其他文件。`)
+      }
       return 'failed'
     } finally {
       if (targetToken && targetToken !== source.fileToken) await this.gateway.release(targetToken).catch(() => {})
       this.saving.delete(id)
+      this.external.saveFinished()
     }
   }
   async reopen(encoding: FileOpenEncoding, force = false) {
@@ -154,6 +168,7 @@ export class FileController {
     if (this.disposed) return
     this.disposed = true
     this.external.dispose()
+    this.automaticErrors.clear()
     this.stopRelease()
     // HMR can dispose the frontend while the Rust process keeps running.
     for (const token of new Set(this.manager.openedDocuments.map(doc => doc.fileToken).filter((token): token is string => !!token))) {

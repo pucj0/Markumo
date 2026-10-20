@@ -27,6 +27,7 @@ const SMOKE_TESTS = [
   'scripts/table-text-selection-regression.mjs',
   'scripts/quick-open-regression.mjs',
   'scripts/file-save-regression.mjs',
+  'scripts/external-file-regression.mjs',
   'scripts/conversion-regression.mjs',
   'scripts/recovery-regression.mjs',
 ]

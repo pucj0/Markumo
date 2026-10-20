@@ -11,7 +11,7 @@ export class AutoSaveController {
   private running = false
   private timer: ReturnType<typeof setTimeout> | undefined
   private pending = new Map<string, { text: Text; due: number }>()
-  private failures = new Map<string, string>()
+  private failures = new Map<string, { version: string; attempts: number; retryAt: number }>()
   private unsubscribe: () => void
   private stopExternal: () => void
   constructor(private manager: DocumentManager, private files: FileController, private blocked: () => boolean = () => false) {
@@ -22,11 +22,16 @@ export class AutoSaveController {
     if (this.disposed) return
     if (enabled !== this.enabled || delay !== this.delay) {
       this.pending.clear()
-      if (enabled && !this.enabled) this.failures.clear()
     }
     this.enabled = enabled
     this.delay = delay
     this.refresh()
+  }
+  private failureVersion(id: string) {
+    const state = this.files.external.state(id)
+    // Touches and a rolled-back native write may change only mtime. They must
+    // not reset the retry budget and start a save/check/rollback feedback loop.
+    return `${state?.token}|${state?.saveRevision}`
   }
   private refresh() {
     if (this.timer) clearTimeout(this.timer)
@@ -35,18 +40,21 @@ export class AutoSaveController {
     const ids = new Set<string>()
     for (const doc of this.manager.openedDocuments) {
       ids.add(doc.id)
-      const version = `${doc.fileToken}|${doc.lastDiskVersion}`
-      if (!doc.dirty || this.failures.get(doc.id) !== version) this.failures.delete(doc.id)
-      if (!doc.dirty || !doc.fileToken || doc.readOnly || this.failures.has(doc.id) || this.files.external.blocked(doc.id)) { this.pending.delete(doc.id); continue }
+      const version = this.failureVersion(doc.id)
+      if (!doc.dirty || (this.failures.has(doc.id) && this.failures.get(doc.id)!.version !== version)) this.failures.delete(doc.id)
+      const retryAt = this.failures.get(doc.id)?.retryAt ?? 0
+      if (!doc.dirty || !doc.fileToken || doc.readOnly || retryAt === Infinity || this.files.external.blocked(doc.id)) { this.pending.delete(doc.id); continue }
       const text = this.manager.getState(doc.id)?.doc
-      if (text && this.pending.get(doc.id)?.text !== text) this.pending.set(doc.id, { text, due: Date.now() + this.delay })
+      if (text && this.pending.get(doc.id)?.text !== text) this.pending.set(doc.id, { text, due: Math.max(Date.now() + this.delay, retryAt) })
     }
     for (const id of this.pending.keys()) if (!ids.has(id)) this.pending.delete(id)
     for (const id of this.failures.keys()) if (!ids.has(id)) this.failures.delete(id)
     if (this.running || !this.pending.size) return
     let due = Infinity
-    for (const item of this.pending.values()) due = Math.min(due, item.due)
-    this.timer = setTimeout(() => void this.flush(), Math.max(0, due - Date.now()))
+    // Check completion publishes a refresh. Leave pending edits parked without
+    // a polling timer while that document has an outstanding check Promise.
+    for (const [id, item] of this.pending) if (!this.files.external.checking(id)) due = Math.min(due, item.due)
+    if (due !== Infinity) this.timer = setTimeout(() => void this.flush(), Math.max(0, due - Date.now()))
   }
   private async flush() {
     this.timer = undefined
@@ -56,11 +64,12 @@ export class AutoSaveController {
     try {
       for (const [id, item] of this.pending) {
         if (this.disposed || !this.enabled || this.manager.isComposing || this.files.workspaceBusy || this.blocked()) break
-        if (item.due > Date.now() || this.files.saving.has(id)) continue
+        if (item.due > Date.now() || this.files.saving.has(id) || this.files.external.checking(id)) continue
         const result = await this.files.autoSave(id)
         if (result === 'failed') {
           const doc = this.manager.metadata(id)
-          if (doc) this.failures.set(id, `${doc.fileToken}|${doc.lastDiskVersion}`)
+          const attempts = (this.failures.get(id)?.attempts ?? 0) + 1
+          if (doc) this.failures.set(id, { version: this.failureVersion(id), attempts, retryAt: attempts < 3 ? Date.now() + 1000 * 4 ** (attempts - 1) : Infinity })
           this.pending.delete(id)
         } else if (result === 'skipped') item.due = Date.now() + 250
         // New edits during IPC retain their own delay and dirty flag.
