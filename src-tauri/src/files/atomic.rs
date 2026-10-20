@@ -12,6 +12,9 @@ pub(crate) mod fault {
     pub const REPLACE: u32 = 1 << 3;
     pub const RACE_TARGET: u32 = 1 << 4;
     pub const RACE_EXISTING: u32 = 1 << 10;
+    pub const TEMP_NO_SPACE: u32 = 1 << 11;
+    #[cfg(windows)]
+    pub const TARGET_NO_SPACE: u32 = 1 << 12;
     #[cfg(windows)]
     pub const BACKUP_CREATE: u32 = 1 << 5;
     #[cfg(windows)]
@@ -32,6 +35,9 @@ pub(crate) mod fault {
     }
     pub fn clear() {
         ACTIVE.with(|active| active.set(0));
+    }
+    pub fn no_space() -> std::io::Error {
+        std::io::Error::from_raw_os_error(if cfg!(windows) { 112 } else { 28 })
     }
     pub fn hit(bit: u32) -> bool {
         ACTIVE.with(|active| active.get() & bit != 0)
@@ -113,6 +119,10 @@ fn write_checked_inner(
     }
     let mut temp = tempfile::NamedTempFile::new_in(parent)
         .map_err(|error| save_error(error, "无法在目标文件夹创建原子保存临时文件"))?;
+    #[cfg(test)]
+    if fault::hit(fault::TEMP_NO_SPACE) {
+        return Err(save_error(fault::no_space(), "写入保存临时文件失败"));
+    }
     #[cfg(test)]
     if fault::hit(fault::TEMP_WRITE) {
         return Err(save_error(
@@ -362,6 +372,12 @@ fn replace_contents(file: &mut fs::File, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::{Seek, SeekFrom};
     file.seek(SeekFrom::Start(0))?;
     #[cfg(test)]
+    if fault::take(fault::TARGET_NO_SPACE) {
+        // Exercise the real rollback path after a successful prefix write.
+        file.write_all(&bytes[..bytes.len() / 2])?;
+        return Err(fault::no_space());
+    }
+    #[cfg(test)]
     if fault::take(fault::PARTIAL_WRITE) {
         let prefix = bytes.len() / 2;
         file.write_all(&bytes[..prefix])?;
@@ -501,6 +517,43 @@ mod save_safety_tests {
             assert!(result.is_err(), "fault point {point} did not fail the save");
             assert_eq!(fs::read(&path).unwrap(), b"original", "fault point {point} changed the target");
         }
+    }
+
+    #[test]
+    fn disk_full_during_staging_reports_failure_and_cleans_the_temporary_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let (path, version) = existing_target(&directory, "note.txt", b"original");
+        fault::set(fault::TEMP_NO_SPACE);
+        let result = write_checked(&path, b"replacement", Some(&version));
+        fault::clear();
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "io");
+        assert!(error.message.contains(&fault::no_space().to_string()));
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn disk_full_after_partial_in_place_write_restores_content_and_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let (path, version) = existing_target(&directory, "note.txt", b"original content");
+        let identity = super::super::file_identity(&path);
+        assert!(
+            identity.is_some(),
+            "Windows fixture must have a native file identity"
+        );
+        fault::set(fault::TARGET_NO_SPACE);
+        let result =
+            write_checked_preserving_identity(&path, b"replacement content", Some(&version));
+        fault::clear();
+        assert!(result
+            .unwrap_err()
+            .message
+            .contains(&fault::no_space().to_string()));
+        assert_eq!(fs::read(&path).unwrap(), b"original content");
+        assert_eq!(super::super::file_identity(&path), identity);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
     #[test]

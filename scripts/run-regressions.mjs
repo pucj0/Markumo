@@ -12,6 +12,8 @@ const LOG_DIR = path.resolve(ROOT_DIR, 'test-results/regression-logs')
 const SMOKE_TESTS = [
   'scripts/markdown-empty-regression.mjs',
   'scripts/markdown-live-controller-regression.mjs',
+  'scripts/markdown-undo-regression.mjs',
+  'scripts/diagram-security-regression.mjs',
   'scripts/settings-keybindings-regression.mjs',
   'scripts/updater-regression.mjs',
   'scripts/smooth-caret-regression.mjs',
@@ -21,6 +23,7 @@ const SMOKE_TESTS = [
   'scripts/brackets-regression.mjs',
   'scripts/shell-lifecycle-regression.mjs',
   'scripts/document-manager-regression.mjs',
+  'scripts/file-save-regression.mjs',
   'scripts/conversion-regression.mjs',
 ]
 
@@ -28,6 +31,8 @@ const SMOKE_TESTS = [
 const FULL_REGRESSION_TESTS = [
   'scripts/markdown-empty-regression.mjs',
   'scripts/markdown-live-controller-full-regression.mjs',
+  'scripts/markdown-undo-regression.mjs',
+  'scripts/diagram-security-regression.mjs',
   'scripts/settings-keybindings-regression.mjs',
   'scripts/updater-regression.mjs',
   'scripts/smooth-caret-regression.mjs',
@@ -38,6 +43,7 @@ const FULL_REGRESSION_TESTS = [
   'scripts/brackets-regression.mjs',
   'scripts/shell-lifecycle-regression.mjs',
   'scripts/document-manager-regression.mjs',
+  'scripts/file-save-regression.mjs',
   'scripts/rich-clipboard-regression.mjs',
   'scripts/outline-regression.mjs',
   'scripts/outline-navigation-regression.mjs',

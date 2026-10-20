@@ -14,7 +14,7 @@ export function textPatch(before:string,after:string):SourcePatch|null {
 }
 export class MarkdownSourceBridge {
   source:string; doc:Node; blocks:SourceBlock[]; tail:string; environment:Record<string,unknown>
-  constructor(source:string){this.source=source;const parsed=parseMarkdown(source);this.doc=parsed.doc;this.blocks=parsed.blocks;this.tail=parsed.tail;this.environment=parsed.environment}
+  constructor(source:string,previous?:{blocks:readonly SourceBlock[];environment:Record<string,unknown>}){this.source=source;const parsed=parseMarkdown(source,{},previous);this.doc=parsed.doc;this.blocks=parsed.blocks;this.tail=parsed.tail;this.environment=parsed.environment}
   /** Prepare without mutating; commit only after the canonical document accepts
    * the patch against the exact expected source revision. */
   prepare(doc:Node, inlinePatch?:SourcePatch){

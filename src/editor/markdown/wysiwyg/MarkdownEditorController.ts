@@ -21,6 +21,7 @@ import { HtmlInlineView } from './HtmlInlineView'
 import { HtmlSourceView, isHtmlSourceNode } from './HtmlSourceView'
 import { inlineHtmlRanges } from './HtmlSourceRanges'
 import { markdownParser, parseMarkdown } from './MarkdownParser'
+import { reuseSourceBlocks } from './reuseSourceBlocks'
 import { serializeBlock } from './MarkdownSerializer'
 import { createLiveSearchPlugin } from './plugins/LiveSearch'
 import { LiveSearchController } from './LiveSearchController'
@@ -662,7 +663,8 @@ export class MarkdownEditorController implements LiveEditor {
       this.view.updateState(state)
     } else {
       const sel = this.selection
-      const bridge = new MarkdownSourceBridge(source)
+      const bridge = new MarkdownSourceBridge(source, this.bridge)
+      reuseSourceBlocks(bridge, this.bridge)
       const state = this.view.state
       const start = state.doc.content.findDiffStart(bridge.doc.content)
       const end = state.doc.content.findDiffEnd(bridge.doc.content)

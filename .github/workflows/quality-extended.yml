@@ -1,0 +1,81 @@
+name: Extended Quality
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      soak_minutes:
+        description: Continuous browser editing minutes (0 to 60; use 30 for acceptance)
+        default: '0'
+        required: true
+        type: choice
+        options: ['0', '30', '60']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extended-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
+        with:
+          version: 12.11.2
+          cache: true
+      - run: pnpm install --frozen-lockfile
+      - name: Audit production and development dependencies
+        run: |
+          mkdir -p test-results
+          pnpm audit --audit-level=moderate --json --registry=https://registry.npmjs.org > test-results/dependency-audit.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: dependency-advisories
+          retention-days: 7
+          path: test-results/dependency-audit.json
+
+  browser-regression:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
+        with:
+          version: 12.11.2
+          cache: true
+      - run: pnpm install --frozen-lockfile
+      - name: Production dependency advisory audit
+        run: pnpm audit --prod --audit-level=moderate --registry=https://registry.npmjs.org
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Generate isolated media fixtures
+        run: |
+          python -m pip install 'Pillow>=11,<13' 'reportlab>=4,<5' 'pypdf>=5,<7'
+          python scripts/media-fixtures.py .markumo-media-test/fixtures
+      - run: pnpm test:regression
+      - name: Production editor/viewer resource cycles and optional soak
+        env:
+          SOAK_MINUTES: ${{ inputs.soak_minutes || '0' }}
+        run: node scripts/phase07-browser-audit.mjs --label=ci --soak-minutes="$SOAK_MINUTES"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: extended-quality-evidence
+          retention-days: 7
+          path: |
+            test-results/phase07/**/*.json
+            test-results/phase07/**/*.heapsnapshot
+            test-results/regression-logs/**
+            .markumo-media-test/browser-metrics.json

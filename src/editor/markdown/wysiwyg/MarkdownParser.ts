@@ -63,12 +63,23 @@ tokenizer.core.ruler.after('markumo_tasks','markumo_cells', state=>{
 export const markdownParser = new MarkdownParser(s, tokenizer as unknown as ConstructorParameters<typeof MarkdownParser>[1], tokens as unknown as ConstructorParameters<typeof MarkdownParser>[2])
 export interface SourceBlock { id:string; from:number; to:number; raw:string; prefix:string; node:Node }
 let identity=0
-export function parseMarkdown(source:string, referenceEnvironment:Record<string,unknown> = {}) {
+export function parseMarkdown(source:string, referenceEnvironment:Record<string,unknown> = {}, previous?:{blocks:readonly SourceBlock[];environment:Record<string,unknown>}) {
   const starts=[0]; for(let i=0;i<source.length;i++)if(source[i]==='\n')starts.push(i+1)
   const yaml=/^---\n[\s\S]*?\n(?:---|\.\.\.)(?:\n|$)/.exec(source)
   const scan=yaml ? yaml[0].replace(/[^\n]/g,' ') + source.slice(yaml[0].length) : source
   const env: Record<string, unknown> = { ...referenceEnvironment, references: { ...referenceEnvironment.references as object } }
   const parsed=tokenizer.parse(scan,env)
+  // Reuse immutable blocks from the current revision only. Tokenization still
+  // establishes the new reference environment first; changed references force
+  // normal parsing, even when the referring block's raw text is unchanged.
+  const reusable=new Map<string,{blocks:SourceBlock[];used:number}>()
+  if(previous && JSON.stringify(previous.environment)===JSON.stringify(env)){
+    for(const block of previous.blocks){
+      const entry=reusable.get(block.raw)
+      if(entry)entry.blocks.push(block)
+      else reusable.set(block.raw,{blocks:[block],used:0})
+    }
+  }
   const ranges:{from:number;to:number;raw?:boolean;isHtml?:boolean;label?:string}[]=[]
   if(yaml)ranges.push({from:0,to:yaml[0].replace(/\n$/,'').length,raw:true,label:'YAML Front Matter'})
   let level=0
@@ -86,9 +97,14 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
   ranges.sort((a,b)=>a.from-b.from)
   const blocks:SourceBlock[]=[]; let cursor=0
   const add=(from:number,to:number,raw:boolean,label='扩展语法（保留源码）')=>{
-    const original=source.slice(from,to),id=`md-${++identity}`
+    const original=source.slice(from,to),entry=reusable.get(original)
+    const candidate=entry && entry.used<entry.blocks.length?entry.blocks[entry.used++]:undefined
+    // Protected blocks can depend on position (notably YAML at document start).
+    const reused=!raw && candidate?.node.type.name!=='protected_source'?candidate:undefined
+    const id=reused?.id || `md-${++identity}`
     let node:Node
-    try {
+    if(reused)node=reused.node
+    else try {
       const complex=raw || /(^|\n)(?:\[\^[^\]]+\]:|\$\$|\[toc\]|:::+|>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\])/i.test(original)
       if(complex) node=s.nodes.protected_source.create({source:original,label})
       else {
@@ -96,7 +112,7 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
         if(!node)node=s.nodes.protected_source.create({source:original,label})
       }
     }catch{node=s.nodes.protected_source.create({source:original,label})}
-    node=node.type.create({...node.attrs,sourceId:id},node.content,node.marks)
+    if(!reused)node=node.type.create({...node.attrs,sourceId:id},node.content,node.marks)
     blocks.push({id,from,to,raw:original,prefix:source.slice(cursor,from),node});cursor=to
   }
   for(const range of ranges){
