@@ -312,6 +312,11 @@ export class DocumentManager {
     const record = this.records.get(id)
     if (!record || (!force && record.meta.dirty) || this.isComposing || this.disposed) return false
     this.deferred.delete(id)
+    // Capture each view independently before rebuilding. A disk reload starts a
+    // fresh undo history; discarded local buffers are retained by Recovery.
+    for (const pane of this.layout.getAllLeafIds()) if (this.paneGroup(pane).activeId === id) this.captureScroll(pane)
+    const placements = { ...record.panes }, originalMode = record.meta.mode
+    const hadFocus = [...this.hosts.entries()].find(([pane, host]) => this.paneGroup(pane).activeId === id && host.contains(document.activeElement))?.[0]
     for(const pane of this.layout.getAllLeafIds())if(this.paneGroup(pane).activeId===id)this.destroyView(pane)
     const seed: DocumentSeed = { id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text,
       kind: file.kind === 'image' || file.kind === 'pdf' ? 'text' : file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined, encoding: file.encoding }
@@ -323,7 +328,22 @@ export class DocumentManager {
     const next = this.create(seed)
     this.attachMetadata(next, file)
     this.restoreFileMode(next)
+    next.meta.mode = originalMode
+    const preserveSelection = (selection: EditorSelection) => EditorSelection.create(selection.ranges.map(r => r.to <= next.state.doc.length ? r : EditorSelection.range(Math.min(r.anchor,next.state.doc.length),Math.min(r.head,next.state.doc.length))),selection.mainIndex)
+    next.state = next.state.update({ selection: preserveSelection(record.state.selection), annotations: Transaction.addToHistory.of(false) }).state
+    for (const [pane, position] of Object.entries(placements)) {
+      next.panes[pane] = { ...position, selection: preserveSelection(position.selection) }
+    }
     for (const pane of this.layout.getAllLeafIds()) if (this.paneGroup(pane).activeId === id) this.showActive(pane)
+    if (hadFocus) { this.views.get(hadFocus)?.focus(); this.liveViews.get(hadFocus)?.editor.focus() }
+    this.notify()
+    return true
+  }
+
+  acknowledgeDiskMetadata(id: string, token: string, previous: string | null, version: string) {
+    const record = this.records.get(id)
+    if (!record || record.meta.fileToken !== token || record.meta.lastDiskVersion !== previous) return false
+    record.meta.lastDiskVersion = version
     this.notify()
     return true
   }

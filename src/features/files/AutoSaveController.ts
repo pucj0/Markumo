@@ -13,8 +13,10 @@ export class AutoSaveController {
   private pending = new Map<string, { text: Text; due: number }>()
   private failures = new Map<string, string>()
   private unsubscribe: () => void
+  private stopExternal: () => void
   constructor(private manager: DocumentManager, private files: FileController, private blocked: () => boolean = () => false) {
     this.unsubscribe = manager.subscribe(() => this.refresh())
+    this.stopExternal = files.external.subscribe(() => this.refresh())
   }
   configure(enabled: boolean, delay: number) {
     if (this.disposed) return
@@ -35,7 +37,7 @@ export class AutoSaveController {
       ids.add(doc.id)
       const version = `${doc.fileToken}|${doc.lastDiskVersion}`
       if (!doc.dirty || this.failures.get(doc.id) !== version) this.failures.delete(doc.id)
-      if (!doc.dirty || !doc.fileToken || doc.readOnly || this.failures.has(doc.id)) { this.pending.delete(doc.id); continue }
+      if (!doc.dirty || !doc.fileToken || doc.readOnly || this.failures.has(doc.id) || this.files.external.blocked(doc.id)) { this.pending.delete(doc.id); continue }
       const text = this.manager.getState(doc.id)?.doc
       if (text && this.pending.get(doc.id)?.text !== text) this.pending.set(doc.id, { text, due: Date.now() + this.delay })
     }
@@ -74,6 +76,7 @@ export class AutoSaveController {
   dispose() {
     this.disposed = true
     this.unsubscribe()
+    this.stopExternal()
     if (this.timer) clearTimeout(this.timer)
     this.pending.clear(); this.failures.clear()
   }

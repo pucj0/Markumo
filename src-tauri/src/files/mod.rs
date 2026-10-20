@@ -1,6 +1,9 @@
 pub(crate) mod atomic;
 pub mod classfile;
 mod codec;
+pub mod external;
+#[cfg(test)]
+mod external_tests;
 pub mod images;
 pub mod media;
 
@@ -32,7 +35,12 @@ impl FileError {
         }
     }
     pub fn io(error: std::io::Error) -> Self {
-        Self::new("io", &format!("文件操作失败：{error}"))
+        let code = match error.kind() {
+            std::io::ErrorKind::NotFound => "deleted",
+            std::io::ErrorKind::PermissionDenied => "permission",
+            _ => "io",
+        };
+        Self::new(code, &format!("文件操作失败：{error}"))
     }
 }
 impl std::fmt::Display for FileError {
@@ -121,21 +129,30 @@ pub struct Preferences {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct FileIdentity {
-    pub volume: u32,
+    pub volume: u64,
     pub index: u64,
 }
 
-/// Native file identity (volume serial + file index). Two different path
+/// Native file identity (Windows volume/index or Unix device/inode). Different path
 /// spellings of the same file — a mapped drive versus its UNC form, or a
 /// verbatim prefix — share this identity even when their canonical text differs.
-/// Only used to recognise an already-open document; never for authorization.
+/// Used for existing-document recognition and Save As aliases, never authorization.
 pub(crate) fn file_identity(path: &Path) -> Option<FileIdentity> {
     #[cfg(windows)]
     {
         let file = fs::File::open(path).ok()?;
         file_identity_from_handle(&file)
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::metadata(path).ok()?;
+        Some(FileIdentity {
+            volume: meta.dev(),
+            index: meta.ino(),
+        })
+    }
+    #[cfg(not(any(windows, unix)))]
     {
         let _ = path;
         None
@@ -156,7 +173,7 @@ pub(crate) fn file_identity_from_handle(file: &fs::File) -> Option<FileIdentity>
         return None;
     }
     Some(FileIdentity {
-        volume: info.dwVolumeSerialNumber,
+        volume: info.dwVolumeSerialNumber as u64,
         index: ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
     })
 }
@@ -172,6 +189,9 @@ struct Grant {
 }
 #[derive(Default)]
 pub struct FileService {
+    pub external_watcher: Option<external::ExternalWatcher>,
+    external_leases: HashMap<String, u64>,
+    next_external_lease: u64,
     grants: HashMap<String, Grant>,
     next_token: u64,
     pub preferences: Preferences,
@@ -227,8 +247,89 @@ pub(crate) fn checked_path(path: &Path, allow_missing: bool) -> Result<PathBuf> 
     }
 }
 
+/// Open a previously canonicalized path without following a substituted link.
+pub(super) fn open_plain_read(path: &Path) -> Result<fs::File> {
+    #[cfg(unix)]
+    {
+        use rustix::fs::{open, openat, Mode, OFlags};
+        let mut parent = open(
+            "/",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|e| FileError::io(e.into()))?;
+        let parts: Vec<_> = path
+            .components()
+            .filter_map(|part| {
+                if let Component::Normal(name) = part {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for name in &parts[..parts.len().saturating_sub(1)] {
+            parent = openat(
+                &parent,
+                *name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|e| FileError::io(e.into()))?;
+        }
+        let name = parts
+            .last()
+            .ok_or_else(|| FileError::new("path", "缺少文件名。"))?;
+        return openat(
+            &parent,
+            *name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map(fs::File::from)
+        .map_err(|e| FileError::io(e.into()));
+    }
+    #[cfg(not(unix))]
+    {
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.custom_flags(
+                windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+            );
+        }
+        let file = options.open(path).map_err(FileError::io)?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
+            use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+            let mut buffer = vec![0u16; 32768];
+            let length = unsafe {
+                GetFinalPathNameByHandleW(
+                    file.as_raw_handle() as _,
+                    buffer.as_mut_ptr(),
+                    buffer.len() as u32,
+                    0,
+                )
+            };
+            if length == 0 || length as usize >= buffer.len() {
+                return fail("scope", "无法验证文件的实际路径。");
+            }
+            let actual = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length as usize]));
+            if crate::session::PathKey::of(&actual) != crate::session::PathKey::of(path) {
+                return fail("scope", "文件链接或目录目标已变化。");
+            }
+        }
+        Ok(file)
+    }
+}
+
 fn read_disk(path: &Path) -> Result<(Vec<u8>, String, bool)> {
-    let file = fs::File::open(path).map_err(FileError::io)?;
+    let resolved_path = checked_path(path, false)?;
+    let path = resolved_path.as_path();
+    let file = open_plain_read(path)?;
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;
@@ -244,7 +345,7 @@ fn read_disk(path: &Path) -> Result<(Vec<u8>, String, bool)> {
         }
     }
     let before = file.metadata().map_err(FileError::io)?;
-    if !before.is_file() || before.len() > MAX_BYTES {
+    if !before.is_file() || before.file_type().is_symlink() || before.len() > MAX_BYTES {
         return fail("size", "仅支持不超过 16 MiB 的普通文件；未读取或修改文件。");
     }
     let mut bytes = Vec::new();
@@ -253,6 +354,21 @@ fn read_disk(path: &Path) -> Result<(Vec<u8>, String, bool)> {
         .read_to_end(&mut bytes)
         .map_err(FileError::io)?;
     let after = file.metadata().map_err(FileError::io)?;
+    if checked_path(path, false)? != path {
+        return fail("scope", "读取期间文件路径发生变化。");
+    }
+    #[cfg(windows)]
+    if file_identity_from_handle(&file) != file_identity(path) {
+        return fail("conflict", "读取期间文件被替换。");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let current = fs::metadata(path).map_err(FileError::io)?;
+        if current.dev() != after.dev() || current.ino() != after.ino() {
+            return fail("conflict", "读取期间文件被替换。");
+        }
+    }
     if bytes.len() as u64 > MAX_BYTES
         || bytes.len() as u64 != after.len()
         || before.len() != after.len()
@@ -293,6 +409,10 @@ impl FileService {
         self.current_owner = owner.to_owned();
     }
     pub fn release_owner(&mut self, owner: &str) {
+        self.external_leases.remove(owner);
+        if let Some(watcher) = &mut self.external_watcher {
+            watcher.release(owner, None);
+        }
         let tokens: Vec<_> = self
             .grants
             .iter()
@@ -414,12 +534,26 @@ impl FileService {
         Ok(grant.canonical.clone())
     }
     pub fn open_selected(&mut self, selected: PathBuf, encoding: Option<&str>) -> Result<OpenFile> {
+        self.read_selected(selected, encoding, None)
+    }
+    fn read_selected(
+        &mut self,
+        selected: PathBuf,
+        encoding: Option<&str>,
+        existing_token: Option<&str>,
+    ) -> Result<OpenFile> {
         let path = checked_path(&selected, false)?;
         // Inspect a bounded header before the text reader (which keeps its 16 MiB limit).
         if encoding.is_none() || encoding == Some("Media") {
             if let Some((kind, media, version)) = media::inspect(&path)? {
-                let token = self.grant(selected, path.clone(), false);
-                let warning = self.recent(&path);
+                let token = existing_token
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| self.grant(selected, path.clone(), false));
+                let warning = if existing_token.is_none() {
+                    self.recent(&path)
+                } else {
+                    None
+                };
                 return Ok(OpenFile {
                     metadata: FileMetadata {
                         token,
@@ -449,8 +583,14 @@ impl FileService {
         // Keep structural inspection as an explicit view; opening is editable by default.
         if encoding == Some("ClassInfo") {
             let class_info = classfile::parse(&bytes)?;
-            let token = self.grant(selected, path.clone(), false);
-            let warning = self.recent(&path);
+            let token = existing_token
+                .map(str::to_owned)
+                .unwrap_or_else(|| self.grant(selected, path.clone(), false));
+            let warning = if existing_token.is_none() {
+                self.recent(&path)
+            } else {
+                None
+            };
             return Ok(OpenFile {
                 metadata: FileMetadata {
                     token,
@@ -493,9 +633,17 @@ impl FileService {
             Err(error) => return Err(error),
         };
         guard_text(&text)?;
-        let token = self.grant(selected, path.clone(), true);
-        self.grants.get_mut(&token).unwrap().hex = encoding == "Hex";
-        let warning = self.recent(&path);
+        let token = existing_token
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.grant(selected, path.clone(), true));
+        if existing_token.is_none() {
+            self.grants.get_mut(&token).unwrap().hex = encoding == "Hex";
+        }
+        let warning = if existing_token.is_none() {
+            self.recent(&path)
+        } else {
+            None
+        };
         Ok(OpenFile {
             metadata: FileMetadata {
                 token,
@@ -541,6 +689,78 @@ impl FileService {
         }
         self.open_selected(path, Some(encoding))
     }
+    /// Read-only inspection: keeps the capability and all saved baselines intact.
+    pub fn check_external(&self, token: &str) -> Result<String> {
+        let path = self.validate(token, false)?;
+        if !self.grants.get(token).unwrap().writable {
+            if let Some((_, _, version)) = media::inspect(&path)? {
+                self.validate(token, false)?;
+                return Ok(version);
+            }
+        }
+        let version = read_disk(&path)?.1;
+        self.validate(token, false)?;
+        Ok(version)
+    }
+    pub fn read_external(
+        &mut self,
+        token: &str,
+        expected: &str,
+        encoding: &str,
+    ) -> Result<OpenFile> {
+        if encoding != "Media" && encoding != "ClassInfo" {
+            self.require_text_grant(token)?;
+        }
+        let path = self.validate(token, false)?;
+        if self.check_external(token)? != expected {
+            return fail("conflict", "磁盘版本再次变化，请刷新后重试。");
+        }
+        let file = self.read_selected(path, Some(encoding), Some(token))?;
+        if file.metadata.version != expected || self.check_external(token)? != expected {
+            return fail("conflict", "读取期间文件发生变化，请刷新后重试。");
+        }
+        Ok(file)
+    }
+    pub fn begin_external_watch(&mut self) -> u64 {
+        self.next_external_lease += 1;
+        self.external_leases
+            .insert(self.current_owner.clone(), self.next_external_lease);
+        if let Some(watcher) = &mut self.external_watcher {
+            watcher.release(&self.current_owner, None);
+        }
+        self.next_external_lease
+    }
+    pub fn end_external_watch(&mut self, lease: u64) {
+        if self.external_leases.get(&self.current_owner) == Some(&lease) {
+            self.external_leases.remove(&self.current_owner);
+            if let Some(watcher) = &mut self.external_watcher {
+                watcher.release(&self.current_owner, None);
+            }
+        }
+    }
+    pub fn watch_external(
+        &mut self,
+        tokens: Vec<String>,
+        generation: u64,
+        lease: u64,
+    ) -> Result<external::WatchStatus> {
+        if tokens.len() > 1024 {
+            return fail("watch", "打开文件过多，实时监测未启用。");
+        }
+        let mut files = HashMap::new();
+        for token in tokens {
+            // Missing paths remain watched through their authorized parent.
+            let path = self.session_path(&token)?;
+            files.insert(token, path);
+        }
+        if self.external_leases.get(&self.current_owner) != Some(&lease) {
+            return fail("watch", "此监测订阅已失效。");
+        }
+        self.external_watcher
+            .as_mut()
+            .ok_or_else(|| FileError::new("watch", "实时监测不可用，将在窗口获得焦点时检查。"))?
+            .set(&self.current_owner, generation, files)
+    }
     pub fn prepare_target(
         &mut self,
         selected: PathBuf,
@@ -553,6 +773,14 @@ impl FileService {
             .and_then(|token| self.grants.get(token))
             .is_some_and(|grant| grant.hex);
         let path = checked_path(&selected, true)?;
+        if let Some(source) = source {
+            let original = self.session_path(source)?;
+            if original == path
+                || file_identity(&original).is_some_and(|id| Some(id) == file_identity(&path))
+            {
+                return fail("conflict", "另存为不能覆盖原文件，请选择其他文件名。");
+            }
+        }
         if !hex {
             guard_text_target(&path)?;
         }
@@ -637,6 +865,9 @@ impl FileService {
             .get(token)
             .is_some_and(|grant| grant.owner == self.current_owner)
         {
+            if let Some(watcher) = &mut self.external_watcher {
+                watcher.release(&self.current_owner, Some(token));
+            }
             self.grants.remove(token);
             self.image_reads.remove(token);
             self.image_directories.remove(token);
@@ -1188,9 +1419,8 @@ mod grant_tests {
 
         let save_as = files
             .prepare_target(path.clone(), Some(&source.metadata.token))
-            .unwrap();
-        assert_ne!(save_as.token, source.metadata.token);
-        files.release(&save_as.token);
+            .unwrap_err();
+        assert_eq!(save_as.code, "conflict");
         assert!(files.session_path(&source.metadata.token).is_ok());
     }
 

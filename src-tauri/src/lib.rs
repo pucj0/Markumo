@@ -184,6 +184,8 @@ pub fn run() {
             let app_data = app.path().app_data_dir()?;
             profile_migration::migrate(&app_data)?;
             service.configure(app_data.join("files.json"));
+            // Initialization failure is reported by watch_external, not hidden.
+            service.external_watcher = files::external::ExternalWatcher::new(app.handle().clone()).ok();
             drop(service);
             app.state::<recovery::RecoveryStore>()
                 .lock()
@@ -236,6 +238,8 @@ pub fn run() {
             commands::files::open_dialog, commands::files::save_dialog,
             commands::files::open_recent, commands::files::reopen_file,
             commands::files::save_file, commands::files::release_file,
+            commands::files::check_external_file, commands::files::read_external_file, commands::files::watch_external_files,
+            commands::files::begin_external_watch, commands::files::end_external_watch,
             commands::files::read_class_hex,
             commands::files::media_metadata,
             commands::files::read_media_chunk,

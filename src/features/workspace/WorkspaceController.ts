@@ -122,7 +122,7 @@ export class WorkspaceController {
   }
 
   async openWorkspaceDialog(add = false): Promise<boolean> {
-    if (this.operationBusy || this.fileController.saving.size || this.documentManager.isComposing) {
+    if (this.operationBusy || (this.fileController.activeOperationCount ?? this.fileController.saving.size) || this.documentManager.isComposing) {
       this.notify('请等待文件操作和输入完成，再切换工作区。'); return false
     }
     if (!add && this.documentManager.hasDirtyDocuments) {
@@ -154,7 +154,7 @@ export class WorkspaceController {
 
   async removeFolder(path: string) {
     this.cancelExpand();this.revealSequence++
-    if (this.operationBusy || this.fileController.saving.size || this.documentManager.isComposing) { this.notify('请等待文件操作和输入完成。'); return }
+    if (this.operationBusy || (this.fileController.activeOperationCount ?? this.fileController.saving.size) || this.documentManager.isComposing) { this.notify('请等待文件操作和输入完成。'); return }
     if (!this.beginMutation()) return
     this.cancelSearch(); this.quickGeneration++
     try {
@@ -179,7 +179,7 @@ export class WorkspaceController {
   }
 
   private async loadWorkspace(load: () => Promise<WorkspaceInfo>, add: boolean): Promise<boolean> {
-    if (this.operationBusy || this.fileController.saving.size || this.documentManager.isComposing) {
+    if (this.operationBusy || (this.fileController.activeOperationCount ?? this.fileController.saving.size) || this.documentManager.isComposing) {
       this.notify('请等待文件操作和输入完成，再切换工作区。'); return false
     }
     if (!add && this.documentManager.hasDirtyDocuments) {
@@ -592,7 +592,7 @@ export class WorkspaceController {
   }
 
   private beginMutation() {
-    if (this.operationBusy || this.fileController.saving.size || this.documentManager.isComposing) {
+    if (this.operationBusy || (this.fileController.activeOperationCount ?? this.fileController.saving.size) || this.documentManager.isComposing) {
       this.notify('请等待文件操作和输入完成。'); return false
     }
     this.operationBusy = true

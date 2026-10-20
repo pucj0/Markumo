@@ -22,6 +22,8 @@ pub struct EditorSettings {
     live_toolbar: bool,
     markdown_typography: MarkdownTypography,
     markdown_clipboard: MarkdownClipboard,
+    external_file_monitoring: bool,
+    auto_reload_external: bool,
     auto_save: bool,
     auto_check_updates: bool,
     auto_download_updates: bool,
@@ -116,6 +118,8 @@ impl Default for EditorSettings {
             live_toolbar: true,
             markdown_typography: MarkdownTypography::default(),
             markdown_clipboard: MarkdownClipboard::default(),
+            external_file_monitoring: true,
+            auto_reload_external: true,
             auto_save: false,
             auto_check_updates: true,
             auto_download_updates: false,
@@ -281,6 +285,15 @@ pub async fn save_editor_settings(
 
 #[cfg(test)]
 mod branding_tests {
+    #[test]
+    fn external_file_preferences_default_on_and_round_trip_explicit_off() {
+        let defaults: super::EditorSettings = serde_json::from_str("{}").unwrap();
+        assert!(defaults.external_file_monitoring && defaults.auto_reload_external);
+        let settings: super::EditorSettings = serde_json::from_str(r#"{"externalFileMonitoring":false,"autoReloadExternal":false}"#).unwrap();
+        super::validate(&settings).unwrap();
+        let json=serde_json::to_value(settings).unwrap();
+        assert_eq!(json["externalFileMonitoring"],false); assert_eq!(json["autoReloadExternal"],false);
+    }
     use super::*;
     #[test]
     fn bracket_mode_defaults_validation_and_disk_round_trip() {

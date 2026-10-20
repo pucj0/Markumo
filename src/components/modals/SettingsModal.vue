@@ -60,6 +60,9 @@
             <!-- 3. 保存 -->
             <section id="settings-save" class="settings-section">
               <h3>保存</h3>
+              <div class="settingrow"><label for="settings-external-monitor">外部文件变化监测</label><input id="settings-external-monitor" class="setting-switch" type="checkbox" :checked="externalFileMonitoring ?? true" @change="emit('update:externalFileMonitoring', ($event.target as HTMLInputElement).checked)" /></div>
+              <p class="setting-hint">关闭后仍在保存时校验磁盘版本，阻止旧内容意外覆盖外部修改。</p>
+              <div class="settingrow"><label for="settings-external-reload">自动重新加载外部修改的干净文件</label><input id="settings-external-reload" class="setting-switch" type="checkbox" :checked="autoReloadExternal ?? true" @change="emit('update:autoReloadExternal', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><label for="settings-autosave">自动保存</label><input id="settings-autosave" class="setting-switch" type="checkbox" :checked="autoSave" @change="$emit('update:autoSave', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><label for="settings-save-delay">自动保存延迟</label><select id="settings-save-delay" :disabled="!autoSave" :value="autoSaveDelay" @change="$emit('update:autoSaveDelay', Number(($event.target as HTMLSelectElement).value))"><option v-if="!delays.includes(autoSaveDelay)" :value="autoSaveDelay">{{ autoSaveDelay / 1000 }} 秒</option><option v-for="delay in delays" :key="delay" :value="delay">{{ delay / 1000 }} 秒</option></select></div>
             </section>
@@ -282,6 +285,8 @@ const props = defineProps<{
   useTabs: boolean
   shortcuts: EditorSettings['shortcuts']
   keymapPreset?: KeymapPresetId
+  externalFileMonitoring?: boolean
+  autoReloadExternal?: boolean
   autoSave: boolean
   autoSaveDelay: number
   treeClickMode?: 'double' | 'single'
@@ -318,6 +323,8 @@ const emit = defineEmits<{
   (e: 'update:compactFolders', val: boolean): void
   (e: 'update:keymap', val: {preset:KeymapPresetId;bindings:Record<string,string>}): void
   (e: 'update:shortcuts', val: Record<string, string>): void
+  (e: 'update:externalFileMonitoring', val: boolean): void
+  (e: 'update:autoReloadExternal', val: boolean): void
   (e: 'update:autoSave', val: boolean): void
   (e: 'update:autoSaveDelay', val: number): void
   (e: 'update:imageRules', val: ImageRules): void

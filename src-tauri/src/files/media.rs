@@ -324,7 +324,7 @@ fn read_at(file: &mut fs::File, buffer: &mut [u8], offset: u64) -> std::io::Resu
 }
 
 fn open(path: &Path) -> Result<fs::File> {
-    let file = fs::File::open(path).map_err(FileError::io)?;
+    let file = open_plain_read(path)?;
     let meta = file.metadata().map_err(FileError::io)?;
     if !meta.is_file() {
         return fail("path", "仅允许读取普通媒体文件。");

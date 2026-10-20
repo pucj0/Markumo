@@ -25,6 +25,7 @@ const SMOKE_TESTS = [
   'scripts/shell-lifecycle-regression.mjs',
   'scripts/document-manager-regression.mjs',
   'scripts/file-save-regression.mjs',
+  'scripts/external-file-regression.mjs',
   'scripts/conversion-regression.mjs',
   'scripts/recovery-regression.mjs',
 ]
@@ -47,6 +48,7 @@ const FULL_REGRESSION_TESTS = [
   'scripts/shell-lifecycle-regression.mjs',
   'scripts/document-manager-regression.mjs',
   'scripts/file-save-regression.mjs',
+  'scripts/external-file-regression.mjs',
   'scripts/rich-clipboard-regression.mjs',
   'scripts/outline-regression.mjs',
   'scripts/outline-navigation-regression.mjs',

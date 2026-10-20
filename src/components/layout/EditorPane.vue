@@ -1,8 +1,8 @@
 <template>
   <div class="pane-body" :class="{ 'class-pane': doc?.kind === 'javaClass' }">
     <div v-if="currentMode === 'live' && tooLarge" class="markdown-budget" role="status">文档超过 Live 安全预算，当前使用源码编辑。</div>
-    <ImageViewer v-if="doc?.kind === 'image'" :key="`${doc.id}:${doc.fileToken}:${pane}`" :doc="doc" :state="manager.mediaViewState(doc.id, pane)" @metadata="(media, version) => doc && manager.updateMediaMetadata(doc.id, media, version)" />
-    <PdfViewer v-if="doc?.kind === 'pdf'" :key="`${doc.id}:${doc.fileToken}:${pane}`" :doc="doc" :pane="pane" :state="manager.mediaViewState(doc.id, pane)" @metadata="(media, version) => doc && manager.updateMediaMetadata(doc.id, media, version)" />
+    <ImageViewer v-if="doc?.kind === 'image'" :key="`${doc.id}:${doc.fileToken}:${doc.lastDiskVersion}:${pane}`" :doc="doc" :state="manager.mediaViewState(doc.id, pane)" @metadata="(media, version) => doc && manager.updateMediaMetadata(doc.id, media, version)" />
+    <PdfViewer v-if="doc?.kind === 'pdf'" :key="`${doc.id}:${doc.fileToken}:${doc.lastDiskVersion}:${pane}`" :doc="doc" :pane="pane" :state="manager.mediaViewState(doc.id, pane)" @metadata="(media, version) => doc && manager.updateMediaMetadata(doc.id, media, version)" />
     <div v-show="doc && !isMedia(doc)" ref="host" class="editor-host" :style="hostStyle" @scroll.capture="onEditorScroll"></div>
     <div v-if="currentMode === 'split' && !tooLarge" class="split-resizer" title="拖动调整双栏比例" @mousedown.prevent="startSplitResize"></div>
     <SplitPreview v-if="currentMode === 'split'" ref="preview" :style="previewStyle" :image-border="manager.getMarkdownTypography().imageBorder" :content="text" :too-large="tooLarge" :resources="resources" :resource-key="`${doc?.fileToken||''}|${doc?.path||''}`" @scroll-line="onPreviewScroll" @edit-image="editImage" />

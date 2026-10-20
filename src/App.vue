@@ -143,6 +143,8 @@
       v-model:font-family="fontFamily"
       v-model:indent-size="indentSize"
       v-model:use-tabs="useTabs"
+      v-model:external-file-monitoring="externalFileMonitoring"
+      v-model:auto-reload-external="autoReloadExternal"
       v-model:auto-save="autoSave"
       v-model:auto-save-delay="autoSaveDelay"
       v-model:tree-click-mode="treeClickMode"
@@ -156,6 +158,7 @@
     />
 
     <!-- 操作提示 Toast -->
+    <ExternalFileDialogs :files="files" />
     <Toast ref="toastRef" />
   </div>
   <div v-if="startupLoading" class="startup-overlay" role="status" :aria-busy="!startupError">
@@ -183,6 +186,7 @@
 </template>
 
 <script setup lang="ts">
+import ExternalFileDialogs from './components/modals/ExternalFileDialogs.vue'
 import TopBar from './components/layout/TopBar.vue'
 import ActivityBar from './components/layout/ActivityBar.vue'
 import Sidebar from './components/layout/Sidebar.vue'
@@ -198,7 +202,7 @@ import UpdateConfirm from './components/modals/UpdateConfirm.vue'
 import RecoveryDialog from './components/modals/RecoveryDialog.vue'
 import { computed } from 'vue'
 import { useAppShell } from './app/useAppShell'
-const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, defaultMdMode, liveToolbar, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, smartExpand, compactFolders, syntaxStyle, bracketMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
+const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, defaultMdMode, liveToolbar, externalFileMonitoring, autoReloadExternal, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, smartExpand, compactFolders, syntaxStyle, bracketMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
   paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
   setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,

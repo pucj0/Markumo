@@ -34,6 +34,7 @@ export interface EditorSettings extends UpdatePreferences {
   theme: ThemePreference; uiFontSize: number; fontSize: number; fontFamily: 'system' | 'consolas' | 'cascadia'
   wordWrap: boolean; showOutline: boolean; indentSize: number; useTabs: boolean; defaultMdMode: MarkdownMode
   liveToolbar: boolean
+  externalFileMonitoring: boolean; autoReloadExternal: boolean
   autoSave: boolean; autoSaveDelay: number
   treeClickMode: 'double' | 'single'
   autoFollowActiveFile: boolean
@@ -52,7 +53,7 @@ export interface EditorSettings extends UpdatePreferences {
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
 export function defaultSettings(): EditorSettings {
   const markdownClipboard = defaultMarkdownClipboard(), outlineWidth = 240
-  return { bracketMode: 'matching', syntaxStyle: 'soft', ...defaultUpdatePreferences(), caretAnimation: 'smooth', outlineWidth, markdownClipboard, markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 4, useTabs: false, defaultMdMode: 'live', liveToolbar: true, autoSave: false, autoSaveDelay: 1500, treeClickMode: 'single', autoFollowActiveFile: false, smartExpand: true, compactFolders: false, keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: currentShortcutVersion, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
+  return { bracketMode: 'matching', syntaxStyle: 'soft', ...defaultUpdatePreferences(), caretAnimation: 'smooth', outlineWidth, markdownClipboard, markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 4, useTabs: false, defaultMdMode: 'live', liveToolbar: true, externalFileMonitoring: true, autoReloadExternal: true, autoSave: false, autoSaveDelay: 1500, treeClickMode: 'single', autoFollowActiveFile: false, smartExpand: true, compactFolders: false, keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: currentShortcutVersion, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
 }
 /** Drop the transient migration notice before writing preferences to disk. */
 export function persistedSettings(settings: EditorSettings) {
@@ -111,6 +112,8 @@ export function settingsFrom(raw: unknown): EditorSettings {
   // overwritten) and surfaced as a one-time notice instead. From version 4 on,
   // the stored value is written only by the settings UI and is authoritative.
   const legacySettings = !(Number.isInteger(s.settingsVersion) && s.settingsVersion! >= 4)
+  if (typeof s.externalFileMonitoring === 'boolean') defaults.externalFileMonitoring = s.externalFileMonitoring
+  if (typeof s.autoReloadExternal === 'boolean') defaults.autoReloadExternal = s.autoReloadExternal
   if (typeof s.autoSave === 'boolean') {
     defaults.autoSave = s.autoSave
     defaults.legacyAutoSaveNotice = legacySettings && s.autoSave

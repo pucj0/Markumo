@@ -19,6 +19,7 @@
       :pane="paneId"
       :split="manager.isSplit"
       :manager="manager"
+      :files="files"
       :desktop="desktop"
       :root-path="rootPath"
       @select-tab="manager.select($event, paneId)"
@@ -39,6 +40,7 @@
     />
 
     <Breadcrumb :doc="activeDoc" />
+    <ExternalFileBanner v-if="activeDoc && files" :files="files" :id="activeDoc.id" />
 
     <WelcomePage
       v-if="welcome && !activeDoc && !manager.isSplit"
@@ -72,6 +74,7 @@
 import { computed, ref } from 'vue'
 import TabBar from './TabBar.vue'
 import Breadcrumb from './Breadcrumb.vue'
+import ExternalFileBanner from './ExternalFileBanner.vue'
 import EditorPane from './EditorPane.vue'
 import WelcomePage from './WelcomePage.vue'
 import MarkdownModeSwitcher from './MarkdownModeSwitcher.vue'

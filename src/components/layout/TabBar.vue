@@ -28,6 +28,7 @@
         @keydown.shift.f10.prevent.stop="openMenu($event, doc)"
       >
         <FileIcon :name="doc.name" />
+        <button v-if="files?.external.state(doc.id)?.conflictValid" class="external-mark" aria-label="文件存在外部变化，查看处理选项" title="外部变化尚未处理" @pointerdown.stop @click.stop="files.external.keep(doc.id, false); $emit('select-tab', doc.id)">⚠</button>
         <span class="filename">{{ doc.name }}</span>
         <span v-if="doc.dirty || !doc.path" class="unsaved" :title="doc.dirty ? '未保存修改' : '尚未保存'"></span>
         <button
@@ -56,6 +57,7 @@
 <script setup lang="ts">
 import Icon from '../common/Icon.vue'
 import FileIcon from '../common/FileIcon.vue'
+import type { FileController } from '../../features/files/FileController'
 import type { EditorDocument } from '../../types'
 import { readablePath } from '../../features/shell/pathDisplay'
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
@@ -66,6 +68,7 @@ import type { DocumentManager } from '../../editor/core/DocumentManager'
 import { tabDragService } from '../../editor/layout/TabDragService'
 
 const props = withDefaults(defineProps<{
+  files?: FileController
   docs: EditorDocument[]
   activeId: string | null
   pane?: string
@@ -261,6 +264,7 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
 </script>
 
 <style scoped>
+.external-mark{background:none;border:0;color:var(--yellow);padding:0 3px;cursor:pointer}.external-mark:focus-visible{outline:2px solid var(--accent)}
 .tabs {
   height: calc(var(--ui-font-size) + 26px);
   background: var(--bar);
