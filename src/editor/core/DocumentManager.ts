@@ -28,7 +28,7 @@ import { cancelSmoothScroll, smoothScrollTo } from './smoothScroll'
 import { smoothCaret } from './smoothCaret'
 import type { CaretAnimation } from './caretMotion'
 
-export interface DocumentSeed { id: string; name: string; path: string; text: string; pinned?: boolean; mode?: MarkdownMode; kind?: 'text' | 'javaClass'; classInfo?: ClassInfo; encoding?: string }
+export interface DocumentSeed { id: string; name: string; path: string; text: string; pinned?: boolean; mode?: MarkdownMode; kind?: 'text' | 'javaClass'; classInfo?: ClassInfo; encoding?: string; bom?: boolean; eol?: EditorDocument['eol'] }
 export type Pane = string
 const sharedConfiguration = Annotation.define<boolean>()
 interface CachedDocument {
@@ -223,7 +223,7 @@ export class DocumentManager {
         id: seed.id, uri: seed.id.startsWith('untitled-') ? `untitled:${seed.id}` : `sample:${seed.id}`, name: seed.name, path: seed.path,
         kind: seed.kind || 'text', classInfo: seed.classInfo,
         language: binary || byteEditor ? 'Plain Text' : detectLanguage(seed.name), languageStatus: binary ? 'ready' : 'loading', dirty: false, pinned: seed.pinned ?? true,
-        encoding: seed.encoding || 'UTF-8', eol: /\r\n/.test(seed.text) ? 'CRLF' : 'LF', bom: false, readOnly: false, lastDiskVersion: null,
+        encoding: seed.encoding || 'UTF-8', eol: seed.eol || (/\r\n/.test(seed.text) ? 'CRLF' : 'LF'), bom: seed.bom ?? false, readOnly: false, lastDiskVersion: null,
         charCount: state.doc.length, line: 1, column: 1, mode: initialMdMode,
       },
       state, baseline: state.doc, baselineEndings: endings.snapshot(state), endings, language, wrap, theme, markdownMode, indent, caret, brackets, languageGeneration: 0, readyLanguageGeneration: null, scroll: { top: 0, left: 0 },
@@ -447,6 +447,45 @@ export class DocumentManager {
     this.open(id, false)
     this.paneView(this.activePane)?.focus()
     return id
+  }
+
+  /** Recreate a recovered untitled draft without granting it a disk target.
+   * A missing/changed original stays pathless so Save must go through Save As. */
+  createRecoveredDocument(seed: { id: string; name: string; text: string; encoding?: string; bom?: boolean; eol?: EditorDocument['eol']; mode?: MarkdownMode }): string | null {
+    if (this.isComposing || this.disposed) return null
+    this.seeds.set(seed.id, { id: seed.id, name: seed.name, path: '', text: seed.text, encoding: seed.encoding, bom: seed.bom, eol: seed.eol, mode: seed.mode })
+    this.open(seed.id, false)
+    const record = this.records.get(seed.id)
+    if (!record) return null
+    record.meta.encoding = seed.encoding || 'UTF-8'
+    record.meta.bom = seed.bom ?? false
+    if (seed.eol) record.meta.eol = seed.eol
+    record.meta.dirty = true
+    record.meta.charCount = seed.text.length
+    record.meta.line = 1
+    record.meta.column = 1
+    record.baseline = Text.empty
+    this.pin(seed.id)
+    this.notify()
+    return seed.id
+  }
+
+  /** Replace the canonical text with a recovered body. The disk baseline and
+   * last disk version are kept, so the result stays dirty and a later save is
+   * an explicit user action against that exact version. */
+  restoreRecoveredText(id: string, text: string, mode?: MarkdownMode): boolean {
+    const record = this.records.get(id)
+    if (!record || this.disposed || this.isComposing || record.meta.kind === 'javaClass' || record.meta.encoding === 'Hex') return false
+    this.dispatch(id, {
+      changes: { from: 0, to: record.state.doc.length, insert: text },
+      annotations: Transaction.addToHistory.of(false),
+      userEvent: 'recovery.restore',
+    })
+    if (mode && ['live', 'source', 'split'].includes(mode)) this.setMarkdownMode(id, mode)
+    record.meta.dirty = true
+    this.pin(id)
+    this.notify()
+    return true
   }
 
   close(id: string, discard = false, pane: Pane = this.activePane): 'closed' | 'dirty' | 'composing' | 'missing' {

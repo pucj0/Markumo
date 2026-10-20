@@ -9,6 +9,13 @@
     </div>
 
     <div class="stat-group right">
+      <button
+        v-if="recoveryCount > 0"
+        class="stat-item recovery-btn"
+        type="button"
+        :title="`查看 ${recoveryCount} 个可恢复的未保存文档`"
+        @click="$emit('open-recovery')"
+      >可恢复 {{ recoveryCount }}</button>
       <template v-if="doc?.kind !== 'javaClass' && !isMedia(doc)">
         <span class="stat-item position">Ln {{ doc?.line || 1 }}, Col {{ doc?.column || 1 }}</span>
         <span class="stat-item optional">{{ useTabs ? 'Tabs' : 'Spaces' }}: {{ indentSize }}</span>
@@ -53,12 +60,14 @@ const emit = defineEmits<{
   (e: 'reopen-encoding', encoding: FileOpenEncoding): void
   (e: 'convert-encoding', payload: { encoding: Encoding; bom: boolean }): void
   (e: 'save-as-encoding', encoding: Encoding): void
+  (e: 'open-recovery'): void
 }>()
 
 const props = defineProps<{
   doc: EditorDocument | null
   indentSize: number
   useTabs: boolean
+  recoveryCount: number
   root?: { rootPath: string; name: string } | null
   multiRoot?: boolean
 }>()
@@ -249,4 +258,15 @@ function openEncodingMenu(event: MouseEvent | KeyboardEvent) {
   background: var(--hover);
   color: var(--bright);
 }
+
+.recovery-btn {
+  border: 0;
+  background: var(--accentbg);
+  color: var(--accent);
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 6px;
+  font: inherit;
+}
+.recovery-btn:hover { color: var(--bright); }
 </style>

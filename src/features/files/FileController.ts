@@ -17,9 +17,10 @@ export class FileController {
   workspaceBusy = false
   private disposed = false
   private readonly stopRelease: () => void
-  constructor(readonly manager: DocumentManager, readonly gateway: FileGateway, private readonly notify: (message: string) => void) {
+  constructor(readonly manager: DocumentManager, readonly gateway: FileGateway, private readonly notify: (message: string) => void, private saved?: (id: string) => void | Promise<void>) {
     this.stopRelease = manager.onFileRelease(token => { void gateway.release(token).catch(error => notify(fileError(error))) })
   }
+  setSavedHandler(handler: (id: string) => void | Promise<void>) { this.saved = handler }
 
   accept(file: OpenFile, preview = false, pane = this.manager.activePane, activatePane = true) {
     if (this.disposed) { void this.gateway.release(file.token).catch(() => {}); return false }
@@ -92,6 +93,7 @@ export class FileController {
       const accepted = snapshot.complete(result)
       if (accepted && source.fileToken && source.fileToken !== result.token) await this.gateway.release(source.fileToken).catch(() => {})
       if (!accepted) await this.gateway.release(result.token).catch(() => {})
+      if (accepted) await this.saved?.(id)
       if (accepted && result.warning) this.notify(result.warning)
       return !accepted ? 'skipped' : this.manager.metadata(id)?.dirty ? 'changed' : 'saved'
     } catch (error) {

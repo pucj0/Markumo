@@ -2,6 +2,7 @@ mod commands;
 mod conversion;
 mod files;
 mod profile_migration;
+mod recovery;
 mod session;
 mod workspace;
 
@@ -175,6 +176,7 @@ pub fn run() {
         .manage(session::SessionStore::default())
         .manage(commands::update::UpdateStore::default())
         .manage(conversion::ConversionStore::default())
+        .manage(recovery::RecoveryStore::default())
         .manage(search_manager)
         .setup(move |app| {
             let store = app.state::<FileStore>();
@@ -183,6 +185,10 @@ pub fn run() {
             profile_migration::migrate(&app_data)?;
             service.configure(app_data.join("files.json"));
             drop(service);
+            app.state::<recovery::RecoveryStore>()
+                .lock()
+                .map_err(|_| std::io::Error::other("恢复存储状态损坏"))?
+                .configure(app_data.join("recovery"));
             app.state::<session::SessionStore>().lock().map_err(|_|std::io::Error::other("会话状态损坏"))?.configure(app_data.join("last-session.json"));
             let paths=session::argument_paths(std::env::args(),&std::env::current_dir()?);
             let restoring_update=commands::update::restore_after_update(&app_data.join("pending-update.json"),env!("CARGO_PKG_VERSION"));
@@ -223,6 +229,8 @@ pub fn run() {
             commands::app::get_app_version,
             commands::app::ensure_update_window,
             commands::session::initialize_launch,commands::session::persist_session,
+            commands::recovery::recovery_list, commands::recovery::recovery_read,
+            commands::recovery::recovery_save, commands::recovery::recovery_delete,
             commands::app::open_external_link,
             commands::settings::load_editor_settings, commands::settings::save_editor_settings,
             commands::files::open_dialog, commands::files::save_dialog,

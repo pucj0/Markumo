@@ -97,6 +97,8 @@
       :multi-root="workspace.roots.length > 1"
       :indent-size="indentSize"
       :use-tabs="useTabs"
+      :recovery-count="recoveryRecords.length"
+      @open-recovery="openRecovery"
     />
 
     <!-- 命令面板模态框 -->
@@ -159,6 +161,20 @@
     <button @click="quitApp('titlebar')">关闭窗口</button>
   </div>
   <DiscardDialog ref="discardRef" :can-save="desktop" :busy="fileBusy" @save="savePending" @discard="discardPending" @cancel="cancelPendingClose" />
+  <RecoveryDialog
+    v-if="!updateInstalling"
+    :visible="recoveryVisible"
+    :records="recoveryRecords"
+    :busy="recoveryBusy"
+    :diff="recoveryDiff"
+    :error="recoveryError"
+    @close="closeRecovery"
+    @restore="restoreRecovery"
+    @discard="discardRecovery"
+    @restore-all="restoreAllRecovery"
+    @diff="showRecoveryDiff"
+    @close-diff="clearRecoveryDiff"
+  />
   <UpdatePanel v-if="updatePanelOpen" :state="updateStatus" @close="updatePanelOpen=false" @check="updateManager.checkForUpdates()" @download="updateManager.downloadUpdate()" @install="updateManager.installUpdate()" @release="openUpdateRelease" @link="openUpdateLink" />
   <UpdateConfirm ref="updateConfirmRef" />
   <div v-if="updateInstalling" class="update-install-overlay" role="status">{{ updateStatus.phase==='preparing' ? '正在保存文档和工作现场…' : '正在安装更新，请稍候…' }}</div>
@@ -177,6 +193,7 @@ import GotoLineModal from './components/modals/GotoLineModal.vue'
 import Toast from './components/common/Toast.vue'
 import UpdatePanel from './components/common/UpdatePanel.vue'
 import UpdateConfirm from './components/modals/UpdateConfirm.vue'
+import RecoveryDialog from './components/modals/RecoveryDialog.vue'
 import { computed } from 'vue'
 import { useAppShell } from './app/useAppShell'
 const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, smartExpand, compactFolders, syntaxStyle, bracketMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
@@ -185,7 +202,9 @@ const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,update
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,
   reopenEncoding, convertEncoding, saveAsEncoding,
   gotoLineRef, handleGotoLine, revealInExplorerToken,
-  desktop, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading, startupError, settingsReady, updateInstalling } = useAppShell()
+  desktop, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading, startupError, settingsReady, updateInstalling,
+  recoveryRecords, recoveryVisible, recoveryBusy, recoveryError, recoveryDiff, openRecovery, closeRecovery,
+  restoreRecovery, discardRecovery, restoreAllRecovery, showRecoveryDiff, clearRecoveryDiff } = useAppShell()
 defineExpose({ settingsReady })
 // These refs are bound by name from the template only; TypeScript cannot see
 // string template refs, so reference them explicitly.

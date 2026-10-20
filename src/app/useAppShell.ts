@@ -16,6 +16,8 @@ import { openDroppedDirectories, type NativeDropInput } from '../features/files/
 import { sameFilePath } from '../features/files/pathKey'
 import { isMedia } from '../features/files/media'
 import { AutoSaveController } from '../features/files/AutoSaveController'
+import { RecoveryController } from '../features/recovery/RecoveryController'
+import { tauriRecovery } from '../features/recovery/tauriRecovery'
 import { tauriFiles } from '../features/files/tauriFiles'
 import type { Encoding, FileOpenEncoding, Preferences } from '../features/files/contracts'
 import { WorkspaceController } from '../features/workspace/WorkspaceController'
@@ -59,6 +61,8 @@ export function useAppShell() {
   // --- Core Services & Controllers ---
   const manager = markRaw(new DocumentManager(demo ? sampleDocuments : []))
   const files = markRaw(new FileController(manager, tauriFiles, toast))
+  const recovery = markRaw(new RecoveryController(manager, files, tauriRecovery, toast))
+  files.setSavedHandler(id => recovery.onSaved(id))
   const exportController = new ExportController(manager, msg => toast(msg))
   const importController = new ImportController(manager, msg => toast(msg))
   const workspace = reactive(new WorkspaceController(tauriWorkspace, manager, files, toast, false)) as WorkspaceController
@@ -783,7 +787,10 @@ export function useAppShell() {
     }
     const pending = pendingClose
     pendingClose = null
-    if (pending?.kind === 'document') files.close(pending.id, true, pending.pane)
+    if (pending?.kind === 'document') {
+      const result = files.close(pending.id, true, pending.pane)
+      if (result === 'closed' || result === 'missing') await recovery.discardDocument(pending.id)
+    }
     else if (pending?.kind === 'reopen') {
       fileBusy.value = true
       try {
@@ -799,6 +806,7 @@ export function useAppShell() {
           pendingClose = pending
           return
         }
+        await recovery.discardAll()
         startup.exit()
         await (await import('@tauri-apps/api/window')).getCurrentWindow().destroy()
       } catch {
@@ -943,6 +951,7 @@ export function useAppShell() {
   }
 
   async function flushCloseState() {
+    await recovery.flushForClose()
     await startup.flushForClose(
       () => preferences.flushSettings(true),
       sessionWriter ? async () => { scheduleSession(); await sessionWriter!.flush(true) } : undefined,
@@ -1071,6 +1080,7 @@ export function useAppShell() {
         }))
         await sessionWriter.flush(true)
       }
+      if (launch.ownsSession) await recovery.start()
       if (current()) await nextTick()
       return launch.ownsSession ? 'owner' : 'temporary'
     },
@@ -1173,6 +1183,7 @@ export function useAppShell() {
     window.removeEventListener('wheel', handleEditorWheel, true)
     sessionWriter?.dispose()
     autoSaver.dispose()
+    recovery.dispose()
     files.dispose()
     workspace.destroy()
     unsubscribeWorkspace()
@@ -1285,5 +1296,17 @@ export function useAppShell() {
     settingsReady: preferences.settingsReady,
     updateInstalling,
     prepareUpdate,
+    recoveryRecords: recovery.records,
+    recoveryVisible: recovery.visible,
+    recoveryBusy: recovery.busy,
+    recoveryError: recovery.lastError,
+    recoveryDiff: recovery.diff,
+    openRecovery: () => recovery.open(),
+    closeRecovery: () => recovery.close(),
+    restoreRecovery: (record: Parameters<typeof recovery.restore>[0]) => recovery.restore(record),
+    discardRecovery: (record: Parameters<typeof recovery.discard>[0]) => recovery.discard(record),
+    restoreAllRecovery: () => recovery.restoreAll(),
+    showRecoveryDiff: (record: Parameters<typeof recovery.showDiff>[0]) => recovery.showDiff(record),
+    clearRecoveryDiff: () => recovery.clearDiff(),
   }
 }

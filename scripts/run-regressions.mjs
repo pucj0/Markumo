@@ -25,6 +25,7 @@ const SMOKE_TESTS = [
   'scripts/document-manager-regression.mjs',
   'scripts/file-save-regression.mjs',
   'scripts/conversion-regression.mjs',
+  'scripts/recovery-regression.mjs',
 ]
 
 // Full regression suite: all existing regression scripts
@@ -52,6 +53,7 @@ const FULL_REGRESSION_TESTS = [
   'scripts/native-drop-regression.mjs',
   'scripts/export-code-regression.mjs',
   'scripts/conversion-regression.mjs',
+  'scripts/recovery-regression.mjs',
   'scripts/media-regression.mjs',
   'scripts/windows-artifacts-regression.mjs',
   'scripts/release-regression.mjs'
