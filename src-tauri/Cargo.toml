@@ -5,6 +5,7 @@ description = "Lightweight text and Markdown editor"
 license = "AGPL-3.0-only"
 authors = ["Markumo Team"]
 edition = "2021"
+rust-version = "1.89"
 
 [lib]
 name = "markumo_lib"

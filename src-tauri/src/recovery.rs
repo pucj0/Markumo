@@ -142,7 +142,28 @@ impl RecoveryService {
         Ok(dir.clone())
     }
 
+    /// Stable sidecar locks serialize save/delete/prune/quarantine, including
+    /// separate services/processes using the same profile. Never remove this
+    /// file while the profile is live; the OS releases its lock on a crash.
+    fn transaction(&self) -> Result<fs::File, String> {
+        let path = self.directory()?.join(".recovery.lock");
+        if fs::symlink_metadata(&path).is_ok_and(|m| !m.is_file() || m.file_type().is_symlink()) {
+            return Err("恢复存储锁不是普通文件".into());
+        }
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|e| format!("打开恢复存储锁失败：{e}"))?;
+        restrict(&path, false);
+        lock.lock().map_err(|e| format!("锁定恢复存储失败：{e}"))?;
+        Ok(lock)
+    }
+
     pub fn list(&self) -> Result<RecoveryList, String> {
+        let _transaction = self.transaction()?;
         let dir = self.directory()?;
         let mut warnings = self.prune_files()?;
         let mut entries = Vec::new();
@@ -189,6 +210,7 @@ impl RecoveryService {
 
     pub fn read(&self, id: &str) -> Result<RecoveryRecord, String> {
         validate_id(id)?;
+        let _transaction = self.transaction()?;
         let path = self.directory()?.join(format!("{id}.json"));
         match read_record(&path, id, self.limits.records) {
             Ok(record) => Ok(record),
@@ -201,6 +223,8 @@ impl RecoveryService {
     }
 
     pub fn save(&self, input: RecoveryInput) -> Result<RecoverySaveResult, String> {
+        let _transaction = self.transaction()?;
+        let updating = input.id.is_some();
         let name = valid_name(&input.name)?;
         let path = input.path.as_deref().map(valid_path).transpose()?;
         let encoding = valid_encoding(&input.encoding)?;
@@ -253,18 +277,48 @@ impl RecoveryService {
         }
         let dir = self.directory()?;
         let target = dir.join(format!("{id}.json"));
-        atomic::write_checked(&target, &bytes, None).map_err(|e| e.message)?;
+        let expected = if updating {
+            let version = crate::files::disk_version(&target)
+                .map_err(|e| e.message)?
+                .ok_or("恢复快照已删除，不能用过期更新重新创建")?;
+            // Only a validated, unchanged snapshot may be replaced. A corrupt or
+            // raced target is preserved for inspection rather than overwritten.
+            read_record(&target, &id, self.limits.records).map_err(|e| match e {
+                LoadError::Io(reason) | LoadError::Corrupt(reason) => {
+                    format!("更新前验证恢复快照失败：{reason}")
+                }
+            })?;
+            if crate::files::disk_version(&target)
+                .map_err(|e| e.message)?
+                .as_ref()
+                != Some(&version)
+            {
+                return Err("更新前恢复快照版本发生变化，已保留磁盘内容".into());
+            }
+            Some(version)
+        } else {
+            None
+        };
+        // Reserve budget before the commit; never prune the snapshot being
+        // updated or turn a committed write into a reported prune failure.
+        let warnings = self.prune_for_save(Some((&target, bytes.len() as u64)))?;
+        #[cfg(test)]
+        before_snapshot_write(&target);
+        // Reuse the shared writer's pre-commit synchronization variant. It has
+        // the same conditional-create/replace guards, but cannot report a Unix
+        // directory-fsync error after replacing our last valid snapshot.
+        atomic::write_conversion_checked(&target, &bytes, expected.as_deref(), || Ok(()))
+            .map_err(|e| e.message)?;
         restrict(&target, false);
-        let warnings = self.prune_files()?;
-        let size = fs::metadata(&target).map_err(|e| e.to_string())?.len();
         Ok(RecoverySaveResult {
-            record: summary(&record, size),
+            record: summary(&record, bytes.len() as u64),
             warnings,
         })
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
         validate_id(id)?;
+        let _transaction = self.transaction()?;
         let path = self.directory()?.join(format!("{id}.json"));
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
@@ -276,6 +330,13 @@ impl RecoveryService {
     /// Enforce count/space limits from metadata only. Startup must not parse
     /// every body merely to decide which old snapshot to remove.
     fn prune_files(&self) -> Result<Vec<String>, String> {
+        self.prune_for_save(None)
+    }
+
+    fn prune_for_save(&self, incoming: Option<(&Path, u64)>) -> Result<Vec<String>, String> {
+        if incoming.is_some_and(|(_, size)| size > self.limits.total || self.limits.records == 0) {
+            return Err("恢复快照超过存储预算，最后一份有效快照未修改".into());
+        }
         let dir = self.directory()?;
         let mut entries = Vec::new();
         for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
@@ -284,6 +345,9 @@ impl RecoveryService {
                 continue;
             }
             let path = entry.path();
+            if incoming.is_some_and(|(target, _)| target == path) {
+                continue;
+            }
             let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
                 continue;
             };
@@ -301,9 +365,12 @@ impl RecoveryService {
             ));
         }
         entries.sort_by_key(|(_, _, _, modified)| *modified);
-        let mut total: u64 = entries.iter().map(|(_, _, size, _)| *size).sum();
+        let mut total: u64 = entries.iter().map(|(_, _, size, _)| *size).sum::<u64>()
+            + incoming.map_or(0, |(_, size)| size);
         let mut warnings = Vec::new();
-        while entries.len() > self.limits.records || total > self.limits.total {
+        while entries.len() + usize::from(incoming.is_some()) > self.limits.records
+            || total > self.limits.total
+        {
             let Some((id, path, size, _)) = entries.first().cloned() else {
                 break;
             };
@@ -574,6 +641,18 @@ fn restrict(path: &Path, directory: bool) {
 }
 
 #[cfg(test)]
+thread_local! {
+    static BEFORE_SNAPSHOT_WRITE: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> = std::cell::RefCell::new(None);
+}
+#[cfg(test)]
+fn before_snapshot_write(path: &Path) {
+    let hook = BEFORE_SNAPSHOT_WRITE.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook(path);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -600,6 +679,234 @@ mod tests {
             }],
             disk_version: None,
         }
+    }
+
+    #[test]
+    fn same_snapshot_updates_a_b_c_and_restarts_with_exact_c() {
+        let (dir, service) = service();
+        let saved = service.save(input("A")).unwrap();
+        let id = saved.record.id;
+        for text in ["B", "C 中文\r\nlast"] {
+            let mut update = input(text);
+            update.id = Some(id.clone());
+            service
+                .save(update)
+                .expect("existing snapshot must support conditional atomic update");
+            assert_eq!(service.read(&id).unwrap().text, text);
+        }
+        drop(service);
+        let mut restarted = RecoveryService::default();
+        restarted.configure(dir.path().join("recovery"));
+        let record = restarted.read(&id).unwrap();
+        assert_eq!(record.text, "C 中文\r\nlast");
+        assert_eq!(record.checksum, checksum(&record.text));
+        assert_eq!(restarted.list().unwrap().records.len(), 1);
+    }
+
+    #[test]
+    fn failed_second_write_preserves_exact_last_valid_snapshot() {
+        use crate::files::atomic::fault;
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                fault::clear();
+            }
+        }
+        for point in [
+            fault::TEMP_CREATE,
+            fault::TEMP_WRITE,
+            fault::TEMP_SYNC,
+            fault::REPLACE,
+        ] {
+            let (_dir, service) = service();
+            let id = service.save(input("last valid A")).unwrap().record.id;
+            let target = service.directory().unwrap().join(format!("{id}.json"));
+            let before = fs::read(&target).unwrap();
+            let mut update = input("new B must not be reported saved");
+            update.id = Some(id.clone());
+            fault::set(point);
+            let reset = Reset;
+            assert!(service.save(update).is_err());
+            drop(reset);
+            assert_eq!(
+                fs::read(target).unwrap(),
+                before,
+                "fault {point} changed last valid bytes"
+            );
+            assert_eq!(service.read(&id).unwrap().text, "last valid A");
+            let mut retry = input("successful retry C");
+            retry.id = Some(id.clone());
+            service.save(retry).unwrap();
+            assert_eq!(service.read(&id).unwrap().text, "successful retry C");
+        }
+    }
+
+    #[test]
+    fn version_change_between_validation_and_commit_preserves_competing_valid_record() {
+        let (_dir, service) = service();
+        let id = service.save(input("A")).unwrap().record.id;
+        let mut competing = service.read(&id).unwrap();
+        competing.text = "external valid B".into();
+        let competing = with_derived(&competing).unwrap();
+        let bytes = serde_json::to_vec(&competing).unwrap();
+        let injected = bytes.clone();
+        BEFORE_SNAPSHOT_WRITE.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |target| {
+                fs::write(target, &injected).unwrap()
+            }))
+        });
+        let mut update = input("stale C");
+        update.id = Some(id.clone());
+        assert!(service.save(update).is_err());
+        let target = service.directory().unwrap().join(format!("{id}.json"));
+        assert_eq!(fs::read(target).unwrap(), bytes);
+        assert_eq!(service.read(&id).unwrap().text, "external valid B");
+    }
+
+    #[test]
+    fn deleted_snapshot_cannot_be_resurrected_by_a_late_update() {
+        let (_dir, service) = service();
+        let id = service.save(input("A")).unwrap().record.id;
+        service.delete(&id).unwrap();
+        let mut update = input("late B");
+        update.id = Some(id.clone());
+        assert!(service.save(update).unwrap_err().contains("已删除"));
+        assert!(service.list().unwrap().records.is_empty());
+    }
+
+    #[test]
+    fn concurrent_services_serialize_updates_and_delete_never_resurrects() {
+        let (dir, service) = service();
+        let id = service.save(input("A")).unwrap().record.id;
+        let root = dir.path().join("recovery");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let guard = service.transaction().unwrap();
+        let threads: Vec<_> = (0..2)
+            .map(|i| {
+                let root = root.clone();
+                let id = id.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let mut service = RecoveryService::default();
+                    service.configure(root);
+                    barrier.wait();
+                    if i == 0 {
+                        let mut update = input("B");
+                        update.id = Some(id);
+                        let _ = service.save(update);
+                    } else {
+                        service.delete(&id).unwrap();
+                    }
+                })
+            })
+            .collect();
+        barrier.wait();
+        drop(guard);
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert!(service.list().unwrap().records.is_empty());
+    }
+
+    #[test]
+    fn concurrent_snapshot_updates_remain_valid_and_continue_after_restart() {
+        let (dir, service) = service();
+        let id = service.save(input("A")).unwrap().record.id;
+        let root = dir.path().join("recovery");
+        let threads: Vec<_> = (0..4)
+            .map(|index| {
+                let root = root.clone();
+                let id = id.clone();
+                std::thread::spawn(move || {
+                    let mut s = RecoveryService::default();
+                    s.configure(root);
+                    for sequence in 0..4 {
+                        let mut update = input(&format!("thread {index} sequence {sequence}"));
+                        update.id = Some(id.clone());
+                        s.save(update).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let record = service.read(&id).unwrap();
+        assert!(record.text.ends_with("sequence 3"));
+        assert_eq!(record.checksum, checksum(&record.text));
+        let mut restarted = RecoveryService::default();
+        restarted.configure(root);
+        let mut update = input("final C after restart");
+        update.id = Some(id.clone());
+        restarted.save(update).unwrap();
+        assert_eq!(restarted.read(&id).unwrap().text, "final C after restart");
+    }
+
+    #[test]
+    fn update_budget_failure_does_not_prune_its_own_last_valid_snapshot() {
+        let (_dir, mut service) = service();
+        let saved = service.save(input("A")).unwrap();
+        let id = saved.record.id;
+        service.limits = Limits {
+            records: 1,
+            total: saved.record.size_bytes + 16,
+        };
+        let mut update = input(&"B".repeat(1024));
+        update.id = Some(id.clone());
+        assert!(service.save(update).is_err());
+        assert_eq!(service.read(&id).unwrap().text, "A");
+        let mut update = input("C");
+        update.id = Some(id.clone());
+        service.save(update).unwrap();
+        assert_eq!(service.read(&id).unwrap().text, "C");
+    }
+
+    #[test]
+    fn external_reload_checkpoint_updates_exact_local_content_and_keeps_disk_conflict_guard() {
+        let (dir, recovery) = service();
+        let original = dir.path().join("original.md");
+        fs::write(&original, "original disk A").unwrap();
+        let mut files = crate::files::FileService::default();
+        files.set_owner("recovery-integration");
+        let opened = files.open_selected(original.clone(), None).unwrap();
+        let mut id = None;
+        for text in ["local A", "local B", "local C 中文\r\n"] {
+            let mut snapshot = input(text);
+            snapshot.id = id.clone();
+            snapshot.path = Some(original.to_string_lossy().into_owned());
+            snapshot.disk_version = Some(opened.metadata.version.clone());
+            id = Some(recovery.save(snapshot).unwrap().record.id);
+        }
+        let id = id.unwrap();
+        fs::write(&original, "new external disk B").unwrap();
+        let version = files.check_external(&opened.metadata.token).unwrap();
+        let loaded = files
+            .read_external(&opened.metadata.token, &version, "UTF-8")
+            .unwrap();
+        assert_eq!(loaded.text, "new external disk B");
+        // Reading the new disk body does not authorize a later save using the
+        // original editor baseline, even when a recovery checkpoint exists.
+        let error = files
+            .save(
+                &opened.metadata.token,
+                "local C 中文\r\n",
+                Some(&opened.metadata.version),
+                "UTF-8",
+                false,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "conflict");
+        assert_eq!(
+            fs::read_to_string(&original).unwrap(),
+            "new external disk B"
+        );
+        drop(recovery);
+        let mut restarted = RecoveryService::default();
+        restarted.configure(dir.path().join("recovery"));
+        let record = restarted.read(&id).unwrap();
+        assert_eq!(record.text, "local C 中文\r\n");
+        assert_eq!(record.checksum, checksum(&record.text));
+        assert_eq!(restarted.list().unwrap().records.len(), 1);
     }
 
     #[test]

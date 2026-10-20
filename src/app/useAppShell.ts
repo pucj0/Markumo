@@ -811,7 +811,7 @@ export function useAppShell() {
           pendingClose = pending
           return
         }
-        await recovery.discardAll()
+        await recovery.discardActive()
         startup.exit()
         await (await import('@tauri-apps/api/window')).getCurrentWindow().destroy()
       } catch {

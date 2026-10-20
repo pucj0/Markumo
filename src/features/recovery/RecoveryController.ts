@@ -34,11 +34,12 @@ export class RecoveryController {
   readonly busy = ref(false)
   readonly lastError = ref<string | null>(null)
   readonly diff = ref<RecoveryDiff | null>(null)
-  private readonly ids = new Map<string, string>()
+  private readonly activeIds = new Map<string, string>()
   private readonly generations = new Map<string, number>()
   private readonly pending = new Map<string, Pending>()
   private readonly failed = new Map<string, Text>()
   private readonly lastSaved = new Map<string, Text>()
+  private readonly savedSummaries = new Map<string, RecoverySummary>()
   private timer: ReturnType<typeof setTimeout> | undefined
   private flushing: Promise<void> = Promise.resolve()
   private unsubscribe: () => void
@@ -91,17 +92,12 @@ export class RecoveryController {
     }
     this.warnings.value = result.warnings
     if (result.warnings.length) this.notify(result.warnings.join('\n'))
-    // Associate unclaimed records with session-restored documents so closing or
-    // saving that document can clean the right snapshot.
-    for (const record of result.records) {
-      if (!record.path) continue
-      const doc = this.manager.openedDocuments.find(candidate => candidate.path && sameFilePath(candidate.path, record.path!))
-      if (doc && !this.ids.has(doc.id)) this.ids.set(doc.id, record.id)
-    }
+    // A path match is not consent to restore. Only this session's own writes
+    // and explicitly restored records may be cleaned after saving a document.
     this.records.value = result.records.filter(record => {
-      const owner = [...this.ids.entries()].find(([, id]) => id === record.id)?.[0]
+      const owner = [...this.activeIds.entries()].find(([, id]) => id === record.id)?.[0]
       const doc = owner ? this.manager.metadata(owner) : null
-      return !(doc?.dirty && owner)
+      return !(doc?.dirty && owner && !this.failed.has(owner))
     })
   }
 
@@ -133,14 +129,29 @@ export class RecoveryController {
    * The retained snapshot is deliberately detached from subsequent normal saves. */
   async checkpointBeforeReload(id: string): Promise<boolean> {
     const doc = this.manager.metadata(id), text = this.manager.getState(id)?.doc
+    if (!doc) return false
     if (!doc?.dirty) return true
     if (!this.started || this.disposed || !text || !this.eligible(doc) || this.manager.isComposing) return false
+    const generation = this.generation(id)
+    const token = doc.fileToken
+    const valid = () => !this.disposed && this.generation(id) === generation &&
+      this.manager.metadata(id)?.fileToken === token && this.manager.getState(id)?.doc === text && !this.manager.isComposing
     await this.flushing.catch(() => {})
+    if (!valid()) return false
     this.failed.delete(id)
+    // Require a new successful receipt. A previous write of the same immutable
+    // Text must not turn this attempt's I/O failure into permission to discard.
+    this.lastSaved.delete(id)
+    this.savedSummaries.delete(id)
     this.pending.set(id, { text, due: 0 })
     await this.flush()
-    if (this.lastSaved.get(id) !== text || this.manager.getState(id)?.doc !== text) return false
-    this.ids.delete(id); this.lastSaved.delete(id); this.pending.delete(id)
+    const snapshot = this.savedSummaries.get(id)
+    if (!valid() || this.lastSaved.get(id) !== text || !snapshot || this.activeIds.get(id) !== snapshot.id) return false
+    this.bumpGeneration(id)
+    this.activeIds.delete(id); this.lastSaved.delete(id); this.savedSummaries.delete(id); this.pending.delete(id)
+    // The checkpoint is now unclaimed and must remain reachable without a
+    // restart, even if a later read fails or the original file is saved again.
+    this.records.value = [snapshot, ...this.records.value.filter(record => record.id !== snapshot.id)]
     return true
   }
 
@@ -157,8 +168,9 @@ export class RecoveryController {
     this.pending.delete(documentId)
     this.failed.delete(documentId)
     this.lastSaved.delete(documentId)
-    const id = this.ids.get(documentId)
-    this.ids.delete(documentId)
+    this.savedSummaries.delete(documentId)
+    const id = this.activeIds.get(documentId)
+    this.activeIds.delete(documentId)
     if (id) await this.removeSnapshot(id)
   }
 
@@ -168,21 +180,30 @@ export class RecoveryController {
     this.pending.delete(documentId)
     this.failed.delete(documentId)
     this.lastSaved.delete(documentId)
-    const id = this.ids.get(documentId)
-    this.ids.delete(documentId)
+    this.savedSummaries.delete(documentId)
+    const id = this.activeIds.get(documentId)
+    this.activeIds.delete(documentId)
     if (id) await this.removeSnapshot(id)
   }
 
-  async discardAll() {
+  /** Window/workspace discard applies only to buffers owned by this session. */
+  async discardActive() {
     await this.flushing.catch(() => {})
+    for (const id of new Set([...this.pending.keys(), ...this.activeIds.keys()])) this.bumpGeneration(id)
     this.pending.clear()
     this.failed.clear()
     this.lastSaved.clear()
-    const ids = new Set(this.records.value.map(record => record.id))
-    for (const id of this.ids.values()) ids.add(id)
-    this.ids.clear()
+    this.savedSummaries.clear()
+    const ids = new Set(this.activeIds.values())
+    this.activeIds.clear()
     for (const id of ids) await this.removeSnapshot(id)
-    this.records.value = []
+    this.schedule()
+  }
+
+  /** Explicit global recovery discard; never used by an ordinary window close. */
+  async discardAll() {
+    await this.discardActive()
+    for (const record of [...this.records.value]) await this.removeSnapshot(record.id)
     this.visible.value = false
     this.diff.value = null
   }
@@ -191,7 +212,7 @@ export class RecoveryController {
     try {
       await this.gateway.remove(record.id)
       this.records.value = this.records.value.filter(item => item.id !== record.id)
-      for (const [documentId, id] of this.ids) if (id === record.id) this.ids.delete(documentId)
+      for (const [documentId, id] of this.activeIds) if (id === record.id) this.activeIds.delete(documentId)
       if (this.diff.value?.id === record.id) this.diff.value = null
     } catch (error) {
       this.lastError.value = `丢弃恢复快照失败：${String(error)}`
@@ -229,41 +250,37 @@ export class RecoveryController {
       this.notify(this.lastError.value)
       return false
     }
-    await this.flushing.catch(() => {})
+    // Acquire the UI operation lock before the first await, including retries.
     this.busy.value = true
     try {
+      await this.flushing.catch(() => {})
+      if (this.disposed) return false
+      const active = [...this.activeIds].find(([, id]) => id === record.id)?.[0]
+      if (active && this.manager.metadata(active)) {
+        // Retrying a failed refresh must never reapply an older body over edits.
+        return await this.persistRestored(active, record.id)
+      }
       const body = await this.gateway.read(record.id)
+      if (this.disposed || this.manager.isComposing || (this.files.saving?.size ?? 0) || this.files.workspaceBusy) throw Error('恢复期间文件操作状态已变化，请重试')
       let docId: string | null = null
       let opened: EditorDocument | undefined
       if (body.path && record.diskExists) {
-        // Acquire the current file capability/version first. This explicitly
-        // does not write anything; the recovery body is applied only afterwards.
         await this.files.recent(body.path, body.encoding as FileOpenEncoding)
         opened = this.manager.openedDocuments.find(doc => doc.path && sameFilePath(doc.path, body.path!))
       }
-      const reusable = opened && !opened.dirty && opened.kind !== 'javaClass' && opened.encoding !== 'Hex' && !isMedia(opened)
-      if (reusable && this.manager.restoreRecoveredText(opened!.id, body.text, (body.mode || undefined) as MarkdownMode | undefined)) {
-        docId = opened!.id
-      } else if (opened && opened.dirty) {
-        // Never overwrite edits made after startup with an older recovery body.
-        docId = this.createDraft(body)
-      } else {
-        docId = this.createDraft(body)
-      }
+      if (this.disposed || this.manager.isComposing || (this.files.saving?.size ?? 0) || this.files.workspaceBusy) throw Error('恢复期间文件操作状态已变化，请重试')
+      // A changed/unknown disk baseline is restored as a pathless draft. Loading
+      // the latest disk token must not authorize a later ordinary save of stale
+      // recovery text over somebody else's newer file.
+      const reusable = opened && !opened.dirty && !this.activeIds.has(opened.id) &&
+        body.diskVersion !== null && body.diskVersion === opened.lastDiskVersion &&
+        opened.kind !== 'javaClass' && opened.encoding !== 'Hex' && !isMedia(opened)
+      if (reusable && this.manager.restoreRecoveredText(opened!.id, body.text, (body.mode || undefined) as MarkdownMode | undefined)) docId = opened!.id
+      else docId = this.createDraft(body)
       if (!docId) throw Error('无法创建恢复文档')
       this.applyPlacements(docId, body.panes.length ? body.panes : [{ pane: 'main', mode: body.mode || undefined }])
-      if (this.manager.metadata(docId)) {
-        this.ids.set(docId, body.id)
-        const text = this.manager.getState(docId)?.doc
-        if (text) this.pending.set(docId, { text, due: Date.now() })
-        this.records.value = this.records.value.filter(item => item.id !== body.id)
-        this.visible.value = this.records.value.length > 0
-        this.diff.value = null
-        // Refresh the snapshot immediately with the same id. If this fails, the
-        // previous valid snapshot remains on disk and will be offered again.
-        await this.flush()
-      }
-      return true
+      this.activeIds.set(docId, body.id)
+      return await this.persistRestored(docId, body.id)
     } catch (error) {
       this.lastError.value = `恢复文档失败：${String(error)}`
       this.notify(this.lastError.value)
@@ -271,6 +288,26 @@ export class RecoveryController {
     } finally {
       this.busy.value = false
     }
+  }
+
+  private async persistRestored(documentId: string, recoveryId: string): Promise<boolean> {
+    const text = this.manager.getState(documentId)?.doc
+    if (!text || !this.manager.metadata(documentId)?.dirty || this.manager.isComposing) return false
+    this.failed.delete(documentId)
+    this.lastSaved.delete(documentId)
+    this.savedSummaries.delete(documentId)
+    this.pending.set(documentId, { text, due: 0 })
+    await this.flush()
+    // An existing old JSON is not evidence that this buffer was refreshed.
+    if (this.disposed || this.lastSaved.get(documentId) !== text || this.manager.getState(documentId)?.doc !== text) {
+      this.lastError.value = `恢复内容已打开，但快照更新未成功：${this.lastError.value || '编辑内容或输入状态在恢复期间发生变化'}。最后一次有效恢复稿仍保留。`
+      this.notify(this.lastError.value)
+      return false
+    }
+    this.records.value = this.records.value.filter(item => item.id !== recoveryId)
+    this.visible.value = this.records.value.length > 0
+    this.diff.value = null
+    return true
   }
 
   async restoreAll() {
@@ -288,6 +325,7 @@ export class RecoveryController {
     this.timer = undefined
     this.pending.clear()
     this.failed.clear()
+    this.savedSummaries.clear()
   }
 
   private eligible(doc: EditorDocument): boolean {
@@ -304,7 +342,7 @@ export class RecoveryController {
   }
 
   private flush(): Promise<void> {
-    this.flushing = this.flushing.then(() => this.performFlush())
+    this.flushing = this.flushing.catch(() => {}).then(() => this.performFlush())
     return this.flushing
   }
 
@@ -323,7 +361,7 @@ export class RecoveryController {
       if (!current) { this.pending.delete(documentId); continue }
       const panes = this.panesFor(documentId)
       const input: RecoverySaveInput = {
-        id: this.ids.get(documentId) || null,
+        id: this.activeIds.get(documentId) || null,
         name: doc.name,
         path: doc.path || null,
         text: item.text.toString(),
@@ -349,7 +387,8 @@ export class RecoveryController {
           if (!this.manager.metadata(documentId)?.dirty) await this.removeSnapshot(result.record.id)
           continue
         }
-        this.ids.set(documentId, result.record.id)
+        this.activeIds.set(documentId, result.record.id)
+        this.failed.delete(documentId)
         this.lastError.value = null
         if (result.warnings.length) this.notify(result.warnings.join('\n'))
         const latest = this.manager.getState(documentId)?.doc
@@ -357,12 +396,17 @@ export class RecoveryController {
           if (latest) this.pending.set(documentId, { text: latest, due: Date.now() + this.debounceMs })
         } else {
           this.lastSaved.set(documentId, item.text)
+          this.savedSummaries.set(documentId, result.record)
           this.pending.delete(documentId)
         }
       } catch (error) {
         if (generation !== this.generation(documentId)) continue
         this.failed.set(documentId, item.text)
-        this.pending.delete(documentId)
+        const latest = this.manager.getState(documentId)?.doc
+        // Failure of an older in-flight write must not drop edits queued while
+        // it was running. Only suppress retry of the exact failed Text.
+        if (latest && latest !== item.text) this.pending.set(documentId, { text: latest, due: Date.now() + this.debounceMs })
+        else this.pending.delete(documentId)
         this.lastError.value = `恢复快照未保存：${String(error)}`
         this.notify(this.lastError.value)
       }

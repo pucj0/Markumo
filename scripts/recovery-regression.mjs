@@ -48,6 +48,7 @@ try {
       async save(input) {
         this.calls.push({ ...input, panes: input.panes.map(pane => ({ ...pane })) })
         if (this.fail) throw Error('injected recovery write failure')
+        if (input.id && !this.records.has(input.id)) throw Error('snapshot deleted; stale update rejected')
         const id = input.id || random()
         const record = { ...input, id, schemaVersion: 1, updatedAt: Date.now(), charCount: input.text.length, checksum: 'test',
           diskVersion: input.diskVersion, diskSize: null, diskModifiedNs: null }
@@ -60,8 +61,11 @@ try {
     function fileGateway(options = {}) {
       return {
         release: async () => {},
-        saveTarget: async () => ({ token: 'tok-2', path: 'E:/fixture/save.txt', version: null }),
-        save: async (token, text, version, encoding, bom) => ({ ...fileMeta, token, text, version: 'v2' }),
+        saveTarget: async () => options.cancelTarget ? null : ({ token: 'tok-2', path: 'E:/fixture/save.txt', version: null }),
+        save: async (token, text, version, encoding, bom) => {
+          options.saved?.push({ token, text, version })
+          return { ...fileMeta, path: token === 'tok-2' ? 'E:/fixture/save.txt' : fileMeta.path, token, text, version: 'v2' }
+        },
         openRecent: async path => {
           if (options.missing) throw Error('injected missing file')
           return { ...fileMeta, path, text: options.diskText ?? 'disk text', version: options.version ?? 'v1' }
@@ -222,6 +226,120 @@ try {
       controller.dispose(); manager.dispose()
     }
 
+    // P0 ownership tests. This transport controls frontend timing/failures;
+    // actual conditional atomic replacement is tested in Rust and WebView2.
+    {
+      const check = (value, message) => { if (!value) throw Error(message) }
+      const { manager, transport, files, controller } = setup()
+      const seed = (id, text, path = fileMeta.path) => ({ schemaVersion: 1, id, name: 'note.txt', path, text,
+        encoding: 'UTF-8', bom: false, eol: 'LF', mode: null, panes: [{ pane: 'main', mode: null }],
+        updatedAt: Date.now(), charCount: text.length, checksum: 'test', diskVersion: 'v1', diskSize: 4, diskModifiedNs: null })
+      const a = '1'.repeat(32), sibling = '2'.repeat(32), other = '3'.repeat(32)
+      transport.records.set(a, seed(a, 'unclaimed A'))
+      transport.records.set(sibling, seed(sibling, 'same path sibling'))
+      transport.records.set(other, seed(other, 'other file', 'E:/fixture/other.txt'))
+      files.accept({ ...fileMeta, text: 'disk' })
+      const doc = manager.activeId
+      manager.splitPane('right', 'main', doc)
+      await controller.start()
+      controller.close() // The user chooses later.
+      manager.dispatch(doc, { changes: { from: 0, to: manager.getState(doc).doc.length, insert: 'saved B' } })
+      await controller.flushForClose()
+      check([...transport.records.values()].some(record => record.text === 'saved B' && record.id !== a && record.id !== sibling), 'ordinary editing must create its own snapshot')
+      check(await files.save(doc), 'original save must succeed')
+      await controller.open()
+      check(transport.records.get(a)?.text === 'unclaimed A', 'later + ordinary save deleted unclaimed A')
+      check(controller.records.value.length === 3 && transport.records.size === 3, 'same path/multi-pane ownership leaked')
+      await controller.discardActive() // Window discard must not mean discard all old recoveries.
+      check(transport.records.size === 3, 'window discard removed unclaimed records')
+      controller.dispose(); files.dispose(); manager.dispose()
+
+      // New controller and manager model restart; persistent store is retained.
+      const restarted = new f.DocumentManager([], async () => [])
+      const restartedFiles = new f.FileController(restarted, fileGateway(), () => {})
+      const c = new f.RecoveryController(restarted, restartedFiles, transport, () => {}, { debounceMs: 15 })
+      restartedFiles.setSavedHandler(id => c.onSaved(id))
+      await c.start()
+      check(c.records.value.some(record => record.id === a), 'unclaimed A lost after restart')
+      await c.discard(c.records.value.find(record => record.id === a))
+      check(!transport.records.has(a) && transport.records.size === 2, 'explicit discard must delete exactly A')
+
+      // Explicit claim of one same-path record must not claim its sibling.
+      check(await c.restore(c.records.value.find(record => record.id === sibling)), 'explicit restore failed')
+      const restored = restarted.activeId
+      restarted.splitPane('right', 'main', restored)
+      restarted.dispatch(restored, { changes: { from: 0, insert: 'continued ' } })
+      await c.flushForClose()
+      check(transport.records.get(sibling)?.text === 'continued same path sibling', 'restored edits did not update exact body under same ID')
+      check(await restartedFiles.save(restored), 'restored file save failed')
+      check(!transport.records.has(sibling) && transport.records.get(other)?.text === 'other file', 'successful save cleaned an unrelated snapshot')
+      c.dispose(); restartedFiles.dispose(); restarted.dispose()
+      out.unclaimedSafety = true
+    }
+    {
+      const check = (value, message) => { if (!value) throw Error(message) }
+      const fileOptions = { version: 'v2', diskText: 'external B', cancelTarget: true, saved: [] }
+      const { manager, transport, files, controller } = setup({ file: fileOptions })
+      const id = '4'.repeat(32)
+      transport.records.set(id, { schemaVersion: 1, id, name: 'note.txt', path: fileMeta.path, text: 'old recovery A',
+        encoding: 'UTF-8', bom: false, eol: 'LF', mode: null, panes: [], updatedAt: Date.now(), charCount: 14,
+        checksum: 'test', diskVersion: 'v1', diskSize: 4, diskModifiedNs: null })
+      await controller.start()
+      const summary = controller.records.value[0]
+      transport.fail = true
+      check(!(await controller.restore(summary)), 'failed snapshot refresh falsely reported restore success')
+      check(controller.lastError.value?.includes('快照更新未成功') && controller.lastError.value.includes('injected recovery write failure'), 'restore write failure not accurately surfaced')
+      check(transport.records.get(id)?.text === 'old recovery A', 'failed refresh corrupted last valid body')
+      const draft = manager.activeDocument
+      check(!draft.path && !draft.fileToken && draft.dirty, 'changed original must restore to pathless draft')
+      const original = manager.openedDocuments.find(doc => doc.path)
+      check(manager.getText(original.id) === 'external B' && !original.dirty, 'restore overwrote newer original')
+      manager.dispatch(draft.id, { changes: { from: 0, insert: 'newer ' } })
+      transport.fail = false
+      const count = manager.openedDocuments.length
+      check(await controller.restore(summary), 'retry did not persist recovered buffer')
+      check(manager.openedDocuments.length === count && transport.records.get(id)?.text === 'newer old recovery A', 'retry reapplied stale body or duplicated document')
+      check(transport.records.get(id)?.path === null, 'refreshed pathless recovery retained dangerous original association')
+      await controller.open()
+      check(controller.records.value.length === 0, 'successfully active snapshot still shown as unclaimed')
+      check(!(await files.save(draft.id)) && fileOptions.saved.length === 0 && transport.records.has(id), 'ordinary save must require a chosen target and retain recovery on cancellation')
+      fileOptions.cancelTarget = false
+      await files.save(draft.id) // Save As gateway chooses a different path.
+      check(fileOptions.saved.length === 1 && fileOptions.saved[0].token === 'tok-2', 'pathless draft bypassed Save As')
+      check(manager.getText(original.id) === 'external B' && !transport.records.has(id), 'Save As cleanup corrupted original or leaked recovery')
+      controller.dispose(); files.dispose(); manager.dispose()
+      out.restoreFailureAndExternalSafety = true
+    }
+
+    {
+      const { manager, transport, controller } = setup()
+      await controller.start()
+      const doc = manager.createUntitled('txt')
+      manager.dispatch(doc, { changes: { from: 0, insert: 'A' } })
+      await controller.flushForClose()
+      const id = transport.lastId
+      const save = transport.save.bind(transport)
+      let entered, release
+      const started = new Promise(resolve => { entered = resolve })
+      const gate = new Promise(resolve => { release = resolve })
+      let first = true
+      transport.save = async input => {
+        if (first) { first = false; entered(); await gate; throw Error('in-flight B failed') }
+        return save(input)
+      }
+      manager.dispatch(doc, { changes: { from: 0, to: 1, insert: 'B' } })
+      const flushing = controller.flushForClose()
+      await started
+      manager.dispatch(doc, { changes: { from: 0, to: 1, insert: 'C' } })
+      release()
+      await flushing
+      if (transport.records.get(id)?.text !== 'A') throw Error('failed B changed previous valid A')
+      await controller.flushForClose()
+      if (transport.records.get(id)?.text !== 'C' || transport.records.size !== 1) throw Error('failed in-flight B dropped newer queued C')
+      controller.dispose(); manager.dispose()
+      out.queuedEditAfterFailure = true
+    }
+
     // RecoveryDialog renders independently; close must not imply deletion.
     {
       const records = [{ id: 'd'.repeat(32), name: 'recover.md', path: 'E:/fixture/recover.md', updatedAt: Date.now(), charCount: 12,
@@ -257,6 +375,10 @@ try {
   assert(result.failure.error.includes('injected recovery write failure'))
   assert.equal(result.failure.visible, true)
   assert.deepEqual(result.dialog, { rendered: true, close: 1, disk: true })
+  assert.equal(result.unclaimedSafety, true)
+  assert.equal(result.restoreFailureAndExternalSafety, true)
+  assert.equal(result.queuedEditAfterFailure, true)
+  console.log('PASS later + original save + restart retain unclaimed drafts; exact-ID cleanup, restore failure/retry and changed-original Save As protection')
 
   const livePage = await browser.newPage()
   livePage.on('pageerror', error => errors.push(error.message))
@@ -279,7 +401,7 @@ try {
         return { record: { ...record, sizeBytes: record.text.length, diskExists: false, diskChanged: false }, warnings: [] }
       },
       async remove(id) { this.records.delete(id) } }
-    const controller = new window.RecoveryController(f.manager, { recent: async () => {} }, transport, () => {}, { debounceMs: 15 })
+    let controller = new window.RecoveryController(f.manager, { recent: async () => {} }, transport, () => {}, { debounceMs: 15 })
     await controller.start()
     f.caret('Paragraph target.')
     f.insert(' EDIT')
@@ -288,6 +410,12 @@ try {
     const edited = f.source()
     const summary = { id: record.id, name: record.name, path: record.path, updatedAt: record.updatedAt, charCount: record.charCount,
       sizeBytes: record.text.length, mode: record.mode, panes: record.panes, diskExists: false, diskChanged: false }
+    // Simulate a new recovery session. An already active snapshot is owned by
+    // its current document and must never be restored into a duplicate buffer.
+    controller.dispose()
+    f.manager.close(f.id, true)
+    controller = new window.RecoveryController(f.manager, { recent: async () => {} }, transport, () => {}, { debounceMs: 15 })
+    await controller.start()
     await controller.restore(summary)
     await sleep(50)
     const recovered = f.manager.openedDocuments.find(doc => doc.id.startsWith('recovered-'))
