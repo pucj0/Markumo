@@ -3,6 +3,7 @@ mod files;
 mod workspace;
 mod session;
 mod profile_migration;
+mod conversion;
 
 use std::{path::PathBuf, sync::{Arc, Mutex}};
 use tauri::{Emitter, Manager};
@@ -23,10 +24,12 @@ fn register_window(app:&tauri::AppHandle,label:&str,paths:Vec<PathBuf>)->Result<
     let state=app.state::<session::LaunchStore>();
     let mut registry=state.lock().map_err(|_|"启动状态不可用".to_string())?;
     if !registry.windows.contains_key(label) { registry.insert(label.into(),paths); }
+    app.state::<conversion::ConversionStore>().register(label);
     Ok(())
 }
 
 fn cleanup_window(app:&tauri::AppHandle,label:&str){
+    app.state::<conversion::ConversionStore>().close(label);
     if let Ok(mut registry)=app.state::<session::LaunchStore>().lock(){registry.remove(label);}
     app.state::<WorkspaceStore>().remove(label);
 }
@@ -124,6 +127,7 @@ pub fn run() {
         .manage(session::LaunchStore::default())
         .manage(session::SessionStore::default())
         .manage(commands::update::UpdateStore::default())
+        .manage(conversion::ConversionStore::default())
         .manage(search_manager)
         .setup(move |app| {
             let store = app.state::<FileStore>();
@@ -158,6 +162,7 @@ pub fn run() {
             }
             if let tauri::WindowEvent::Destroyed=event{
                 let app=window.app_handle();
+                app.state::<conversion::ConversionStore>().close(window.label());
                 if let Ok(mut update)=app.state::<commands::update::UpdateStore>().lock(){update.release(window.label());update.statuses.remove(window.label());}
                 app.state::<WorkspaceStore>().remove(window.label());
                 if let Ok(mut registry)=app.state::<session::LaunchStore>().lock(){registry.windows.remove(window.label());}
@@ -209,6 +214,8 @@ pub fn run() {
             commands::conversion::detect_pandoc,
             commands::conversion::export_save_dialog,
             commands::conversion::import_open_dialog,
+            commands::conversion::release_conversion_lease,
+            commands::conversion::read_conversion_html,
             commands::conversion::save_binary_file,
             commands::conversion::pandoc_export_docx,
             commands::conversion::pandoc_import_docx,

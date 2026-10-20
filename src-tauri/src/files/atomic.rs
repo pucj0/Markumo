@@ -4,13 +4,14 @@ use std::{fs, io::Write, path::Path};
 /// Deterministic fault injection for the save pipeline. These hooks are only
 /// compiled into unit tests; production builds contain no failure branches.
 #[cfg(test)]
-mod fault {
+pub(crate) mod fault {
     use std::cell::Cell;
     pub const TEMP_CREATE: u32 = 1 << 0;
     pub const TEMP_WRITE: u32 = 1 << 1;
     pub const TEMP_SYNC: u32 = 1 << 2;
     pub const REPLACE: u32 = 1 << 3;
     pub const RACE_TARGET: u32 = 1 << 4;
+    pub const RACE_EXISTING: u32 = 1 << 10;
     #[cfg(windows)]
     pub const BACKUP_CREATE: u32 = 1 << 5;
     #[cfg(windows)]
@@ -71,6 +72,23 @@ fn save_error(error: std::io::Error, action: &str) -> FileError {
 ///
 /// User documents go through [`write_checked_preserving_identity`] instead.
 pub fn write_checked(path: &Path, bytes: &[u8], expected: Option<&str>) -> Result<()> {
+    write_checked_inner(path, bytes, expected, false, || Ok(()))
+}
+
+/// Conversion results have no document identity to preserve. All fallible
+/// synchronization is performed before replacement: after a successful commit
+/// callers must retain the associated media, never treat it as a failed write.
+/// This guarantees atomic visibility, not directory-entry durability on power loss.
+pub(crate) fn write_conversion_checked(
+    path: &Path, bytes: &[u8], expected: Option<&str>, validate: impl Fn() -> Result<()>,
+) -> Result<()> {
+    write_checked_inner(path, bytes, expected, true, validate)
+}
+
+fn write_checked_inner(
+    path: &Path, bytes: &[u8], expected: Option<&str>, conversion: bool,
+    validate: impl Fn() -> Result<()>,
+) -> Result<()> {
     // Resolve the target once. Internal callers such as the recent-file store
     // hand us the configured path verbatim, which may contain a linked config
     // directory (a POSIX symlink or a Windows junction); comparing that spelling
@@ -128,6 +146,8 @@ pub fn write_checked(path: &Path, bytes: &[u8], expected: Option<&str>) -> Resul
     if super::checked_path(&path, true)? != path {
         return fail("scope", "保存目标父目录或链接已变化。");
     }
+    #[cfg(test)]
+    if fault::hit(fault::RACE_EXISTING) { fs::write(&path,b"external during staging").map_err(FileError::io)?; }
     if super::disk_version(&path)?.as_deref() != expected {
         return fail(
             "conflict",
@@ -155,11 +175,18 @@ pub fn write_checked(path: &Path, bytes: &[u8], expected: Option<&str>) -> Resul
             "替换保存目标失败",
         ));
     }
+    #[cfg(unix)]
+    if conversion {
+        fs::File::open(parent).and_then(|file| file.sync_all()).map_err(FileError::io)?;
+    }
+    validate()?;
     replace(&temp, &path, expected.is_some()).map_err(FileError::io)?;
     #[cfg(unix)]
-    fs::File::open(parent)
+    if !conversion { fs::File::open(parent)
         .and_then(|file| file.sync_all())
-        .map_err(FileError::io)?;
+        .map_err(FileError::io)?; }
+    #[cfg(not(unix))]
+    let _ = conversion;
     Ok(())
 }
 

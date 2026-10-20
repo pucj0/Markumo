@@ -1,7 +1,8 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import { createMarkdownResources } from '../../editor/markdown/images'
-import type { ExportFormat, ConversionSettings } from './contracts'
+import type { ExportFormat, ConversionSettings, ConversionSelection } from './contracts'
+import { releaseConversion } from './conversionLease'
 import { loadConversionSettings, saveLastExport, loadLastExport } from './conversionSettings'
 import { renderMarkdownForExport, extractDocumentTitle } from './ExportRenderer'
 import { buildCompleteHtml } from './ExportStyles'
@@ -41,32 +42,33 @@ export class ExportController {
     const ext = format === 'docx' ? 'docx' : format === 'pdf' ? 'pdf' : format === 'png' ? 'png' : 'html'
     const defaultFilename = `${rawName}.${ext}`
 
-    let targetPath: string | null = null
-
-    if (isTauri()) {
-      targetPath = await invoke<string | null>('export_save_dialog', {
-        defaultName: defaultFilename,
-        format: format === 'html-plain' ? 'html' : format,
-      })
-      if (!targetPath) {
-        // User cancelled dialog
-        return null
-      }
-    } else {
-      targetPath = defaultFilename
-    }
+    let target: ConversionSelection | null = null
 
     try {
+      if (isTauri()) {
+        target = await invoke<ConversionSelection | null>('export_save_dialog', {
+          defaultName: defaultFilename,
+          format: format === 'html-plain' ? 'html' : format,
+        })
+        if (!target) {
+          // User cancelled dialog
+          return null
+        }
+      } else {
+        target = { path: defaultFilename, token: '' }
+      }
+
+      const targetPath = target.path
       this.notify('正在准备导出…')
 
       if (format === 'html' || format === 'html-plain') {
-        await this.exportHtml(textSnapshot, docTitle, targetPath, format === 'html', settings)
+        await this.exportHtml(textSnapshot, docTitle, target, format === 'html', settings, doc.fileToken)
       } else if (format === 'pdf') {
-        await this.exportPdf(textSnapshot, docTitle, targetPath, settings)
+        await this.exportPdf(textSnapshot, docTitle, target, settings, doc.fileToken)
       } else if (format === 'docx') {
-        await this.exportDocx(textSnapshot, doc.path, targetPath)
+        await this.exportDocx(textSnapshot, doc.path, target, doc.fileToken)
       } else if (format === 'png') {
-        await this.exportPng(textSnapshot, targetPath, settings)
+        await this.exportPng(textSnapshot, target, settings, doc.fileToken)
       }
 
       saveLastExport({
@@ -83,6 +85,8 @@ export class ExportController {
       const msg = error instanceof Error ? error.message : String(error)
       this.notify(`导出失败：${msg}`)
       throw error
+    } finally {
+      await releaseConversion(target)
     }
   }
 
@@ -98,11 +102,12 @@ export class ExportController {
   private async exportHtml(
     markdown: string,
     title: string,
-    targetPath: string,
+    target: ConversionSelection,
     includeStyles: boolean,
-    settings: ConversionSettings
+    settings: ConversionSettings,
+    documentToken?: string
   ): Promise<void> {
-    const resources = createMarkdownResources(() => this.manager.activeDocument?.fileToken)
+    const resources = createMarkdownResources(() => documentToken)
     const appearance=exportAppearance(this.manager.getMarkdownTypography())
     const { bodyHtml } = await renderMarkdownForExport(markdown, resources, settings.embedImagesAsDataUri, includeStyles&&appearance.typography.codeLineNumbers)
     const fullHtml = buildCompleteHtml(title, bodyHtml, includeStyles,undefined,appearance)
@@ -110,21 +115,23 @@ export class ExportController {
     const bytes = new TextEncoder().encode(fullHtml)
     if (isTauri()) {
       await invoke('save_binary_file', {
-        path: targetPath,
+        token: target.token,
+        format: 'html',
         bytes: Array.from(bytes),
       })
     } else {
-      this.downloadBlob(new Blob([bytes], { type: 'text/html;charset=utf-8' }), targetPath)
+      this.downloadBlob(new Blob([bytes], { type: 'text/html;charset=utf-8' }), target.path)
     }
   }
 
   private async exportPdf(
     markdown: string,
     title: string,
-    targetPath: string,
-    settings: ConversionSettings
+    target: ConversionSelection,
+    settings: ConversionSettings,
+    documentToken?: string
   ): Promise<void> {
-    const resources = createMarkdownResources(() => this.manager.activeDocument?.fileToken)
+    const resources = createMarkdownResources(() => documentToken)
     const appearance=exportAppearance(this.manager.getMarkdownTypography())
     const { bodyHtml } = await renderMarkdownForExport(markdown, resources, true,appearance.typography.codeLineNumbers)
     const fullHtml = buildCompleteHtml(title, bodyHtml, true, settings.pdf,appearance)
@@ -132,7 +139,7 @@ export class ExportController {
     if (isTauri()) {
       await invoke('print_to_pdf', {
         htmlContent: fullHtml,
-        outputPdfPath: targetPath,
+        token: target.token,
         options: settings.pdf,
       })
     } else {
@@ -142,6 +149,8 @@ export class ExportController {
         win.document.write(fullHtml)
         win.document.close()
         setTimeout(() => win.print(), 500)
+      } else {
+        throw new Error('浏览器阻止了打印窗口，请允许弹出窗口后重试。')
       }
     }
   }
@@ -149,19 +158,21 @@ export class ExportController {
   private async exportDocx(
     markdown: string,
     docPath?: string,
-    targetPath?: string
+    target?: ConversionSelection,
+    documentToken?: string
   ): Promise<void> {
-    if (!targetPath) throw new Error('未指定导出路径')
+    if (!target) throw new Error('未指定导出路径')
     const resourceDir = docPath ? docPath.replace(/[/\\][^/\\]+$/, '') : undefined
-    await exportMarkdownToDocx(markdown, targetPath, resourceDir)
+    await exportMarkdownToDocx(markdown, target.path, resourceDir, target.token, documentToken)
   }
 
   private async exportPng(
     markdown: string,
-    targetPath: string,
-    settings: ConversionSettings
+    target: ConversionSelection,
+    settings: ConversionSettings,
+    documentToken?: string
   ): Promise<void> {
-    const resources = createMarkdownResources(() => this.manager.activeDocument?.fileToken)
+    const resources = createMarkdownResources(() => documentToken)
     const appearance=exportAppearance(this.manager.getMarkdownTypography())
     const { bodyHtml } = await renderMarkdownForExport(markdown, resources, true,appearance.typography.codeLineNumbers)
 
@@ -201,11 +212,12 @@ export class ExportController {
 
       if (isTauri()) {
         await invoke('save_binary_file', {
-          path: targetPath,
+          token: target.token,
+          format: 'png',
           bytes: Array.from(bytes),
         })
       } else {
-        this.downloadBlob(blob, targetPath)
+        this.downloadBlob(blob, target.path)
       }
     } finally {
       frame.remove()

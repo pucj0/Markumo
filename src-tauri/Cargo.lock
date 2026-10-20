@@ -1206,6 +1206,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1f9e3d69d39e4862ffed03ed071a76f9a13ba1d9109d355b0f0aa6b15e393c4"
 dependencies = [
  "futures-core",
+ "futures-sink",
 ]
 
 [[package]]
@@ -2233,9 +2234,12 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 name = "markumo"
 version = "1.0.4"
 dependencies = [
+ "base64 0.22.1",
  "encoding_rs",
+ "getrandom 0.4.3",
  "ignore",
  "regex",
+ "reqwest",
  "rustix",
  "serde",
  "serde_json",
@@ -2252,6 +2256,7 @@ dependencies = [
  "webview2-com",
  "windows-core",
  "windows-sys 0.61.2",
+ "zip",
 ]
 
 [[package]]
@@ -3141,6 +3146,7 @@ checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
  "base64 0.23.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "http",
@@ -5774,6 +5780,7 @@ checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
 dependencies = [
  "arbitrary",
  "crc32fast",
+ "flate2",
  "indexmap 2.14.2",
  "memchr",
 ]

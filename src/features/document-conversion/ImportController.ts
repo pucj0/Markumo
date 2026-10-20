@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
-import type { ImportFormat } from './contracts'
+import type { ImportFormat, ConversionSelection } from './contracts'
+import { releaseConversion } from './conversionLease'
 import { importHtmlToMarkdown } from './HtmlImporter'
 import { getPandocStatus, importDocxToMarkdown } from './PandocBridge'
 
@@ -20,42 +21,23 @@ export class ImportController {
   }
 
   private async importHtml(): Promise<string | null> {
-    let sourcePath: string | null = null
-
-    if (isTauri()) {
-      sourcePath = await invoke<string | null>('import_open_dialog', { format: 'html' })
-      if (!sourcePath) return null
-    }
+    let source: ConversionSelection | null = null
 
     try {
       this.notify('正在读取并转换 HTML…')
 
       let htmlContent = ''
-      if (isTauri() && sourcePath) {
-        // Read file content using backend
-        htmlContent = await invoke<string>('reopen_file', { token: null, encoding: 'UTF-8' })
-          .catch(async () => {
-            // Read via fetch or standard fs
-            const resp = await fetch(`asset://localhost/${encodeURIComponent(sourcePath!)}`)
-            return resp.text()
-          })
-          .catch(() => '')
-
-        // If backend open batch is preferred:
-        const fileBatch = await invoke<{ files: { path: string; text: string; name: string }[] }>('open_dialog', { encoding: 'UTF-8' })
-          .catch(() => null)
-        if (fileBatch?.files?.[0]) {
-          htmlContent = fileBatch.files[0].text
-        }
-      }
-
-      if (!htmlContent) {
-        // In browser fallback or if direct file open, open file input
+      if (isTauri()) {
+        source = await invoke<ConversionSelection | null>('import_open_dialog', { format: 'html' })
+        if (!source) return null
+        htmlContent = await invoke<string>('read_conversion_html', { token: source.token })
+      } else {
         const input = document.createElement('input')
         input.type = 'file'
         input.accept = '.html,.htm'
         const picked = await new Promise<File | null>(resolve => {
           input.onchange = () => resolve(input.files?.[0] || null)
+          input.oncancel = () => resolve(null)
           input.click()
         })
         if (!picked) return null
@@ -79,6 +61,8 @@ export class ImportController {
       const msg = error instanceof Error ? error.message : String(error)
       this.notify(`导入 HTML 失败：${msg}`)
       throw error
+    } finally {
+      await releaseConversion(source)
     }
   }
 
@@ -94,26 +78,22 @@ export class ImportController {
       return null
     }
 
-    // 1. Pick source docx
-    const docxPath = await invoke<string | null>('import_open_dialog', { format: 'docx' })
-    if (!docxPath) return null
-
-    // 2. Pick target md path
-    const defaultMdName = docxPath.replace(/\.docx$/i, '.md').split(/[/\\]/).pop() || 'Imported.md'
-    const targetMdPath = await invoke<string | null>('export_save_dialog', {
-      defaultName: defaultMdName,
-      format: 'markdown',
-    })
-    if (!targetMdPath) return null
-
-    // 3. Target media directory
-    const baseDir = targetMdPath.replace(/[/\\][^/\\]+$/, '')
-    const baseName = targetMdPath.split(/[/\\]/).pop()?.replace(/\.md$/i, '') || 'assets'
-    const mediaDir = `${baseDir}/${baseName}.assets`
-
+    let source: ConversionSelection | null = null
+    let target: ConversionSelection | null = null
     try {
+      source = await invoke<ConversionSelection | null>('import_open_dialog', { format: 'docx' })
+      if (!source) return null
+
+      // 2. Pick target md path
+      const defaultMdName = source.path.replace(/\.docx$/i, '.md').split(/[/\\]/).pop() || 'Imported.md'
+      target = await invoke<ConversionSelection | null>('export_save_dialog', {
+        defaultName: defaultMdName,
+        format: 'markdown',
+      })
+      if (!target) return null
+
       this.notify('正在使用 Pandoc 转换 Word 文档…')
-      const markdown = await importDocxToMarkdown(docxPath, targetMdPath, mediaDir)
+      const markdown = await importDocxToMarkdown(source, target)
 
       // Create new document or open file in DocumentManager
       const docId = this.manager.createUntitled('md')
@@ -124,13 +104,16 @@ export class ImportController {
         this.manager.select(docId)
       }
 
-      const targetFileName = targetMdPath.split(/[/\\]/).pop()
+      const targetFileName = target.path.split(/[/\\]/).pop()
       this.notify(`已成功将 Word 文档导入为 ${targetFileName}`)
-      return targetMdPath
+      return target.path
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       this.notify(`导入 Word 失败：${msg}`)
       throw error
+    } finally {
+      await releaseConversion(source)
+      await releaseConversion(target)
     }
   }
 }

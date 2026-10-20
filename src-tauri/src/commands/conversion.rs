@@ -1,24 +1,14 @@
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-    sync::mpsc,
-    time::Duration,
+use crate::conversion::{
+    self, BinaryBytes, ConversionStore, InputText, NativeRunner, Purpose, Selection,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, WebviewWindow, WebviewWindowBuilder, WebviewUrl};
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+    time::{Duration, Instant},
+};
+use tauri::{AppHandle, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
-
-// Settings probes and document conversions run in the background. Capturing
-// stdout alone does not prevent Windows from creating a console window.
-fn pandoc_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
-    let mut command = Command::new(program);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    command
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PandocStatus {
@@ -26,101 +16,96 @@ pub struct PandocStatus {
     pub version: Option<String>,
     pub path: Option<String>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PdfPrintOptions {
-    pub paper_size: Option<String>,     // "A4" | "Letter"
-    pub orientation: Option<String>,    // "portrait" | "landscape"
-    pub margins: Option<String>,        // "default" | "compact" | "loose"
+    pub paper_size: Option<String>,
+    pub orientation: Option<String>,
+    pub margins: Option<String>,
     pub print_background: Option<bool>,
 }
 
-/// Discovers Pandoc executable from PATH or standard Windows install locations.
-pub fn find_pandoc_path() -> Option<PathBuf> {
-    // 1. Check if 'pandoc' is in PATH
-    if let Ok(output) = pandoc_command("pandoc").arg("--version").output() {
-        if output.status.success() {
-            return Some(PathBuf::from("pandoc"));
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // 2. Check standard Windows installation paths
-        let candidates = [
-            std::env::var("ProgramFiles").map(|p| PathBuf::from(p).join("Pandoc").join("pandoc.exe")),
-            std::env::var("ProgramFiles(x86)").map(|p| PathBuf::from(p).join("Pandoc").join("pandoc.exe")),
-            std::env::var("LOCALAPPDATA").map(|p| PathBuf::from(p).join("Pandoc").join("pandoc.exe")),
-            std::env::var("APPDATA").map(|p| PathBuf::from(p).join("Pandoc").join("pandoc.exe")),
-        ];
-
-        for candidate in candidates.into_iter().flatten() {
-            if candidate.exists() {
-                if let Ok(output) = pandoc_command(&candidate).arg("--version").output() {
-                    if output.status.success() {
-                        return Some(candidate);
-                    }
+fn pandoc_version(program: &Path) -> Option<String> {
+    use std::io::Read;
+    let output = tempfile::NamedTempFile::new().ok()?;
+    let mut child = conversion::pandoc_command(program)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .stdout(output.reopen().ok()?)
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
                 }
+                let mut text = String::new();
+                output
+                    .reopen()
+                    .ok()?
+                    .take(4096)
+                    .read_to_string(&mut text)
+                    .ok()?;
+                return text
+                    .lines()
+                    .next()?
+                    .split_whitespace()
+                    .nth(1)
+                    .map(str::to_owned);
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
             }
         }
     }
-
-    None
 }
-
+pub fn find_pandoc_path() -> Option<PathBuf> {
+    let mut candidates = vec![PathBuf::from("pandoc")];
+    #[cfg(windows)]
+    for key in [
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "LOCALAPPDATA",
+        "APPDATA",
+    ] {
+        if let Ok(path) = std::env::var(key) {
+            candidates.push(PathBuf::from(path).join("Pandoc/pandoc.exe"));
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = &mut candidates;
+    candidates.into_iter().find(|p| pandoc_version(p).is_some())
+}
 #[tauri::command]
 pub async fn detect_pandoc() -> Result<PandocStatus, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let exe = match find_pandoc_path() {
-            Some(p) => p,
-            None => {
-                return Ok(PandocStatus {
-                    available: false,
-                    version: None,
-                    path: None,
-                });
-            }
-        };
-
-        let output = pandoc_command(&exe)
-            .arg("--version")
-            .output()
-            .map_err(|e| format!("执行 Pandoc 失败: {e}"))?;
-
-        if !output.status.success() {
-            return Ok(PandocStatus {
-                available: false,
-                version: None,
-                path: None,
-            });
+        let path = find_pandoc_path();
+        PandocStatus {
+            available: path.is_some(),
+            version: path.as_deref().and_then(pandoc_version),
+            path: path.map(|p| p.to_string_lossy().into_owned()),
         }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // First line is like "pandoc 3.8.3" or "pandoc.exe 3.8.3"
-        let first_line = stdout.lines().next().unwrap_or("").trim();
-        let version = first_line
-            .split_whitespace()
-            .nth(1)
-            .unwrap_or(first_line)
-            .to_string();
-
-        Ok(PandocStatus {
-            available: true,
-            version: Some(version),
-            path: Some(exe.to_string_lossy().to_string()),
-        })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn export_save_dialog(
     app: AppHandle,
     window: WebviewWindow,
+    store: State<'_, ConversionStore>,
     default_name: String,
     format: String,
-) -> Result<Option<String>, String> {
+) -> Result<Option<Selection>, String> {
+    let purpose = Purpose::write(&format)?;
+    let permit = store.dialog(window.label())?;
+    let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut dialog = app
             .dialog()
@@ -128,281 +113,399 @@ pub async fn export_save_dialog(
             .set_parent(&window)
             .set_file_name(default_name)
             .set_title("导出文档");
-
-        match format.to_ascii_lowercase().as_str() {
-            "pdf" => {
-                dialog = dialog.add_filter("PDF 文档 (*.pdf)", &["pdf"]);
-            }
-            "html" => {
-                dialog = dialog.add_filter("HTML 网页 (*.html; *.htm)", &["html", "htm"]);
-            }
-            "docx" => {
-                dialog = dialog.add_filter("Word 文档 (*.docx)", &["docx"]);
-            }
-            "png" => {
-                dialog = dialog.add_filter("PNG 图像 (*.png)", &["png"]);
-            }
-            _ => {
-                dialog = dialog.add_filter("所有文件 (*.*)", &["*"]);
-            }
-        }
-
-        let selected = dialog.blocking_save_file();
-        Ok(selected.and_then(|file_path| file_path.into_path().ok().map(|p| p.to_string_lossy().to_string())))
+        dialog = match purpose {
+            Purpose::Pdf => dialog.add_filter("PDF 文档 (*.pdf)", &["pdf"]),
+            Purpose::Html => dialog.add_filter("HTML 网页 (*.html; *.htm)", &["html", "htm"]),
+            Purpose::Docx => dialog.add_filter("Word 文档 (*.docx)", &["docx"]),
+            Purpose::Png => dialog.add_filter("PNG 图像 (*.png)", &["png"]),
+            Purpose::Markdown => dialog.add_filter("所有文件 (*.*)", &["*"]),
+            _ => return Err("不支持的导出操作".into()),
+        };
+        let path = dialog
+            .blocking_save_file()
+            .map(|p| p.into_path().map_err(|e| e.to_string()))
+            .transpose()?;
+        store.selected(&permit, path, purpose)
     })
     .await
     .map_err(|e| e.to_string())?
 }
-
 #[tauri::command]
 pub async fn import_open_dialog(
     app: AppHandle,
     window: WebviewWindow,
+    store: State<'_, ConversionStore>,
     format: String,
-) -> Result<Option<String>, String> {
+) -> Result<Option<Selection>, String> {
+    let purpose = Purpose::read(&format)?;
+    let permit = store.dialog(window.label())?;
+    let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut dialog = app
+        let dialog = app
             .dialog()
             .file()
             .set_parent(&window)
             .set_title("导入文档");
-
-        match format.to_ascii_lowercase().as_str() {
-            "html" => {
-                dialog = dialog.add_filter("HTML 网页 (*.html; *.htm)", &["html", "htm"]);
-            }
-            "docx" => {
-                dialog = dialog.add_filter("Word 文档 (*.docx)", &["docx"]);
-            }
-            _ => {
-                dialog = dialog.add_filter("支持的文档 (*.html; *.htm; *.docx)", &["html", "htm", "docx"]);
-            }
-        }
-
-        let selected = dialog.blocking_pick_file();
-        Ok(selected.and_then(|file_path| file_path.into_path().ok().map(|p| p.to_string_lossy().to_string())))
+        let dialog = if purpose == Purpose::ReadHtml {
+            dialog.add_filter("HTML 网页 (*.html; *.htm)", &["html", "htm"])
+        } else {
+            dialog.add_filter("Word 文档 (*.docx)", &["docx"])
+        };
+        let path = dialog
+            .blocking_pick_file()
+            .map(|p| p.into_path().map_err(|e| e.to_string()))
+            .transpose()?;
+        store.selected(&permit, path, purpose)
     })
     .await
     .map_err(|e| e.to_string())?
 }
-
 #[tauri::command]
-pub async fn save_binary_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let target = PathBuf::from(&path);
-        let parent = target.parent().ok_or_else(|| "无效的目标路径".to_string())?;
-        if !parent.exists() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
-        }
-
-        // Write to temporary file first for atomic replacement
-        let temp_path = parent.join(format!(
-            ".markumo-export-{}.tmp",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-
-        std::fs::write(&temp_path, &bytes).map_err(|e| format!("写入临时文件失败: {e}"))?;
-
-        if let Err(e) = std::fs::rename(&temp_path, &target) {
-            // Fallback for Windows cross-volume or existing target
-            let _ = std::fs::copy(&temp_path, &target);
-            let _ = std::fs::remove_file(&temp_path);
-            if !target.exists() {
-                return Err(format!("保存文件失败: {e}"));
-            }
-        }
-
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn release_conversion_lease(
+    window: WebviewWindow,
+    store: State<'_, ConversionStore>,
+    token: String,
+) {
+    store.release(window.label(), &token);
 }
-
+#[tauri::command]
+pub async fn save_binary_file(
+    window: WebviewWindow,
+    store: State<'_, ConversionStore>,
+    token: String,
+    format: String,
+    bytes: BinaryBytes,
+) -> Result<(), String> {
+    let purpose = Purpose::write(&format)?;
+    if !matches!(purpose, Purpose::Html | Purpose::Png) {
+        return Err("此命令只接受 HTML/PNG 授权".into());
+    }
+    let op = store.begin(window.label(), &[(&token, purpose)])?;
+    tauri::async_runtime::spawn_blocking(move || conversion::save_binary(&op, &bytes.0))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn read_conversion_html(
+    window: WebviewWindow,
+    store: State<'_, ConversionStore>,
+    token: String,
+) -> Result<String, String> {
+    let op = store.begin(window.label(), &[(&token, Purpose::ReadHtml)])?;
+    tauri::async_runtime::spawn_blocking(move || conversion::read_html(&op))
+        .await
+        .map_err(|e| e.to_string())?
+}
 #[tauri::command]
 pub async fn pandoc_export_docx(
-    markdown_content: String,
-    output_docx_path: String,
-    resource_dir: Option<String>,
+    window: WebviewWindow,
+    store: State<'_, ConversionStore>,
+    files: State<'_, crate::commands::files::FileStore>,
+    workspace: State<'_, crate::commands::workspace::WorkspaceStore>,
+    token: String,
+    markdown_content: InputText,
+    document_token: Option<String>,
 ) -> Result<(), String> {
+    let op = store.begin(window.label(), &[(&token, Purpose::Docx)])?;
+    let owner = window.label().to_owned();
+    let files = files.inner().clone();
+    let workspace = workspace.for_window(&owner)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let pandoc_exe = find_pandoc_path().ok_or_else(|| "未检测到可用的 Pandoc，请先安装 Pandoc。".to_string())?;
-
-        let temp_dir = tempfile::tempdir().map_err(|e| format!("创建临时工作目录失败: {e}"))?;
-        let temp_md = temp_dir.path().join("input.md");
-        std::fs::write(&temp_md, &markdown_content).map_err(|e| format!("写入 Markdown 临时文件失败: {e}"))?;
-
-        let mut cmd = pandoc_command(&pandoc_exe);
-        cmd.arg("-f").arg("gfm")
-            .arg("-t").arg("docx")
-            .arg("--standalone")
-            .arg("-o").arg(&output_docx_path)
-            .arg(&temp_md);
-
-        if let Some(ref res_dir) = resource_dir {
-            cmd.arg("--resource-path").arg(res_dir);
-        }
-
-        let output = cmd.output().map_err(|e| format!("调用 Pandoc 导出 Word 失败: {e}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Pandoc 导出失败: {stderr}"));
-        }
-
-        if !Path::new(&output_docx_path).exists() {
-            return Err("Pandoc 未生成预期的 Word 文件。".to_string());
-        }
-
-        Ok(())
+        let exe = find_pandoc_path().ok_or("未检测到可用的 Pandoc，请先安装 Pandoc。")?;
+        conversion::export_docx(&op, &markdown_content.0, &exe, &NativeRunner, |relative| {
+            op.check()?;
+            let token = document_token
+                .as_deref()
+                .ok_or("本地 Word 图片需要已授权的 Markdown 文档，请先保存文档。")?;
+            let roots = workspace.lock().map_err(|e| e.to_string())?.roots();
+            let mut files = files.lock().map_err(|e| e.to_string())?;
+            files.set_owner(&owner);
+            files
+                .markdown_image(token, relative, &roots)
+                .map_err(|e| e.to_string())
+        })
     })
     .await
     .map_err(|e| e.to_string())?
 }
-
 #[tauri::command]
 pub async fn pandoc_import_docx(
-    input_docx_path: String,
-    target_md_path: String,
-    media_dir: String,
+    window: WebviewWindow,
+    store: State<'_, ConversionStore>,
+    source_token: String,
+    target_token: String,
 ) -> Result<String, String> {
+    let op = store.begin(
+        window.label(),
+        &[
+            (&source_token, Purpose::ReadDocx),
+            (&target_token, Purpose::Markdown),
+        ],
+    )?;
     tauri::async_runtime::spawn_blocking(move || {
-        let pandoc_exe = find_pandoc_path().ok_or_else(|| "未检测到可用的 Pandoc，请先安装 Pandoc。".to_string())?;
-        let input_path = PathBuf::from(&input_docx_path);
-        if !input_path.exists() {
-            return Err("指定的 Word 文档不存在。".to_string());
-        }
-
-        let mut cmd = pandoc_command(&pandoc_exe);
-        cmd.arg("-f").arg("docx")
-            .arg("-t").arg("gfm")
-            .arg("--wrap=none")
-            .arg("--extract-media").arg(&media_dir)
-            .arg("-o").arg(&target_md_path)
-            .arg(&input_docx_path);
-
-        let output = cmd.output().map_err(|e| format!("调用 Pandoc 导入 Word 失败: {e}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Pandoc 导入失败: {stderr}"));
-        }
-
-        let md_content = std::fs::read_to_string(&target_md_path)
-            .map_err(|e| format!("读取导入的 Markdown 结果失败: {e}"))?;
-
-        Ok(md_content)
+        let exe = find_pandoc_path().ok_or("未检测到可用的 Pandoc，请先安装 Pandoc。")?;
+        conversion::import_docx(&op, &exe, &NativeRunner)
     })
     .await
     .map_err(|e| e.to_string())?
 }
-
-#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn print_to_pdf(
     app: AppHandle,
-    html_content: String,
-    output_pdf_path: String,
-    _options: Option<PdfPrintOptions>,
+    window: WebviewWindow,
+    store: State<'_, ConversionStore>,
+    token: String,
+    html_content: InputText,
+    options: Option<PdfPrintOptions>,
 ) -> Result<(), String> {
-    use webview2_com::Microsoft::Web::WebView2::Win32::*;
-    use webview2_com::PrintToPdfCompletedHandler;
+    let op = store.begin(window.label(), &[(&token, Purpose::Pdf)])?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = options;
+        conversion::export_pdf(&op, |output| render_pdf(&app, &op, &html_content.0, output))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[cfg(not(windows))]
+fn render_pdf(
+    _app: &AppHandle,
+    _op: &conversion::Operation,
+    _html: &str,
+    _output: &Path,
+) -> Result<(), String> {
+    Err("当前平台暂未实现原生 PDF 导出能力。".into())
+}
+#[cfg(windows)]
+struct PdfWorkspace(Option<tempfile::TempDir>);
+#[cfg(windows)]
+impl PdfWorkspace {
+    fn new() -> Result<Self, String> {
+        tempfile::Builder::new()
+            .prefix("markumo-pdf-")
+            .tempdir()
+            .map(|dir| Self(Some(dir)))
+            .map_err(|e| e.to_string())
+    }
+    fn path(&self) -> &Path {
+        self.0.as_ref().unwrap().path()
+    }
+}
+#[cfg(windows)]
+impl Drop for PdfWorkspace {
+    fn drop(&mut self) {
+        let Some(directory) = self.0.take() else {
+            return;
+        };
+        let path = directory.path().to_path_buf();
+        if directory.close().is_err() {
+            // WebView2 releases its isolated profile asynchronously after
+            // destruction. Retry only this native-owned random directory.
+            std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    match std::fs::remove_dir_all(&path) {
+                        Ok(()) => break,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                        Err(_) if Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(100))
+                        }
+                        Err(e) => {
+                            eprintln!("临时打印数据清理失败，请删除 {}: {e}", path.display());
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+    }
+}
+#[cfg(windows)]
+fn render_pdf(
+    app: &AppHandle,
+    op: &conversion::Operation,
+    html: &str,
+    output: &Path,
+) -> Result<(), String> {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    };
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    use webview2_com::{Microsoft::Web::WebView2::Win32::*, PrintToPdfCompletedHandler};
     use windows_core::Interface;
-
-    // 1. Write HTML to temporary file
-    let temp_dir = tempfile::tempdir().map_err(|e| format!("创建临时打印目录失败: {e}"))?;
-    let temp_html = temp_dir.path().join("print.html");
-    std::fs::write(&temp_html, &html_content).map_err(|e| format!("写入临时打印文档失败: {e}"))?;
-
-    let file_url = format!("file:///{}", temp_html.to_string_lossy().replace('\\', "/"));
-    let window_label = format!("pdf-print-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
-
-    // 2. Build offscreen WebviewWindow
+    let work = Arc::new(PdfWorkspace::new()?);
+    let input = work.path().join("print.html");
+    std::fs::write(&input, conversion::print_html(html)?).map_err(|e| e.to_string())?;
+    let url = url::Url::from_file_path(&input).map_err(|_| "打印文件 URL 无效")?;
+    let allowed = url.clone();
     let window = WebviewWindowBuilder::new(
-        &app,
-        &window_label,
-        WebviewUrl::External(url::Url::parse(&file_url).map_err(|e| e.to_string())?),
+        app,
+        format!("pdf-print-{}", conversion::random_id()?),
+        WebviewUrl::External(url),
     )
+    .on_navigation(move |url| url == &allowed)
+    .data_directory(work.path().join("webview-profile"))
     .visible(false)
     .decorations(false)
     .title("Markumo PDF Export")
     .build()
     .map_err(|e| format!("创建打印容器失败: {e}"))?;
-
-    // 3. Wait for WebView navigation and print to PDF via WebView2
-    let (tx, rx) = mpsc::channel();
-    let tx_clone = tx.clone();
-    let output_pdf = output_pdf_path.clone();
-
-    // Give time for resources/fonts to settle, then invoke PrintToPdf
-    std::thread::spawn(move || {
-        // Wait 1.2s for math/fonts/images to layout in the hidden webview
-        std::thread::sleep(Duration::from_millis(1200));
-
-        let print_res = window.with_webview(move |wv| {
-            let controller = wv.controller();
-            let core = match unsafe { controller.CoreWebView2() } {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = tx_clone.send(Err(format!("获取 CoreWebView2 失败: {e}")));
-                    return;
-                }
-            };
-            let core7: ICoreWebView2_7 = match core.cast() {
-                Ok(c7) => c7,
-                Err(e) => {
-                    let _ = tx_clone.send(Err(format!("CoreWebView2_7 不可用 (需要 WebView2 运行时更新): {e}")));
-                    return;
-                }
-            };
-
-            let wide_path: Vec<u16> = output_pdf.encode_utf16().chain(std::iter::once(0)).collect();
-            let pcwstr = windows_core::PCWSTR::from_raw(wide_path.as_ptr());
-
-            let tx_done = tx_clone.clone();
-            let handler = PrintToPdfCompletedHandler::create(Box::new(move |error_code, is_successful| {
-                if is_successful {
-                    let _ = tx_done.send(Ok(()));
-                } else {
-                    let _ = tx_done.send(Err(format!("WebView2 导出 PDF 失败，错误码: {:?}", error_code)));
-                }
-                Ok(())
-            }));
-
-            let print_call = unsafe {
-                core7.PrintToPdf(pcwstr, None, Some(&handler))
-            };
-
-            if let Err(e) = print_call {
-                let _ = tx_clone.send(Err(format!("调用 PrintToPdf 失败: {e}")));
-            }
-        });
-
-        if let Err(e) = print_res {
-            let _ = tx.send(Err(format!("with_webview 执行失败: {e}")));
+    let alive = Arc::new(AtomicBool::new(true));
+    let close_window = window.clone();
+    let close_alive = alive.clone();
+    let _cleanup = conversion::Cleanup::new(move || {
+        close_alive.store(false, Ordering::Release);
+        if let Err(e) = close_window.destroy() {
+            eprintln!("销毁 PDF 打印窗口失败: {e}");
         }
     });
-
-    let result = rx.recv_timeout(Duration::from_secs(30))
-        .map_err(|_| "导出 PDF 超时 (30秒)。".to_string())?;
-
-    // Destroy the hidden print window
-    if let Some(w) = app.get_webview_window(&window_label) {
-        let _ = w.destroy();
+    #[cfg(all(test, feature = "conversion-webview-tests"))]
+    if native_pdf_tests::fault() == 1 {
+        return Err("injected failure after native PDF window creation".into());
     }
-
-    result
+    let generated = work.path().join("printed.pdf");
+    let (tx, rx) = mpsc::channel();
+    let print_output = generated.clone();
+    let job_alive = alive.clone();
+    let job_work = work.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1200));
+        if !job_alive.load(Ordering::Acquire) {
+            return;
+        }
+        let failed = tx.clone();
+        let result = window.with_webview(move |wv| {
+            let work = job_work;
+            if !job_alive.load(Ordering::Acquire) {
+                return;
+            }
+            let result = (|| -> Result<(), String> {
+                let controller = wv.controller();
+                let core = unsafe { controller.CoreWebView2() }.map_err(|e| e.to_string())?;
+                let core7: ICoreWebView2_7 = core.cast().map_err(|e| e.to_string())?;
+                let wide: Vec<u16> = print_output
+                    .to_string_lossy()
+                    .encode_utf16()
+                    .chain(Some(0))
+                    .collect();
+                let completed = tx.clone();
+                let handler =
+                    PrintToPdfCompletedHandler::create(Box::new(move |error, success| {
+                        let _retain_temporary_resources = &work;
+                        let result = if success && error.is_ok() {
+                            Ok(())
+                        } else {
+                            Err(format!("WebView2 导出 PDF 失败: {error:?}"))
+                        };
+                        let _ = completed.send(result);
+                        Ok(())
+                    }));
+                unsafe {
+                    core7.PrintToPdf(
+                        windows_core::PCWSTR::from_raw(wide.as_ptr()),
+                        None,
+                        Some(&handler),
+                    )
+                }
+                .map_err(|e| e.to_string())
+            })();
+            if let Err(e) = result {
+                let _ = tx.send(Err(e));
+            }
+        });
+        if let Err(e) = result {
+            let _ = failed.send(Err(e.to_string()));
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(30);
+    #[cfg(all(test, feature = "conversion-webview-tests"))]
+    let deadline = if native_pdf_tests::fault() == 2 {
+        Instant::now() + Duration::from_millis(1)
+    } else {
+        deadline
+    };
+    loop {
+        op.check()?;
+        if std::fs::metadata(&generated).is_ok_and(|m| m.len() > conversion::MAX_OUTPUT as u64) {
+            return Err("PDF 输出超过 16 MiB".into());
+        }
+        if Instant::now() >= deadline {
+            return Err("导出 PDF 超时（30 秒）".into());
+        }
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(result) => {
+                result?;
+                let bytes = conversion::read_bounded(&generated, conversion::MAX_OUTPUT)?;
+                conversion::validate_pdf(&bytes)?;
+                return std::fs::write(output, bytes).map_err(|e| format!("暂存 PDF 失败: {e}"));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(e) => return Err(format!("打印回调丢失: {e}")),
+        }
+    }
 }
 
-#[cfg(not(target_os = "windows"))]
-#[tauri::command]
-pub async fn print_to_pdf(
-    _app: AppHandle,
-    _html_content: String,
-    _output_pdf_path: String,
-    _options: Option<PdfPrintOptions>,
-) -> Result<(), String> {
-    Err("当前平台暂未实现原生 PDF 导出能力。".to_string())
+#[cfg(all(test, windows, feature = "conversion-webview-tests"))]
+mod native_pdf_tests {
+    use super::*;
+    use tauri::Manager;
+    thread_local! {static FAULT:std::cell::Cell<u8>=const{std::cell::Cell::new(0)};}
+    pub(super) fn fault() -> u8 {
+        FAULT.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    #[ignore = "requires an interactive Windows session with WebView2; run explicitly"]
+    fn real_webview2_prints_and_releases_hidden_window() {
+        let mut context = tauri::generate_context!();
+        context.config_mut().app.windows.clear();
+        context.config_mut().identifier = "com.markumo.conversion-test".into();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let app=tauri::Builder::default().any_thread().setup(move|app| {
+            let handle=app.handle().clone();
+            std::thread::spawn(move|| {
+                let result=(||->Result<(),String>{
+                    let dir=tempfile::tempdir().map_err(|e|e.to_string())?;let target=dir.path().join("output.pdf");
+                    let store=ConversionStore::default();store.register("test");let permit=store.dialog("test")?;
+                    let selected=store.selected(&permit,Some(target.clone()),Purpose::Pdf)?.unwrap();
+                    drop(permit);
+                    let op=store.begin("test",&[(&selected.token,Purpose::Pdf)])?;
+                    conversion::export_pdf(&op,|output|render_pdf(&handle,&op,"<!doctype html><html><head><style>@page{size:A4;margin:20mm}body{font-family:Arial}pre{white-space:pre-wrap}</style></head><body><h1>Markumo Native PDF</h1><p>Phase 06.2 / WebView2</p><pre>line 1\nline 2</pre><table><tr><td>one</td><td>two</td></tr></table></body></html>",output))?;
+                    conversion::validate_pdf(&std::fs::read(&target).map_err(|e|e.to_string())?)?;
+                    std::thread::sleep(Duration::from_millis(200));
+                    if handle.webview_windows().keys().any(|label|label.starts_with("pdf-print-")){return Err("打印窗口泄漏".into());}
+                    let artifacts=Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-results/conversion");std::fs::create_dir_all(&artifacts).map_err(|e|e.to_string())?;
+                    std::fs::copy(target,artifacts.join("native-webview2.pdf")).map_err(|e|e.to_string())?;
+                    drop(op);
+                    for mode in [1,2] {
+                        let destination=dir.path().join(format!("failed-{mode}.pdf"));
+                        let permit=store.dialog("test")?;
+                        let selection=store.selected(&permit,Some(destination.clone()),Purpose::Pdf)?.unwrap();
+                        let op=store.begin("test",&[(&selection.token,Purpose::Pdf)])?;
+                        FAULT.with(|f|f.set(mode));
+                        let result=conversion::export_pdf(&op,|output|render_pdf(&handle,&op,"<h1>Failure test</h1>",output));
+                        FAULT.with(|f|f.set(0));
+                        result.expect_err("injected native PDF error was reported as success");
+                        assert!(!destination.exists());
+                        std::thread::sleep(Duration::from_millis(1500));
+                        assert!(!handle.webview_windows().keys().any(|s|s.starts_with("pdf-print-")));
+                    }
+                    std::thread::sleep(Duration::from_secs(2));
+                    assert!(!std::fs::read_dir(std::env::temp_dir()).unwrap().any(|entry|entry.unwrap().file_name().to_string_lossy().starts_with("markumo-pdf-")),"temporary PDF profile leaked");
+                    Ok(())
+                })();
+                let _=tx.send(result);handle.exit(0);
+            });
+            Ok(())
+        }).build(context).unwrap();
+        app.run_return(|_, event| {
+            if let tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } = event
+            {
+                api.prevent_exit();
+            }
+        });
+        rx.recv_timeout(Duration::from_secs(45)).unwrap().unwrap();
+    }
 }

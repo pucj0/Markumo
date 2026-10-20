@@ -81,7 +81,12 @@ export function saveConversionSettings(settings: ConversionSettings): void {
 export function loadLastExport(): LastExportRecord | null {
   try {
     const raw = getStorageItem(LAST_EXPORT_KEY)
-    return raw ? JSON.parse(raw) : null
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || !['html', 'html-plain', 'png', 'pdf', 'docx'].includes(parsed.format)) return null
+    // History holds UI defaults only. Native capabilities are never restored.
+    return { format: parsed.format, targetPath: typeof parsed.targetPath === 'string' ? parsed.targetPath : undefined,
+      options: parsed.options && typeof parsed.options === 'object' ? parsed.options : {}, timestamp: Number(parsed.timestamp) || 0 }
   } catch {
     return null
   }
@@ -89,7 +94,8 @@ export function loadLastExport(): LastExportRecord | null {
 
 export function saveLastExport(record: LastExportRecord): void {
   try {
-    setStorageItem(LAST_EXPORT_KEY, JSON.stringify(record))
+    const { format, targetPath, options, timestamp } = record
+    setStorageItem(LAST_EXPORT_KEY, JSON.stringify({ format, targetPath, options, timestamp }))
   } catch (e) {
     console.error('Failed to save last export record:', e)
   }

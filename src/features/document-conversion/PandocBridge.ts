@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import type { PandocStatus } from './contracts'
+import type { ConversionSelection } from './contracts'
 
 let cachedStatus: PandocStatus | null = null
 
@@ -40,7 +41,9 @@ export async function getPandocStatus(forceRefresh = false): Promise<PandocStatu
 export async function exportMarkdownToDocx(
   markdownContent: string,
   outputDocxPath: string,
-  resourceDir?: string
+  resourceDir?: string,
+  token?: string,
+  documentToken?: string
 ): Promise<void> {
   if (!isTauri()) {
     try {
@@ -74,24 +77,24 @@ export async function exportMarkdownToDocx(
 
   await invoke('pandoc_export_docx', {
     markdownContent,
-    outputDocxPath,
-    resourceDir: resourceDir || null,
+    token,
+    documentToken: documentToken || null,
   })
 }
 
 export async function importDocxToMarkdown(
-  inputDocxPath: string,
-  targetMdPath: string,
-  mediaDir: string
+  source: ConversionSelection,
+  target: ConversionSelection
 ): Promise<string> {
   if (!isTauri()) {
     try {
       if (typeof process !== 'undefined' && process.versions?.node) {
         const { execFileSync } = await import(/* @vite-ignore */ 'node:child_process')
         const { readFileSync } = await import(/* @vite-ignore */ 'node:fs')
-        const args = ['-f', 'docx', '-t', 'gfm', '--wrap=none', '--extract-media', mediaDir, '-o', targetMdPath, inputDocxPath]
+        const mediaDir = target.path.replace(/\.md$/i, '.assets')
+        const args = ['-f', 'docx', '-t', 'gfm', '--wrap=none', '--extract-media', mediaDir, '-o', target.path, source.path]
         execFileSync('pandoc', args)
-        return readFileSync(targetMdPath, 'utf-8')
+        return readFileSync(target.path, 'utf-8')
       }
     } catch (e) {
       throw new Error(`Word 导入失败: ${e}`)
@@ -105,8 +108,7 @@ export async function importDocxToMarkdown(
   }
 
   return await invoke<string>('pandoc_import_docx', {
-    inputDocxPath,
-    targetMdPath,
-    mediaDir,
+    sourceToken: source.token,
+    targetToken: target.token,
   })
 }

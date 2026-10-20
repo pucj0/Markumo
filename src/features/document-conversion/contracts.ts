@@ -1,6 +1,9 @@
 export type ExportFormat = 'pdf' | 'html' | 'html-plain' | 'docx' | 'png'
 export type ImportFormat = 'html' | 'docx'
 
+/** Native, single-use authorization. Never persist this in export settings. */
+export interface ConversionSelection { path: string; token: string }
+
 export interface PandocStatus {
   available: boolean
   version?: string
