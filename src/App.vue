@@ -109,7 +109,7 @@
     <CommandPalette
       ref="paletteRef"
       :items="paletteActions"
-      @query-change="workspace.quickOpen($event)"
+      :loading="workspace.fileIndexLoading"
     />
 
     <!-- 转到指定行模态框 (Ctrl+G) -->

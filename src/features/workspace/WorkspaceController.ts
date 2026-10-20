@@ -28,6 +28,11 @@ export class WorkspaceController {
   recentWorkspaces: string[] = []
   showIgnored = false
   quickFiles: { name: string; path: string; relativePath: string }[] = []
+  workspaceFiles: { name: string; path: string; relativePath: string }[] = []
+  fileIndexLoading = false
+  private fileIndexEpoch = 0
+  private fileIndexRevision = -1
+  private fileIndexPromise: Promise<void> | null = null
   private quickGeneration = 0
   private operationBusy = false
   private disposed = false
@@ -149,7 +154,7 @@ export class WorkspaceController {
     if (!this.roots.some(root => root.rootPath === info.rootPath)) this.roots.push(info)
     if (info.warning) this.notify(info.warning)
     this.cancelSearch(); this.searchResults = []; this.searchTotal = 0; this.searchQuery = ''
-    this.quickGeneration++; this.quickFiles = []; void this.loadRecents(); this.emit()
+    this.quickGeneration++; this.quickFiles = []; this.invalidateFileIndex(); void this.loadRecents(); this.emit()
   }
 
   async removeFolder(path: string) {
@@ -165,7 +170,7 @@ export class WorkspaceController {
       const first = this.roots[0]
       this.rootPath = first?.rootPath || null; this.rootName = first?.name || ''; this.entries = first?.entries || []
       this.cancelSearch(); this.searchResults = []; this.searchTotal = 0; this.searchQuery = ''
-      this.quickGeneration++; this.quickFiles = []; this.emit()
+      this.quickGeneration++; this.quickFiles = []; this.invalidateFileIndex(); this.emit()
     } catch (error) { this.notify(`移除工作区文件夹失败：${error}`) }
     finally { this.operationBusy = false; this.fileController.workspaceBusy = false }
   }
@@ -205,6 +210,7 @@ export class WorkspaceController {
     this.cancelSearch()
     this.quickGeneration++
     this.quickFiles = []
+    this.invalidateFileIndex()
     this.rootPath = info.rootPath
     this.rootName = info.name
     this.entries = info.entries
@@ -646,6 +652,7 @@ export class WorkspaceController {
     this.cancelSearch()
     this.searchResults = []; this.searchTotal = 0; this.searchQuery = ''
     this.quickGeneration++; this.quickFiles = []
+    this.invalidateFileIndex()
   }
 
   async moveNode(node: WorkspaceNode, destination: string) {
@@ -685,6 +692,7 @@ export class WorkspaceController {
       this.cancelSearch()
       this.searchResults = []; this.searchTotal = 0; this.searchQuery = ''
       this.quickGeneration++; this.quickFiles = []
+      this.invalidateFileIndex()
       this.notify(`已删除: ${rel}`)
       this.emit()
     } catch (e) {
@@ -833,7 +841,7 @@ export class WorkspaceController {
 
   // 获取工作区所有已知的文件列表（供 Quick Open 快速打开）
   getAllKnownFiles(): { name: string; path: string; relativePath: string }[] {
-    const files: { name: string; path: string; relativePath: string }[] = []
+    const files: { name: string; path: string; relativePath: string }[] = [...this.workspaceFiles]
     const traverse = (nodes: WorkspaceNode[], prefix: string) => {
       for (const node of nodes) {
         if (!node.isDirectory) {
@@ -848,17 +856,53 @@ export class WorkspaceController {
       }
     }
     for (const root of this.roots) traverse(root.entries, this.roots.length > 1 ? `${root.name}/` : '')
-    return [...new Map([...files, ...this.quickFiles].map(file => [file.path, file])).values()]
+    files.push(...this.quickFiles)
+    return [...new Map(files.map(file => [displayPathKey(file.path), file])).values()]
   }
 
-  async quickOpen(query: string) {
+  /**
+   * Load the bounded workspace file index once per workspace. Quick Open then
+   * scores this array synchronously; it never walks the filesystem per keystroke.
+   */
+  async ensureFileIndex(): Promise<void> {
     if (!this.rootPath || this.disposed) return
-    const generation = ++this.quickGeneration
-    try {
-      const files = await this.gateway.findFiles(query, this.showIgnored)
-      if (generation !== this.quickGeneration || this.disposed) return
-      this.quickFiles = files; this.emit()
-    } catch (error) { if (generation === this.quickGeneration) this.notify(String(error)) }
+    if (this.fileIndexRevision === this.openRevision) return
+    if (this.fileIndexPromise) return this.fileIndexPromise
+    const epoch = ++this.fileIndexEpoch
+    const revision = this.openRevision
+    this.fileIndexLoading = true
+    this.emit()
+    const request = (async () => {
+      try {
+        const files = await this.gateway.findFiles('', this.showIgnored, 50_000)
+        if (this.disposed || epoch !== this.fileIndexEpoch || revision !== this.openRevision) return
+        this.workspaceFiles = files
+        this.fileIndexRevision = revision
+      } catch (error) {
+        if (!this.disposed && epoch === this.fileIndexEpoch) this.notify(`工作区文件索引失败：${error}`)
+      } finally {
+        if (!this.disposed && epoch === this.fileIndexEpoch) {
+          this.fileIndexLoading = false
+          this.fileIndexPromise = null
+          this.emit()
+        }
+      }
+    })()
+    this.fileIndexPromise = request
+    return request
+  }
+
+  invalidateFileIndex() {
+    this.fileIndexEpoch++
+    this.fileIndexRevision = -1
+    this.workspaceFiles = []
+    this.fileIndexLoading = false
+    this.fileIndexPromise = null
+  }
+
+  /** Compatibility entry: Quick Open now consumes the cached index. */
+  async quickOpen(_query: string) {
+    await this.ensureFileIndex()
   }
 
   async toggleIgnored() {
@@ -868,7 +912,7 @@ export class WorkspaceController {
       this.entries = await this.gateway.setShowIgnored(next)
       this.showIgnored = next
       await this.refreshDirectory()
-      this.quickGeneration++; this.quickFiles = []; this.cancelSearch(); this.emit()
+      this.quickGeneration++; this.quickFiles = []; this.invalidateFileIndex(); this.cancelSearch(); this.emit()
     } catch (error) { this.notify(String(error)) }
   }
 
@@ -877,6 +921,7 @@ export class WorkspaceController {
     this.cancelExpand();this.revealSequence++
     this.disposed = true
     this.quickGeneration++
+    this.invalidateFileIndex()
     this.cancelSearch()
     if (this.searchBatchUnsub) this.searchBatchUnsub()
     if (this.searchDoneUnsub) this.searchDoneUnsub()

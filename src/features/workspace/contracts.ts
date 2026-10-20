@@ -65,7 +65,7 @@ export interface WorkspaceGateway {
   renameNode(oldPath: string, newName: string): Promise<[string, string]>
   deleteNode(path: string): Promise<string>
   moveNode(srcPath: string, destDir: string): Promise<[string, string]>
-  findFiles(query: string, includeIgnored: boolean): Promise<{ name: string; path: string; relativePath: string }[]>
+  findFiles(query: string, includeIgnored: boolean, limit?: number): Promise<{ name: string; path: string; relativePath: string }[]>
   setShowIgnored(show: boolean): Promise<WorkspaceNode[]>
   getRecentWorkspaces(): Promise<string[]>
   revealNode?(path:string):Promise<void>

@@ -464,6 +464,7 @@ pub async fn find_workspace_files(
     window: Window,
     query: String,
     include_ignored: bool,
+    limit: Option<usize>,
     store: State<'_, WorkspaceStore>,
 ) -> Result<Vec<crate::workspace::search::QuickFile>, String> {
     let store = store.for_window(window.label())?;
@@ -474,7 +475,10 @@ pub async fn find_workspace_files(
         if roots.is_empty() {
             return Err("未打开工作区".into());
         }
-        crate::workspace::search::find_files_roots(&roots, &query, include_ignored)
+        // The palette requests a bounded index once; a normal query keeps the
+        // original small result cap.
+        let limit = limit.unwrap_or(100).clamp(1, 50_000);
+        crate::workspace::search::find_files_roots(&roots, &query, include_ignored, limit)
     })
     .await
     .map_err(|e| e.to_string())?

@@ -40,6 +40,14 @@ export interface TreeItem {
   children?: TreeItem[]
 }
 
+export interface PaletteExecuteOptions {
+  pinned: boolean
+  line?: number
+  column?: number
+}
+
+export type PaletteSource = 'open' | 'recent' | 'workspace' | 'command'
+
 export interface PaletteAction {
   id: string
   title: string
@@ -47,5 +55,10 @@ export interface PaletteAction {
   category: 'action' | 'file'
   disabled?: boolean
   fileName?: string
+  source?: PaletteSource
+  path?: string
+  relativePath?: string
+  priority?: number
   action: () => void
+  execute?: (options: PaletteExecuteOptions) => void | Promise<void>
 }

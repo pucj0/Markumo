@@ -6,7 +6,7 @@ import type { WorkspaceController } from '../features/workspace/WorkspaceControl
 import type { DocumentManager } from '../editor/core/DocumentManager'
 import type { ExportController, ImportController } from '../features/document-conversion'
 import type { ImageImporter, ImageSource } from '../editor/markdown/imageImport'
-import type { AppMode, SidebarPanel, PaletteAction, MarkdownMode, EditorDocument } from '../types'
+import type { AppMode, SidebarPanel, PaletteAction, PaletteExecuteOptions, MarkdownMode, EditorDocument } from '../types'
 import {
   allCommands,
   commandDefinition,
@@ -23,7 +23,7 @@ import { textClipboard } from '../features/shell/clipboard'
 import { editorClipboard, inputClipboard, type ClipboardOperation } from '../editor/commands/clipboard'
 import { isMedia } from '../features/files/media'
 import { markdownFormats } from '../editor/markdown/formatCommands'
-import { readablePath } from '../features/shell/pathDisplay'
+import { displayPathKey, readablePath } from '../features/shell/pathDisplay'
 import type { CloseSource } from '../features/shell/WindowCloseGuard'
 import type CommandPalette from '../components/modals/CommandPalette.vue'
 import type SettingsModal from '../components/modals/SettingsModal.vue'
@@ -108,6 +108,50 @@ export function useShellCommands(host: ShellCommandsHost) {
     if (reportedRenderErrors.has(key)) return
     reportedRenderErrors.add(key)
     window.dispatchEvent(new CustomEvent('editor-notice', { detail: `界面渲染异常（${scope}）：${error instanceof Error ? error.message : String(error)}` }))
+  }
+
+  function docByPath(path?: string | null) {
+    if (!path) return undefined
+    return host.openedDocuments.value.find(doc => doc.path && displayPathKey(doc.path) === displayPathKey(path))
+  }
+
+  function focusActiveEditor() {
+    host.manager.focusPane(host.manager.activePane)
+  }
+
+  function focusOpenedPath(path: string | null | undefined, options?: PaletteExecuteOptions) {
+    const doc = docByPath(path)
+    if (!doc) return
+    // A slower workspace load must not steal focus after a newer navigation.
+    const active = host.manager.activeDocument
+    if (!active?.path || displayPathKey(active.path) !== displayPathKey(path!)) return
+    // Opening from the palette must leave the caret in the editor, not in the
+    // now-closed input. Reveal later; it focuses the exact view.
+    focusActiveEditor()
+    if (options?.line && !isMedia(doc) && doc.kind !== 'javaClass') {
+      host.manager.revealPosition(doc.id, options.line, options.column ?? 1)
+    }
+  }
+
+  async function openWorkspaceEntry(
+    node: Parameters<WorkspaceController['openFile']>[0],
+    options?: PaletteExecuteOptions,
+  ) {
+    try {
+      await host.workspace.openFile(node, !options?.pinned)
+      focusOpenedPath(node.path, options)
+    } catch (error) {
+      host.toast(fileError(error))
+    }
+  }
+
+  async function openRecentEntry(path: string, options?: PaletteExecuteOptions) {
+    try {
+      await host.openRecent(path)
+      focusOpenedPath(path, options)
+    } catch (error) {
+      host.toast(fileError(error))
+    }
   }
   const paletteActions = computed<PaletteAction[]>(() => {
     try {
@@ -290,14 +334,26 @@ export function useShellCommands(host: ShellCommandsHost) {
       ...encodings.map(encoding => ({ id: `open-${encoding}`, title: `按 ${encoding} 编码打开文件`, detail: '原生文件选择', category: 'action' as const, disabled: !host.desktop || host.fileBusy.value, action: () => void host.openFile(encoding) })),
       ...encodings.map(encoding => ({ id: `reopen-${encoding}`, title: `用 ${encoding} 编码重新打开`, detail: '需要先保存修改', category: 'action' as const, disabled: !host.desktop || !host.activeDoc.value?.fileToken || host.fileBusy.value || isMedia(host.activeDoc.value), action: () => void host.reopenEncoding(encoding) })),
       ...recentWorkspaces().map(path => ({ id: recentWorkspaceCommand(path), title: `打开工作区：${path.split(/[\\/]/).pop()}`, detail: readablePath(path), category: 'action' as const, disabled: !host.desktop || host.fileBusy.value, action: () => void host.workspace.openWorkspacePath(path) })),
-      ...(host.demo ? host.manager.catalog : host.openedDocuments.value).map(doc => ({ id: `file-${doc.id}`, title: doc.name, fileName: doc.name, detail: doc.path || '未命名 · 内存草稿', category: 'file' as const, action: () => host.handleSelectDoc(doc.id) })),
-      ...(host.paletteRef.value?.visible ? host.workspace.getAllKnownFiles() : []).map(file => ({
-        id: `ws-${file.path}`,
-        title: file.name,
-        fileName: file.name,
-        detail: file.relativePath,
+      ...(host.demo ? host.manager.catalog : host.openedDocuments.value).map(doc => ({
+        id: `file-${doc.id}`,
+        title: doc.name,
+        fileName: doc.name,
+        detail: doc.path ? readablePath(doc.path) : '未命名 · 内存草稿',
         category: 'file' as const,
-        action: () => void host.workspace.openFile({
+        source: 'open' as const,
+        path: doc.path || undefined,
+        relativePath: doc.path ? readablePath(doc.path) : undefined,
+        priority: host.activeDoc.value?.id === doc.id ? 36 : 24,
+        action: () => host.handleSelectDoc(doc.id),
+        execute: (options: PaletteExecuteOptions) => {
+          if (options.pinned) host.manager.pin(doc.id)
+          host.handleSelectDoc(doc.id, !options.pinned)
+          if (doc.path) focusOpenedPath(doc.path, options)
+          else focusActiveEditor()
+        },
+      })),
+      ...(host.paletteRef.value?.visible ? host.workspace.getAllKnownFiles() : []).map(file => {
+        const node = {
           id: file.relativePath,
           name: file.name,
           path: file.path,
@@ -308,9 +364,36 @@ export function useShellCommands(host: ShellCommandsHost) {
           size: 0,
           mtime: null,
           hasChildren: false,
-        }),
+        }
+        return {
+          id: `ws-${file.path}`,
+          title: file.name,
+          fileName: file.name,
+          detail: file.relativePath,
+          category: 'file' as const,
+          source: 'workspace' as const,
+          path: file.path,
+          relativePath: file.relativePath,
+          priority: 0,
+          disabled: host.fileBusy.value,
+          action: () => void openWorkspaceEntry(node),
+          execute: (options: PaletteExecuteOptions) => openWorkspaceEntry(node, options),
+        }
+      }),
+      ...recentFiles().map((file, index) => ({
+        id: recentFileCommand(file.path),
+        title: file.name,
+        fileName: file.name,
+        detail: readablePath(file.path),
+        category: 'file' as const,
+        source: 'recent' as const,
+        path: file.path,
+        relativePath: readablePath(file.path),
+        priority: Math.max(2, 14 - index),
+        disabled: !host.desktop || host.fileBusy.value,
+        action: () => void openRecentEntry(file.path),
+        execute: (options: PaletteExecuteOptions) => openRecentEntry(file.path, options),
       })),
-      ...recentFiles().map(file => ({ id: recentFileCommand(file.path), title: `最近：${file.name}`, fileName: file.name, detail: readablePath(file.path), category: 'file' as const, disabled: !host.desktop || host.fileBusy.value, action: () => void host.openRecent(file.path) })),
     ]
   }
 

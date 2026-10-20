@@ -163,10 +163,15 @@ pub fn find_files_roots(
     roots: &[std::path::PathBuf],
     query: &str,
     include_ignored: bool,
+    limit: usize,
 ) -> Result<Vec<QuickFile>, String> {
     let mut budget = TraversalBudget::new();
     let mut files = Vec::new();
     for root in roots {
+        let remaining = limit.saturating_sub(files.len());
+        if remaining == 0 {
+            break;
+        }
         let prefix = if roots.len() > 1 {
             format!(
                 "{}/",
@@ -181,12 +186,13 @@ pub fn find_files_roots(
             include_ignored,
             &mut budget,
             &prefix,
-            100 - files.len(),
+            remaining,
         )?);
-        if files.len() >= 100 {
+        if files.len() >= limit {
             break;
         }
     }
+    files.truncate(limit);
     Ok(files)
 }
 

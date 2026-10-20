@@ -120,8 +120,8 @@ export const tauriWorkspace: WorkspaceGateway = {
     if (!isTauri()) return []
     return invoke<string[]>('get_recent_workspaces')
   },
-  async findFiles(query, includeIgnored) {
-    const files = await invoke<{ name: string; path: string; relative_path: string }[]>('find_workspace_files', { query, includeIgnored })
+  async findFiles(query, includeIgnored, limit) {
+    const files = await invoke<{ name: string; path: string; relative_path: string }[]>('find_workspace_files', { query, includeIgnored, limit: limit ?? null })
     return files.map(file => ({ ...file, relativePath: file.relative_path }))
   },
   async setShowIgnored(show) {

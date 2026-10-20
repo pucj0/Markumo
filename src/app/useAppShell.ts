@@ -95,6 +95,7 @@ export function useAppShell() {
       sidebarVisible.value = true
       sidebarPanel.value = 'files'
     }
+    if (workspace.openRevision !== lastWorkspaceRevision && paletteRef.value?.visible) paletteRef.value.close()
     lastWorkspaceRevision = workspace.openRevision
   })
 
@@ -373,6 +374,10 @@ export function useAppShell() {
   }
 
   watch([revision, fileBusy, updateInstalling, startupLoading], reportUpdateWindow)
+  // The palette's file pool is intentionally assembled only while it is open.
+  // Recompute the command/file projection when visibility changes so the first
+  // Ctrl+P already sees the workspace index instead of an empty file list.
+  watch(() => paletteRef.value?.visible, () => { revision.value++ })
   watch(
     [preferences.autoCheckUpdates, preferences.autoDownloadUpdates, startupLoading],
     () =>
@@ -718,7 +723,11 @@ export function useAppShell() {
   function openPalette(category: 'action' | 'file' | 'all' = 'all') {
     if (discardRef.value?.visible) return
     settingsRef.value?.close()
+    if (category !== 'action') void workspace.ensureFileIndex()
     paletteRef.value?.open(category)
+    // Open() flips the component's visible flag; bump the projection after it so
+    // the very first render includes the workspace file pool.
+    revision.value++
   }
 
   function composingHint() {
