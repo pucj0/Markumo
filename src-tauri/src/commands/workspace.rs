@@ -16,11 +16,30 @@ use crate::{
 };
 
 #[derive(Default)]
-pub struct WorkspaceStore { windows: Mutex<std::collections::HashMap<String, Arc<Mutex<WorkspaceService>>>> }
+pub struct WorkspaceStore {
+    windows: Mutex<std::collections::HashMap<String, Arc<Mutex<WorkspaceService>>>>,
+}
 impl WorkspaceStore {
-    pub fn insert(&self,label:&str,service:WorkspaceService)->Result<(),String>{self.windows.lock().map_err(|e|e.to_string())?.insert(label.into(),Arc::new(Mutex::new(service)));Ok(())}
-    pub fn for_window(&self,label:&str)->Result<Arc<Mutex<WorkspaceService>>,String>{self.windows.lock().map_err(|e|e.to_string())?.get(label).cloned().ok_or_else(||"窗口工作区尚未初始化".into())}
-    pub fn remove(&self,label:&str){if let Ok(mut windows)=self.windows.lock(){windows.remove(label);}}
+    pub fn insert(&self, label: &str, service: WorkspaceService) -> Result<(), String> {
+        self.windows
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(label.into(), Arc::new(Mutex::new(service)));
+        Ok(())
+    }
+    pub fn for_window(&self, label: &str) -> Result<Arc<Mutex<WorkspaceService>>, String> {
+        self.windows
+            .lock()
+            .map_err(|e| e.to_string())?
+            .get(label)
+            .cloned()
+            .ok_or_else(|| "窗口工作区尚未初始化".into())
+    }
+    pub fn remove(&self, label: &str) {
+        if let Ok(mut windows) = self.windows.lock() {
+            windows.remove(label);
+        }
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -80,13 +99,20 @@ pub async fn open_dropped_workspace(
         let path = {
             let mut files = files.lock().map_err(|e| e.to_string())?;
             files.set_owner(&owner);
-            files.take_dropped_directory(&token).map_err(|e| e.to_string())?
+            files
+                .take_dropped_directory(&token)
+                .map_err(|e| e.to_string())?
         };
         // Adding preserves existing roots and unsaved editor tabs. With no root,
         // add_workspace uses the normal initial-workspace opening flow.
-        let result = service.lock().map_err(|e| e.to_string())?.add_workspace(path);
+        let result = service
+            .lock()
+            .map_err(|e| e.to_string())?
+            .add_workspace(path);
         result
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -142,7 +168,7 @@ pub async fn open_workspace_path(
         if !svc
             .recent_workspaces()
             .iter()
-            .any(|p| PathBuf::from(p) == path_buf)
+            .any(|p| std::path::Path::new(p) == path_buf.as_path())
         {
             return Err("目录尚未授权；请通过目录选择对话框打开".into());
         }
@@ -194,7 +220,9 @@ pub async fn workspace_file_visible(
     tauri::async_runtime::spawn_blocking(move || {
         let svc = service.lock().map_err(|error| error.to_string())?;
         Ok(svc.file_visible(std::path::Path::new(&path)))
-    }).await.map_err(|error| error.to_string())?
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -376,7 +404,7 @@ pub async fn search_workspace(
         roots
     };
 
-    let scoped_id=format!("{}:{}",window.label(),query.search_id);
+    let scoped_id = format!("{}:{}", window.label(), query.search_id);
     let cancel_token = search_manager.create_token(&scoped_id);
     let search_id = query.search_id.clone();
     let sm = search_manager.inner().clone();
@@ -458,23 +486,23 @@ pub async fn cancel_workspace_search(
     search_id: String,
     search_manager: State<'_, SearchManager>,
 ) -> Result<(), String> {
-
-
-    search_manager.cancel(&format!("{}:{}",window.label(),search_id));
+    search_manager.cancel(&format!("{}:{}", window.label(), search_id));
     Ok(())
 }
 
 #[tauri::command]
 pub async fn reveal_in_explorer(
-    window: Window,token: String, store: State<'_, FileStore>) -> Result<(), String> {
+    window: Window,
+    token: String,
+    store: State<'_, FileStore>,
+) -> Result<(), String> {
     let owner = window.label().to_owned();
 
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut service=store.lock().map_err(|e|e.to_string())?;
+        let mut service = store.lock().map_err(|e| e.to_string())?;
         service.set_owner(&owner);
-        let p = service.revealed_path(&token)
-            .map_err(|e| e.message)?;
+        let p = service.revealed_path(&token).map_err(|e| e.message)?;
         reveal_path(&p)
     })
     .await
@@ -483,16 +511,24 @@ pub async fn reveal_in_explorer(
 
 #[tauri::command]
 pub async fn reveal_workspace_node(
-    window: Window,path: String, store: State<'_, WorkspaceStore>) -> Result<(),String> {
+    window: Window,
+    path: String,
+    store: State<'_, WorkspaceStore>,
+) -> Result<(), String> {
     let store = store.for_window(window.label())?;
 
-    let store=store.clone();
+    let store = store.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let p=store.lock().map_err(|error|error.to_string())?.revealed_path(&std::path::PathBuf::from(path))?;
+        let p = store
+            .lock()
+            .map_err(|error| error.to_string())?
+            .revealed_path(&std::path::PathBuf::from(path))?;
         reveal_path(&p)
-    }).await.map_err(|error|error.to_string())?
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
-fn reveal_path(p: &std::path::Path) -> Result<(),String> {
+fn reveal_path(p: &std::path::Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::{
@@ -501,7 +537,7 @@ fn reveal_path(p: &std::path::Path) -> Result<(),String> {
             },
             UI::Shell::{SHOpenFolderAndSelectItems, SHParseDisplayName},
         };
-        let wide = shell_path(&p);
+        let wide = shell_path(p);
         unsafe {
             let initialized = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
             if initialized < 0 {

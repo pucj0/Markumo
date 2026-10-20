@@ -234,26 +234,7 @@ pub fn export_docx(
             }
             STANDARD.decode(encoded).map_err(|e| e.to_string())?
         } else if source.starts_with("https://") || source.starts_with("http://") {
-            let timeout = op
-                .deadline
-                .saturating_duration_since(std::time::Instant::now())
-                .min(Duration::from_secs(10));
-            let client = reqwest::blocking::Client::builder()
-                .timeout(timeout)
-                .redirect(reqwest::redirect::Policy::limited(4))
-                .build()
-                .map_err(|e| e.to_string())?;
-            let response = client
-                .get(source)
-                .send()
-                .and_then(|r| r.error_for_status())
-                .map_err(|e| format!("读取 Word 网络图片失败: {e}"))?;
-            let mut bytes = Vec::new();
-            response
-                .take(4 * 1024 * 1024 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|e| e.to_string())?;
-            bytes
+            super::remote::fetch_remote_image(op, source)?
         } else {
             local(source)?
         };

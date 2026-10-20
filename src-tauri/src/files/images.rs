@@ -39,11 +39,20 @@ mod dropped_directory_tests {
         let inputs = files.image_inputs(vec![folder.clone(), file, second.clone()]);
         assert!(inputs[0].is_directory);
         assert!(!inputs[1].is_directory);
-        assert!(serde_json::to_value(&inputs[0]).unwrap()["isDirectory"].as_bool().unwrap());
+        assert!(serde_json::to_value(&inputs[0]).unwrap()["isDirectory"]
+            .as_bool()
+            .unwrap());
         let mut workspace = crate::workspace::WorkspaceService::default();
-        let info = workspace.add_workspace(files.take_dropped_directory(&inputs[0].token).unwrap()).unwrap();
-        assert_eq!(PathBuf::from(info.root_path), folder.canonicalize().unwrap());
-        workspace.add_workspace(files.take_dropped_directory(&inputs[2].token).unwrap()).unwrap();
+        let info = workspace
+            .add_workspace(files.take_dropped_directory(&inputs[0].token).unwrap())
+            .unwrap();
+        assert_eq!(
+            PathBuf::from(info.root_path),
+            folder.canonicalize().unwrap()
+        );
+        workspace
+            .add_workspace(files.take_dropped_directory(&inputs[2].token).unwrap())
+            .unwrap();
         assert_eq!(workspace.roots().len(), 2);
         assert!(files.take_dropped_directory(&inputs[0].token).is_err());
         let batch = files.open_image_inputs(&[inputs[1].token.clone()]);
@@ -64,7 +73,7 @@ mod dropped_directory_tests {
         assert!(files.take_dropped_directory("untrusted-token").is_err());
         assert!(files.take_dropped_directory(&input.token).is_ok());
         let input = files.image_inputs(vec![root]).remove(0);
-        files.release_image_inputs(&[input.token.clone()]);
+        files.release_image_inputs(std::slice::from_ref(&input.token));
         assert!(files.take_dropped_directory(&input.token).is_err());
     }
 
@@ -135,28 +144,35 @@ mod dropped_directory_tests {
         let mut files = FileService::default();
         files.set_owner("window-a");
         let token = files.open_selected(document, None).unwrap().metadata.token;
-        assert!(files.markdown_image(&token, "assets/inside.png", &[]).is_ok());
+        assert!(files
+            .markdown_image(&token, "assets/inside.png", &[])
+            .is_ok());
 
         files.set_owner("window-b");
-        assert!(files.markdown_image(&token, "assets/inside.png", &[]).is_err());
+        assert!(files
+            .markdown_image(&token, "assets/inside.png", &[])
+            .is_err());
         files.set_owner("window-a");
         let absolute = outside.to_string_lossy().into_owned();
         assert!(files.markdown_image(&token, &absolute, &[]).is_err());
-        assert!(files.authorize_image_read(&token, &absolute, &outside).is_ok());
+        assert!(files
+            .authorize_image_read(&token, &absolute, &outside)
+            .is_ok());
         assert!(files.markdown_image(&token, &absolute, &[]).is_ok());
 
         files.release(&token);
         assert!(files.image_reads.is_empty());
-        assert!(files.markdown_image(&token, "assets/inside.png", &[]).is_err());
+        assert!(files
+            .markdown_image(&token, "assets/inside.png", &[])
+            .is_err());
     }
 
     #[test]
     fn oversized_clipboard_image_payload_is_rejected_while_deserializing() {
         use serde::de::value::{Error as ValueError, SeqDeserializer};
         use serde::Deserialize;
-        let oversized = SeqDeserializer::<_, ValueError>::new(
-            std::iter::repeat_n(0u8, MAX_IMAGE_BYTES + 1),
-        );
+        let oversized =
+            SeqDeserializer::<_, ValueError>::new(std::iter::repeat_n(0u8, MAX_IMAGE_BYTES + 1));
         assert!(ImageBytes::deserialize(oversized).is_err());
 
         let valid = SeqDeserializer::<_, ValueError>::new(vec![1u8, 2, 3].into_iter());
@@ -195,7 +211,8 @@ impl<'de> Deserialize<'de> for ImageBytes {
             where
                 A: serde::de::SeqAccess<'de>,
             {
-                let mut bytes = Vec::with_capacity(sequence.size_hint().unwrap_or(0).min(MAX_IMAGE_BYTES));
+                let mut bytes =
+                    Vec::with_capacity(sequence.size_hint().unwrap_or(0).min(MAX_IMAGE_BYTES));
                 while let Some(byte) = sequence.next_element::<u8>()? {
                     if bytes.len() >= MAX_IMAGE_BYTES {
                         return Err(serde::de::Error::custom("图片超过 4 MiB 上限"));
@@ -320,14 +337,20 @@ fn read_raster(path: &Path) -> Result<Vec<u8>> {
             return Err(FileError::io(std::io::Error::last_os_error()));
         }
         if info.nNumberOfLinks > 1 {
-            return fail("image_scope", "暂不支持硬链接图片，请复制为独立文件后使用。");
+            return fail(
+                "image_scope",
+                "暂不支持硬链接图片，请复制为独立文件后使用。",
+            );
         }
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         if metadata.nlink() > 1 {
-            return fail("image_scope", "暂不支持硬链接图片，请复制为独立文件后使用。");
+            return fail(
+                "image_scope",
+                "暂不支持硬链接图片，请复制为独立文件后使用。",
+            );
         }
     }
     if !metadata.is_file() || metadata.len() > MAX_IMAGE_BYTES as u64 {
@@ -436,8 +459,8 @@ impl FileService {
             .into_iter()
             .take(100)
             .map(|path| {
-                let is_directory = std::fs::symlink_metadata(&path)
-                    .is_ok_and(|metadata| metadata.is_dir());
+                let is_directory =
+                    std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_dir());
                 self.next_token += 1;
                 let token = format!("image-input-{}", self.next_token);
                 let name = path
@@ -447,7 +470,11 @@ impl FileService {
                     .into_owned();
                 self.image_inputs
                     .insert(token.clone(), (self.current_owner.clone(), path));
-                ImageInput { token, name, is_directory }
+                ImageInput {
+                    token,
+                    name,
+                    is_directory,
+                }
             })
             .collect()
     }
@@ -479,7 +506,9 @@ impl FileService {
     /// Consume only a native capability belonging to this window. Validate again
     /// at use time: the dropped path may have disappeared or become a link.
     pub fn take_dropped_directory(&mut self, token: &str) -> Result<PathBuf> {
-        let path = self.image_inputs.get(token)
+        let path = self
+            .image_inputs
+            .get(token)
             .filter(|(owner, _)| owner == &self.current_owner)
             .map(|(_, path)| path.clone())
             .ok_or_else(|| FileError::new("scope", "拖入目录授权已失效，请重新拖入。"))?;

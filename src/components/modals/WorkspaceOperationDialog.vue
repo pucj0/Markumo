@@ -19,6 +19,7 @@ interface Request { title: string; description?: string; confirmLabel: string; i
 const request = ref<Request>({ title: '', description: '', confirmLabel: '确认' })
 const value = ref('')
 const { visible, dialogRef, open, close, handleKeydown } = useModal()
+void dialogRef // Bound by name in the template.
 let resolvePending: ((value: string | null) => void) | undefined
 function finish(result: string | null) {
   close()

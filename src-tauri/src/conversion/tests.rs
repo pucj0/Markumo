@@ -2,7 +2,7 @@ use super::*;
 use std::{
     cell::Cell,
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -348,6 +348,66 @@ fn pandoc_failure_and_invalid_docx_output_preserve_old_target() {
     .is_err());
     assert_eq!(fs::read(&target).unwrap(), b"old docx");
     assert!(validate_docx(b"PK invalid archive").is_err());
+}
+#[test]
+fn remote_images_never_contact_loopback() {
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let server = {
+        let hits = hits.clone();
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        let mut request = [0u8; 2048];
+                        let _ = stream.read(&mut request);
+                        let body = png();
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(&body);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(5))
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let s = store();
+    let target = dir.path().join("remote.docx");
+    let lease = select(&s, "a", &target, Purpose::Docx);
+    let image = format!("http://127.0.0.1:{port}/pixel.png");
+    let result = export_docx(
+        &begin(&s, &lease, Purpose::Docx),
+        "# remote",
+        Path::new("fake"),
+        &FakeRunner {
+            fail: false,
+            image: Some(image),
+        },
+        |_| panic!("remote URL must not be treated as a local path"),
+    );
+    stop.store(true, Ordering::Release);
+    server.join().unwrap();
+    assert!(result.is_err(), "loopback image fetch must be refused");
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "no request may reach the loopback service"
+    );
+    assert!(!target.exists(), "failed export must not create a target");
 }
 #[test]
 fn docx_member_traversal_and_assets_symlink_are_rejected() {

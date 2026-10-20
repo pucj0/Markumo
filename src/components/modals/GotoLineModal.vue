@@ -13,7 +13,6 @@
         </div>
         <div class="goto-input-row">
           <input
-            ref="inputRef"
             v-model="lineText"
             type="text"
             placeholder="行号:列号 (例如: 15 或 15:4)"
@@ -44,8 +43,8 @@ const emit = defineEmits<{
 }>()
 
 const { visible, dialogRef, open: openModal, close, handleKeydown } = useModal()
+void dialogRef // Bound by name in the template.
 const lineText = ref('')
-const inputRef = ref<HTMLInputElement | null>(null)
 
 function open() {
   lineText.value = ''

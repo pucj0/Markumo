@@ -1,5 +1,5 @@
 <template>
-  <div ref="previewContainerRef" class="split-preview-pane" :data-image-border="imageBorder !== false">
+  <div class="split-preview-pane" :data-image-border="imageBorder !== false">
     <div
       ref="contentRef"
       class="split-preview-content markdown-body"
@@ -33,7 +33,6 @@ const emit = defineEmits<{
   (e: 'edit-image', from: number, snapshot: string): void
 }>()
 
-const previewContainerRef = ref<HTMLElement | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
 
 const revision = ref(0)

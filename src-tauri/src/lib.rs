@@ -1,56 +1,76 @@
 mod commands;
-mod files;
-mod workspace;
-mod session;
-mod profile_migration;
 mod conversion;
+mod files;
+mod profile_migration;
+mod session;
+mod workspace;
 
-use std::{path::PathBuf, sync::{Arc, Mutex}};
-use tauri::{Emitter, Manager};
 use commands::files::FileStore;
 use commands::workspace::WorkspaceStore;
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
+use tauri::{Emitter, Manager};
 use workspace::SearchManager;
 
 /// Registers a window's workspace service and launch record.
-fn register_window(app:&tauri::AppHandle,label:&str,paths:Vec<PathBuf>)->Result<(),String>{
-    let updates=app.state::<commands::update::UpdateStore>();
-    let coordinator=updates.lock().map_err(|e|e.to_string())?;
-    if coordinator.owner.is_some(){return Err("正在安装更新，请重启后再打开新窗口。".into())}
-    let temporary=!paths.is_empty();
-    let mut ws=workspace::WorkspaceService::default();
-    ws.configure(app.path().app_data_dir().map_err(|e|e.to_string())?.join("workspaces.json"));
-    if temporary{ws.disable_persistence()}
-    app.state::<WorkspaceStore>().insert(label,ws)?;
-    let state=app.state::<session::LaunchStore>();
-    let mut registry=state.lock().map_err(|_|"启动状态不可用".to_string())?;
-    if !registry.windows.contains_key(label) { registry.insert(label.into(),paths); }
+fn register_window(app: &tauri::AppHandle, label: &str, paths: Vec<PathBuf>) -> Result<(), String> {
+    let updates = app.state::<commands::update::UpdateStore>();
+    let coordinator = updates.lock().map_err(|e| e.to_string())?;
+    if coordinator.owner.is_some() {
+        return Err("正在安装更新，请重启后再打开新窗口。".into());
+    }
+    let temporary = !paths.is_empty();
+    let mut ws = workspace::WorkspaceService::default();
+    ws.configure(
+        app.path()
+            .app_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("workspaces.json"),
+    );
+    if temporary {
+        ws.disable_persistence()
+    }
+    app.state::<WorkspaceStore>().insert(label, ws)?;
+    let state = app.state::<session::LaunchStore>();
+    let mut registry = state.lock().map_err(|_| "启动状态不可用".to_string())?;
+    if !registry.windows.contains_key(label) {
+        registry.insert(label.into(), paths);
+    }
     app.state::<conversion::ConversionStore>().register(label);
     Ok(())
 }
 
-fn cleanup_window(app:&tauri::AppHandle,label:&str){
+fn cleanup_window(app: &tauri::AppHandle, label: &str) {
     app.state::<conversion::ConversionStore>().close(label);
-    if let Ok(mut registry)=app.state::<session::LaunchStore>().lock(){registry.remove(label);}
+    if let Ok(mut registry) = app.state::<session::LaunchStore>().lock() {
+        registry.remove(label);
+    }
     app.state::<WorkspaceStore>().remove(label);
 }
 
 /// Brings a window to the front and asks its frontend to open whatever was
 /// queued for it. The queued paths stay in the registry until the frontend
 /// drains them, so a request that arrives before the page is ready is not lost.
-fn deliver(app:&tauri::AppHandle,label:&str){
-    let Some(window)=app.get_webview_window(label) else { return };
-    let _=window.unminimize();
-    let _=window.set_focus();
-    let _=window.emit("files-pending",());
+fn deliver(app: &tauri::AppHandle, label: &str) {
+    let Some(window) = app.get_webview_window(label) else {
+        return;
+    };
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    let _ = window.emit("files-pending", ());
 }
 
 /// Asks a window to select tabs it already has, without reading the files again
 /// or creating duplicate tabs.
-fn activate(app:&tauri::AppHandle,label:&str,paths:&[PathBuf]){
-    let Some(window)=app.get_webview_window(label) else { return };
-    let _=window.unminimize();
-    let _=window.set_focus();
-    let _=window.emit("external-activate",paths.to_vec());
+fn activate(app: &tauri::AppHandle, label: &str, paths: &[PathBuf]) {
+    let Some(window) = app.get_webview_window(label) else {
+        return;
+    };
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    let _ = window.emit("external-activate", paths.to_vec());
 }
 
 /// External open router. One decision point for every file handed to Markumo
@@ -63,47 +83,74 @@ fn activate(app:&tauri::AppHandle,label:&str,paths:&[PathBuf]){
 /// * Otherwise the most recent single-file window takes the file as a new tab.
 /// * With no single-file window, one is created for this batch. A workspace
 ///   window is never given external files, so its tabs and unsaved work stay put.
-fn route_launch(app:tauri::AppHandle,paths:Vec<PathBuf>){
+fn route_launch(app: tauri::AppHandle, paths: Vec<PathBuf>) {
     // WebView2 window creation must run outside a synchronous event handler.
-    std::thread::spawn(move||{
-        let requested=session::normalize_external_paths(paths);
-        if requested.is_empty(){
+    std::thread::spawn(move || {
+        let requested = session::normalize_external_paths(paths);
+        if requested.is_empty() {
             // No usable file arguments: surface the primary window instead.
-            let label={
-                let state=app.state::<session::LaunchStore>();
-                let registry=match state.lock(){Ok(registry)=>registry,Err(_)=>return};
-                registry.owner().or_else(||registry.latest_window())
+            let label = {
+                let state = app.state::<session::LaunchStore>();
+                let registry = match state.lock() {
+                    Ok(registry) => registry,
+                    Err(_) => return,
+                };
+                registry.owner().or_else(|| registry.latest_window())
             };
-            if let Some(label)=label{deliver(&app,&label)}
+            if let Some(label) = label {
+                deliver(&app, &label)
+            }
             return;
         }
         // Ownership snapshot first, then one atomic registry decision. The two
         // locks are never held at the same time, so no ordering deadlock exists.
         // Native identities are resolved before taking the file-service lock so
         // a locked or slow file cannot stall every window.
-        let identities: Vec<_> = requested.iter().map(|path| files::file_identity(path)).collect();
-        let owners:Vec<Option<String>>={
-            let store=app.state::<FileStore>();
-            let files=match store.lock(){Ok(files)=>files,Err(_)=>return};
-            requested.iter().zip(identities).map(|(path,identity)|files.owner_of_path(path,identity)).collect()
+        let identities: Vec<_> = requested
+            .iter()
+            .map(|path| files::file_identity(path))
+            .collect();
+        let owners: Vec<Option<String>> = {
+            let store = app.state::<FileStore>();
+            let files = match store.lock() {
+                Ok(files) => files,
+                Err(_) => return,
+            };
+            requested
+                .iter()
+                .zip(identities)
+                .map(|(path, identity)| files.owner_of_path(path, identity))
+                .collect()
         };
-        let plan={
-            let state=app.state::<session::LaunchStore>();
-            let mut registry=match state.lock(){Ok(registry)=>registry,Err(_)=>return};
-            session::plan_external_open(&mut registry,&requested,&owners,&|label|app.get_webview_window(label).is_some())
+        let plan = {
+            let state = app.state::<session::LaunchStore>();
+            let mut registry = match state.lock() {
+                Ok(registry) => registry,
+                Err(_) => return,
+            };
+            session::plan_external_open(&mut registry, &requested, &owners, &|label| {
+                app.get_webview_window(label).is_some()
+            })
         };
-        for label in &plan.deliveries{deliver(&app,label)}
-        for (label,paths) in &plan.activate{activate(&app,label,paths)}
-        if let Some((label,initial))=plan.created{
-            if let Err(error)=register_window(&app,&label,initial){
+        for label in &plan.deliveries {
+            deliver(&app, label)
+        }
+        for (label, paths) in &plan.activate {
+            activate(&app, label, paths)
+        }
+        if let Some((label, initial)) = plan.created {
+            if let Err(error) = register_window(&app, &label, initial) {
                 eprintln!("启动窗口失败：{error}");
-                cleanup_window(&app,&label);
+                cleanup_window(&app, &label);
                 return;
             }
-            let mut config=app.config().app.windows[0].clone();config.label=label.clone();
-            if let Err(error)=tauri::WebviewWindowBuilder::from_config(&app,&config).and_then(|builder|builder.build()){
+            let mut config = app.config().app.windows[0].clone();
+            config.label = label.clone();
+            if let Err(error) = tauri::WebviewWindowBuilder::from_config(&app, &config)
+                .and_then(|builder| builder.build())
+            {
                 eprintln!("创建窗口失败：{error}");
-                cleanup_window(&app,&label);
+                cleanup_window(&app, &label);
             }
         }
     });
@@ -157,7 +204,7 @@ pub fn run() {
                     files.set_owner(window.label());
                     let inputs=files.image_inputs(paths.clone());
                     let scale=window.scale_factor().unwrap_or(1.0);
-                    let _=window.emit("native-file-drop",serde_json::json!({"inputs":inputs,"x":position.x as f64/scale,"y":position.y as f64/scale}));
+                    let _=window.emit("native-file-drop",serde_json::json!({"inputs":inputs,"x":position.x/scale,"y":position.y/scale}));
                 }
             }
             if let tauri::WindowEvent::Destroyed=event{

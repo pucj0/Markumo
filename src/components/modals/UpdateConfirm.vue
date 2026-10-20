@@ -10,6 +10,7 @@
 import {ref,onBeforeUnmount} from 'vue'
 import {useModal} from '../../features/shell/useModal'
 const {visible,dialogRef,open,close,handleKeydown}=useModal(),count=ref(0)
+void dialogRef // Bound by name in the template.
 let resolve:((value:boolean)=>void)|null=null
 function answer(value:boolean){const pending=resolve;resolve=null;close();pending?.(value)}
 function confirm(value:number):Promise<boolean>{answer(false);count.value=value;open();return new Promise(done=>resolve=done)}

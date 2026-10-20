@@ -3,7 +3,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import { safeMarkdownURL } from './links'
 
 export interface MarkdownResources {
-  loadLocal(path: string): Promise<Uint8Array>
+  loadLocal(path: string): Promise<Uint8Array<ArrayBuffer>>
   authorizeLocal?(path: string): Promise<boolean>
   allowedRemote: Set<string>
   identity(): string
@@ -13,7 +13,7 @@ export const markdownResources = Facet.define<MarkdownResources, MarkdownResourc
   combine: values => values[values.length - 1] || createMarkdownResources(() => undefined),
 })
 export function createMarkdownResources(token: () => string | undefined,identity:()=>string=()=>token()||''): MarkdownResources {
-  const pending=new Map<string,Promise<Uint8Array>>()
+  const pending=new Map<string,Promise<Uint8Array<ArrayBuffer>>>()
   let previousIdentity=identity(),cachedBytes=0
   return {
     allowedRemote: new Set(),

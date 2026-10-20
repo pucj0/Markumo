@@ -86,13 +86,19 @@ pub fn write_checked(path: &Path, bytes: &[u8], expected: Option<&str>) -> Resul
 /// callers must retain the associated media, never treat it as a failed write.
 /// This guarantees atomic visibility, not directory-entry durability on power loss.
 pub(crate) fn write_conversion_checked(
-    path: &Path, bytes: &[u8], expected: Option<&str>, validate: impl Fn() -> Result<()>,
+    path: &Path,
+    bytes: &[u8],
+    expected: Option<&str>,
+    validate: impl Fn() -> Result<()>,
 ) -> Result<()> {
     write_checked_inner(path, bytes, expected, true, validate)
 }
 
 fn write_checked_inner(
-    path: &Path, bytes: &[u8], expected: Option<&str>, conversion: bool,
+    path: &Path,
+    bytes: &[u8],
+    expected: Option<&str>,
+    conversion: bool,
     validate: impl Fn() -> Result<()>,
 ) -> Result<()> {
     // Resolve the target once. Internal callers such as the recent-file store
@@ -157,7 +163,9 @@ fn write_checked_inner(
         return fail("scope", "保存目标父目录或链接已变化。");
     }
     #[cfg(test)]
-    if fault::hit(fault::RACE_EXISTING) { fs::write(&path,b"external during staging").map_err(FileError::io)?; }
+    if fault::hit(fault::RACE_EXISTING) {
+        fs::write(&path, b"external during staging").map_err(FileError::io)?;
+    }
     if super::disk_version(&path)?.as_deref() != expected {
         return fail(
             "conflict",
@@ -187,14 +195,18 @@ fn write_checked_inner(
     }
     #[cfg(unix)]
     if conversion {
-        fs::File::open(parent).and_then(|file| file.sync_all()).map_err(FileError::io)?;
+        fs::File::open(parent)
+            .and_then(|file| file.sync_all())
+            .map_err(FileError::io)?;
     }
     validate()?;
     replace(&temp, &path, expected.is_some()).map_err(FileError::io)?;
     #[cfg(unix)]
-    if !conversion { fs::File::open(parent)
-        .and_then(|file| file.sync_all())
-        .map_err(FileError::io)?; }
+    if !conversion {
+        fs::File::open(parent)
+            .and_then(|file| file.sync_all())
+            .map_err(FileError::io)?;
+    }
     #[cfg(not(unix))]
     let _ = conversion;
     Ok(())
@@ -221,7 +233,11 @@ fn write_checked_inner(
 ///   the bytes read through that same handle, so an external change is still
 ///   detected and refused.
 /// * Creating a brand-new file (Save As to a new path) stays fully atomic.
-pub fn write_checked_preserving_identity(path: &Path, bytes: &[u8], expected: Option<&str>) -> Result<()> {
+pub fn write_checked_preserving_identity(
+    path: &Path,
+    bytes: &[u8],
+    expected: Option<&str>,
+) -> Result<()> {
     let path = super::checked_path(path, true)?;
     // New targets have no identity to preserve: keep the atomic creation path.
     if expected.is_none() || !path.exists() {
@@ -315,7 +331,10 @@ fn in_place_write(path: &Path, bytes: &[u8], expected: Option<&str>) -> Result<(
     // be written, so an external change between the first check and this point is
     // still refused before anything is modified.
     if super::version_of(&original, metadata.modified().ok()) != expected.unwrap_or_default() {
-        return fail("conflict", "磁盘文件已经变化或被删除；已阻止覆盖，请另存为或重新打开。");
+        return fail(
+            "conflict",
+            "磁盘文件已经变化或被删除；已阻止覆盖，请另存为或重新打开。",
+        );
     }
     // Recovery copy outside the target directory: never creates or removes an
     // entry next to the document, and stays usable if the write fails.
@@ -348,7 +367,9 @@ fn in_place_write(path: &Path, bytes: &[u8], expected: Option<&str>) -> Result<(
             Ok(()) => save_error(error, "写入目标文件失败，已回滚为保存前内容"),
             Err(restore) => {
                 let kept = backup.keep().map(|(_, path)| path);
-                let location = kept.map(|path| format!("；保存前内容备份保留在 {}", path.display())).unwrap_or_default();
+                let location = kept
+                    .map(|path| format!("；保存前内容备份保留在 {}", path.display()))
+                    .unwrap_or_default();
                 FileError::new("io", &format!("写入目标文件失败（{error}），且回滚失败（{restore}）{location}。请从该备份恢复文件。"))
             }
         });
@@ -455,7 +476,11 @@ fn replace(source: &Path, target: &Path, exists: bool) -> std::io::Result<()> {
 mod save_safety_tests {
     use super::*;
 
-    fn existing_target(dir: &tempfile::TempDir, name: &str, text: &[u8]) -> (std::path::PathBuf, String) {
+    fn existing_target(
+        dir: &tempfile::TempDir,
+        name: &str,
+        text: &[u8],
+    ) -> (std::path::PathBuf, String) {
         let path = dir.path().join(name);
         fs::write(&path, text).unwrap();
         let version = super::super::disk_version(&path).unwrap().unwrap();
@@ -515,7 +540,11 @@ mod save_safety_tests {
             let result = write_checked(&path, b"replacement", Some(&version));
             fault::clear();
             assert!(result.is_err(), "fault point {point} did not fail the save");
-            assert_eq!(fs::read(&path).unwrap(), b"original", "fault point {point} changed the target");
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                b"original",
+                "fault point {point} changed the target"
+            );
         }
     }
 
@@ -584,14 +613,22 @@ mod save_safety_tests {
     #[cfg(windows)]
     #[test]
     fn write_failure_and_partial_write_are_rolled_back() {
-        for point in [fault::TARGET_WRITE, fault::PARTIAL_WRITE, fault::TARGET_SYNC] {
+        for point in [
+            fault::TARGET_WRITE,
+            fault::PARTIAL_WRITE,
+            fault::TARGET_SYNC,
+        ] {
             let directory = tempfile::tempdir().unwrap();
             let (path, version) = existing_target(&directory, "note.txt", b"original content");
             fault::clear();
             fault::set(point);
-            let result = write_checked_preserving_identity(&path, b"replacement content", Some(&version));
+            let result =
+                write_checked_preserving_identity(&path, b"replacement content", Some(&version));
             fault::clear();
-            assert!(result.is_err(), "fault point {point} did not fail the write");
+            assert!(
+                result.is_err(),
+                "fault point {point} did not fail the write"
+            );
             assert_eq!(
                 fs::read(&path).unwrap(),
                 b"original content",
@@ -607,7 +644,8 @@ mod save_safety_tests {
         let (path, version) = existing_target(&directory, "note.txt", b"recoverable original");
         fault::clear();
         fault::set(fault::PARTIAL_WRITE | fault::ROLLBACK_FAIL);
-        let error = write_checked_preserving_identity(&path, b"replacement", Some(&version)).unwrap_err();
+        let error =
+            write_checked_preserving_identity(&path, b"replacement", Some(&version)).unwrap_err();
         fault::clear();
         assert!(error.message.contains("备份保留在"), "{}", error.message);
         let location = error.message.split("备份保留在 ").nth(1).unwrap();

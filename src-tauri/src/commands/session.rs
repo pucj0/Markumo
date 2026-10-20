@@ -123,6 +123,9 @@ pub async fn initialize_launch(
 }
 
 #[tauri::command]
+// Tauri injects each managed state handle independently; grouping them would
+// change the command contract used by the frontend.
+#[allow(clippy::too_many_arguments)]
 pub async fn persist_session(
     window: Window,
     input: SessionInput,
@@ -135,7 +138,10 @@ pub async fn persist_session(
 ) -> Result<(), String> {
     let label = window.label();
     if for_update.unwrap_or(false) {
-        updates.lock().map_err(|e|e.to_string())?.require_owner(label)?;
+        updates
+            .lock()
+            .map_err(|e| e.to_string())?
+            .require_owner(label)?;
     } else if launches
         .lock()
         .map_err(|e| e.to_string())?

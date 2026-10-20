@@ -322,6 +322,7 @@ const emit = defineEmits<{
 }>()
 
 const { visible, dialogRef, open, close, handleKeydown } = useModal()
+void dialogRef // Bound by name in the template.
 
 function updateClipboard(key: keyof MarkdownClipboardSettings, value: boolean) {
   emit('update:markdownClipboard', { ...(props.markdownClipboard || defaultMarkdownClipboard()), [key]: value })

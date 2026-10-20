@@ -1,6 +1,7 @@
 //! Native capabilities and bounded staging for document conversion only.
 mod engine;
 mod lease;
+mod remote;
 pub use engine::*;
 pub use lease::*;
 

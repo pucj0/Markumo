@@ -70,6 +70,7 @@ pub struct WorkspacePreferences {
     pub active_roots: Vec<String>,
 }
 
+#[derive(Default)]
 pub struct WorkspaceService {
     current_root: Option<PathBuf>,
     additional_roots: Vec<PathBuf>,
@@ -78,27 +79,21 @@ pub struct WorkspaceService {
     pub show_ignored: bool,
 }
 
-impl Default for WorkspaceService {
-    fn default() -> Self {
-        Self {
-            current_root: None,
-            additional_roots: Vec::new(),
-            storage_path: None,
-            preferences: WorkspacePreferences::default(),
-            show_ignored: false,
-        }
-    }
-}
-
 impl WorkspaceService {
-    pub fn disable_persistence(&mut self) { self.storage_path=None; }
+    pub fn disable_persistence(&mut self) {
+        self.storage_path = None;
+    }
     pub fn configure(&mut self, storage_path: PathBuf) {
         self.storage_path = Some(storage_path.clone());
-        let Ok(metadata) = fs::metadata(&storage_path) else { return };
+        let Ok(metadata) = fs::metadata(&storage_path) else {
+            return;
+        };
         if !metadata.is_file() || metadata.len() > MAX_PREFERENCES_BYTES {
             return;
         }
-        let Ok(file) = fs::File::open(&storage_path) else { return };
+        let Ok(file) = fs::File::open(&storage_path) else {
+            return;
+        };
         let mut bytes = Vec::new();
         if file
             .take(MAX_PREFERENCES_BYTES + 1)
@@ -332,17 +327,27 @@ impl WorkspaceService {
         self.read_directory_internal(&valid_dir)
     }
     pub fn file_visible(&self, path: &Path) -> bool {
-        let Ok(root) = self.root_for_path(path) else { return false };
-        let Ok(target) = validate_under_root(root, path) else { return false };
-        if !target.is_file() { return false; }
+        let Ok(root) = self.root_for_path(path) else {
+            return false;
+        };
+        let Ok(target) = validate_under_root(root, path) else {
+            return false;
+        };
+        if !target.is_file() {
+            return false;
+        }
         let rules = IgnoreRuleSet::new(root, self.show_ignored);
-        !target.ancestors().take_while(|entry| *entry != root)
+        !target
+            .ancestors()
+            .take_while(|entry| *entry != root)
             .any(|entry| rules.is_ignored(entry, entry != target))
     }
-    pub fn revealed_path(&self, path: &Path) -> Result<PathBuf,String> {
+    pub fn revealed_path(&self, path: &Path) -> Result<PathBuf, String> {
         let root = self.root_for_path(path)?;
-        let target = validate_under_root(root,path).map_err(|error|error.to_string())?;
-        if !target.exists() { return Err("目标不存在。".into()); }
+        let target = validate_under_root(root, path).map_err(|error| error.to_string())?;
+        if !target.exists() {
+            return Err("目标不存在。".into());
+        }
         Ok(target)
     }
 

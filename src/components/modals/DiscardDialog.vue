@@ -18,6 +18,7 @@ import { useModal } from '../../features/shell/useModal'
 const props = defineProps<{ canSave: boolean; busy: boolean }>()
 const emit = defineEmits<{ (e: 'discard'): void; (e: 'save'): void; (e:'cancel'):void }>()
 const { visible, dialogRef, open: openModal, close, handleKeydown: modalKeydown } = useModal()
+void dialogRef // Bound by name in the template.
 function cancel(){close();emit('cancel')}
 function handleKeydown(event: KeyboardEvent) { if (event.isComposing) return; if (props.busy) { event.preventDefault(); return }; if(event.key==='Escape'){event.preventDefault();cancel()}else modalKeydown(event) }
 const name = ref('')

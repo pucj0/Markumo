@@ -187,6 +187,9 @@ const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,update
   gotoLineRef, handleGotoLine, revealInExplorerToken,
   desktop, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading, startupError, settingsReady, updateInstalling } = useAppShell()
 defineExpose({ settingsReady })
+// These refs are bound by name from the template only; TypeScript cannot see
+// string template refs, so reference them explicitly.
+void [updateConfirmRef, paletteRef, discardRef, toastRef, gotoLineRef]
 
 const activeDocLineCount = computed(() => {
   if (!activeDoc.value) return 1

@@ -151,7 +151,9 @@ fn signature(bytes: &[u8]) -> Option<(FileKind, &'static str, &'static str)> {
                 || bytes.get(8..12) == Some(b"avis")
                 || bytes
                     .get(16..length)?
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .any(|b| b == b"avif" || b == b"avis"))
         {
             return image("image/avif", "AVIF");
@@ -227,7 +229,7 @@ fn changed_time(file: &fs::File, meta: &fs::Metadata) -> Result<String> {
         let _ = meta;
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::Storage::FileSystem::{
-            GetFileInformationByHandleEx, FileBasicInfo, FILE_BASIC_INFO,
+            FileBasicInfo, GetFileInformationByHandleEx, FILE_BASIC_INFO,
         };
         let mut info: FILE_BASIC_INFO = unsafe { std::mem::zeroed() };
         let ok = unsafe {
@@ -278,7 +280,8 @@ fn content_fingerprint(file: &mut fs::File, len: u64) -> Result<String> {
         hasher.update(&buffer[..prefix_len]);
 
         if len > VERSION_SAMPLE_BYTES as u64 {
-            let suffix_len = (len - VERSION_SAMPLE_BYTES as u64).min(VERSION_SAMPLE_BYTES as u64) as usize;
+            let suffix_len =
+                (len - VERSION_SAMPLE_BYTES as u64).min(VERSION_SAMPLE_BYTES as u64) as usize;
             let offset = len - suffix_len as u64;
             read_sample(file, &mut buffer[..suffix_len], offset)?;
             hasher.update(b"tail");
@@ -287,7 +290,8 @@ fn content_fingerprint(file: &mut fs::File, len: u64) -> Result<String> {
         }
         Ok(format!("{:x}", hasher.finalize()))
     })();
-    file.seek(SeekFrom::Start(position)).map_err(FileError::io)?;
+    file.seek(SeekFrom::Start(position))
+        .map_err(FileError::io)?;
     result
 }
 
@@ -318,7 +322,6 @@ fn read_at(file: &mut fs::File, buffer: &mut [u8], offset: u64) -> std::io::Resu
     clone.seek(SeekFrom::Start(offset))?;
     clone.read(buffer)
 }
-
 
 fn open(path: &Path) -> Result<fs::File> {
     let file = fs::File::open(path).map_err(FileError::io)?;
@@ -474,7 +477,8 @@ mod tests {
 
     fn set_mtime(path: &Path, modified: std::time::SystemTime) {
         let file = fs::OpenOptions::new().write(true).open(path).unwrap();
-        file.set_times(fs::FileTimes::new().set_modified(modified)).unwrap();
+        file.set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
     }
 
     fn pdf_with_len(len: usize) -> Vec<u8> {
@@ -562,10 +566,14 @@ mod tests {
         fs::rename(&path, &original).unwrap();
         fs::write(&path, b"%PDF-2.0\n").unwrap();
         let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
-        file.set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
         drop(file);
         let replacement_meta = fs::metadata(&path).unwrap();
-        assert_eq!(replacement_meta.len(), fs::metadata(&original).unwrap().len());
+        assert_eq!(
+            replacement_meta.len(),
+            fs::metadata(&original).unwrap().len()
+        );
         assert_eq!(replacement_meta.modified().unwrap(), modified);
         #[cfg(windows)]
         assert_ne!(
@@ -577,7 +585,9 @@ mod tests {
             use std::os::unix::fs::MetadataExt;
             assert_ne!(old_handle.metadata().unwrap().ino(), replacement_meta.ino());
         }
-        let error = service.read_media_chunk(&token, &version, 0, 5).unwrap_err();
+        let error = service
+            .read_media_chunk(&token, &version, 0, 5)
+            .unwrap_err();
         assert_eq!(error.code, "conflict");
         drop(old_handle);
     }
@@ -606,8 +616,13 @@ mod tests {
             if !before.is_empty() && before == after {
                 inode_reused = true;
             }
-            let error = service.read_media_chunk(&token, &version, 0, 5).unwrap_err();
-            assert_eq!(error.code, "conflict", "attempt {attempt}: inode_reused={inode_reused}");
+            let error = service
+                .read_media_chunk(&token, &version, 0, 5)
+                .unwrap_err();
+            assert_eq!(
+                error.code, "conflict",
+                "attempt {attempt}: inode_reused={inode_reused}"
+            );
             service.release(&token);
             if inode_reused {
                 eprintln!(
@@ -642,17 +657,26 @@ mod tests {
         while offset < bytes.len() {
             let length = (bytes.len() - offset).min(CHUNK_BYTES);
             read.extend_from_slice(
-                &service.read_media_chunk(&token, &version, offset as u64, length).unwrap(),
+                &service
+                    .read_media_chunk(&token, &version, offset as u64, length)
+                    .unwrap(),
             );
             offset += length;
         }
         assert_eq!(read, bytes);
         assert!(service.read_media_chunk(&token, &version, 0, 0).is_err());
-        assert!(service.read_media_chunk(&token, &version, 0, CHUNK_BYTES + 1).is_err());
+        assert!(service
+            .read_media_chunk(&token, &version, 0, CHUNK_BYTES + 1)
+            .is_err());
         let last = bytes.len() as u64 - 1;
-        assert_eq!(service.read_media_chunk(&token, &version, last, 1).unwrap(), vec![b' ']);
+        assert_eq!(
+            service.read_media_chunk(&token, &version, last, 1).unwrap(),
+            vec![b' ']
+        );
         assert!(service.read_media_chunk(&token, &version, last, 2).is_err());
-        assert!(service.read_media_chunk(&token, &version, bytes.len() as u64, 1).is_err());
+        assert!(service
+            .read_media_chunk(&token, &version, bytes.len() as u64, 1)
+            .is_err());
         service.release(&token);
 
         #[cfg(windows)]
@@ -684,7 +708,9 @@ mod tests {
         // native change timestamp must force a conflict.
         fs::write(&path, b"%PDF-9.9\n").unwrap();
         set_mtime(&path, modified);
-        let conflict = service.read_media_chunk(&token, &version, 0, 5).unwrap_err();
+        let conflict = service
+            .read_media_chunk(&token, &version, 0, 5)
+            .unwrap_err();
         assert_eq!(conflict.code, "conflict");
 
         fs::remove_file(&path).unwrap();
@@ -722,7 +748,9 @@ mod tests {
             .unwrap()
             .set_len(128)
             .unwrap();
-        let error = service.read_media_chunk(&token, &version, CHUNK_BYTES as u64, 128).unwrap_err();
+        let error = service
+            .read_media_chunk(&token, &version, CHUNK_BYTES as u64, 128)
+            .unwrap_err();
         assert_eq!(error.code, "conflict");
     }
 
@@ -737,7 +765,10 @@ mod tests {
         let error = service.reopen(&media.metadata.token, "Hex").unwrap_err();
         assert_eq!(error.code, "scope");
         // Reopening the same preview as media remains allowed and read-only.
-        assert_eq!(service.reopen(&media.metadata.token, "Media").unwrap().kind, FileKind::Pdf);
+        assert_eq!(
+            service.reopen(&media.metadata.token, "Media").unwrap().kind,
+            FileKind::Pdf
+        );
 
         let text = directory.path().join("notes.txt");
         fs::write(&text, "plain text").unwrap();

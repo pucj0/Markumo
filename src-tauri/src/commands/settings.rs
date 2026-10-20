@@ -44,28 +44,57 @@ pub struct EditorSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct MarkdownTypography {
-    width: u16, font_size: u8, font_family: String, line_height: f64,
-    code_line_numbers: bool, code_wrap: bool, image_border: bool,
+    width: u16,
+    font_size: u8,
+    font_family: String,
+    line_height: f64,
+    code_line_numbers: bool,
+    code_wrap: bool,
+    image_border: bool,
 }
 impl Default for MarkdownTypography {
-    fn default() -> Self { Self { width: 860, font_size: 16, font_family: "system".into(), line_height: 1.6, code_line_numbers: true, code_wrap: false, image_border: true } }
+    fn default() -> Self {
+        Self {
+            width: 860,
+            font_size: 16,
+            font_family: "system".into(),
+            line_height: 1.6,
+            code_line_numbers: true,
+            code_wrap: false,
+            image_border: true,
+        }
+    }
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
-pub struct MarkdownClipboard { copy_markdown: bool, copy_whole_line: bool }
-impl Default for MarkdownClipboard {
-    fn default() -> Self { Self { copy_markdown: false, copy_whole_line: false } }
+pub struct MarkdownClipboard {
+    copy_markdown: bool,
+    copy_whole_line: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImageRules {
-    location: String, custom_directory: String, relative: bool, dot_prefix: bool, escape: bool,
+    location: String,
+    custom_directory: String,
+    relative: bool,
+    dot_prefix: bool,
+    escape: bool,
 }
 impl Default for ImageRules {
-    fn default()->Self { Self{location:"assets".into(),custom_directory:"./assets/".into(),relative:true,dot_prefix:true,escape:true} }
+    fn default() -> Self {
+        Self {
+            location: "assets".into(),
+            custom_directory: "./assets/".into(),
+            relative: true,
+            dot_prefix: true,
+            escape: true,
+        }
+    }
 }
-fn valid_image_rules(rules: &ImageRules)->bool {
-    ["original","sibling","assets","document","custom"].contains(&rules.location.as_str()) && rules.custom_directory.len()<=4096 && !rules.custom_directory.contains('\0')
+fn valid_image_rules(rules: &ImageRules) -> bool {
+    ["original", "sibling", "assets", "document", "custom"].contains(&rules.location.as_str())
+        && rules.custom_directory.len() <= 4096
+        && !rules.custom_directory.contains('\0')
 }
 impl Default for EditorSettings {
     fn default() -> Self {
@@ -113,21 +142,44 @@ fn legacy_settings_version() -> u8 {
 fn legacy_shortcut_version() -> u8 {
     1
 }
-fn deserialize_keymap_preset<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+fn deserialize_keymap_preset<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
     let value = String::deserialize(deserializer)?;
-    Ok(if value == "lightedit" { "markumo".into() } else { value })
+    Ok(if value == "lightedit" {
+        "markumo".into()
+    } else {
+        value
+    })
 }
 fn validate(settings: &EditorSettings) -> Result<(), String> {
     if !["off", "matching", "rainbow"].contains(&settings.bracket_mode.as_str()) {
         return Err("不支持的括号高亮模式".into());
     }
-    if !["soft", "standard", "vivid", "fleet", "fleet-dark", "fleet-light", "monokai-pro", "monokai-classic", "one-dark", "github-dark", "github-light"].contains(&settings.syntax_style.as_str()) {
+    if ![
+        "soft",
+        "standard",
+        "vivid",
+        "fleet",
+        "fleet-dark",
+        "fleet-light",
+        "monokai-pro",
+        "monokai-classic",
+        "one-dark",
+        "github-dark",
+        "github-light",
+    ]
+    .contains(&settings.syntax_style.as_str())
+    {
         return Err("不支持的编辑器配色".into());
     }
     let md = &settings.markdown_typography;
-    if !(480..=1400).contains(&md.width) || !(12..=28).contains(&md.font_size)
-        || !md.line_height.is_finite() || !(1.2..=2.4).contains(&md.line_height)
-        || !["system", "serif", "mono"].contains(&md.font_family.as_str()) {
+    if !(480..=1400).contains(&md.width)
+        || !(12..=28).contains(&md.font_size)
+        || !md.line_height.is_finite()
+        || !(1.2..=2.4).contains(&md.line_height)
+        || !["system", "serif", "mono"].contains(&md.font_family.as_str())
+    {
         return Err("Markdown 排版设置超出支持范围".into());
     }
     if !["dark", "light", "system"].contains(&settings.theme.as_str())
@@ -143,13 +195,16 @@ fn validate(settings: &EditorSettings) -> Result<(), String> {
         || !(1..=6).contains(&settings.settings_version)
         || !(1..=4).contains(&settings.shortcut_version)
         || settings.custom_shortcuts.len() > 128
-        || settings.custom_shortcuts.iter().any(|id| id.len()>64)
+        || settings.custom_shortcuts.iter().any(|id| id.len() > 64)
         || !["live", "source", "split"].contains(&settings.default_md_mode.as_str())
         || settings.file_modes.len() > 100
         || settings.shortcuts.len() > 128
         || !valid_image_rules(&settings.image_rules)
-        || settings.document_image_rules.len()>100
-        || settings.document_image_rules.iter().any(|(key,value)|key.len()>16384||!valid_image_rules(value))
+        || settings.document_image_rules.len() > 100
+        || settings
+            .document_image_rules
+            .iter()
+            .any(|(key, value)| key.len() > 16384 || !valid_image_rules(value))
     {
         return Err("首选项超出支持范围".into());
     }
@@ -171,8 +226,9 @@ fn load(path: &std::path::Path) -> Result<EditorSettings, String> {
     if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > 128 * 1024 {
         return Err("首选项文件过大".into());
     }
-    let mut settings: EditorSettings = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("首选项损坏: {e}"))?;
+    let mut settings: EditorSettings =
+        serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("首选项损坏: {e}"))?;
     settings.syntax_style = match settings.syntax_style.as_str() {
         "fleet" | "fleet-dark" | "fleet-light" => "soft".into(),
         "monokai-pro" | "monokai-classic" => "vivid".into(),
@@ -231,7 +287,8 @@ mod branding_tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         for mode in ["off", "matching", "rainbow"] {
-            let settings: EditorSettings = serde_json::from_value(serde_json::json!({"bracketMode": mode})).unwrap();
+            let settings: EditorSettings =
+                serde_json::from_value(serde_json::json!({"bracketMode": mode})).unwrap();
             save(&path, &settings).unwrap();
             assert_eq!(load(&path).unwrap().bracket_mode, mode);
         }
@@ -244,8 +301,21 @@ mod branding_tests {
         assert_eq!(old.syntax_style, "soft");
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
-        for style in ["soft", "standard", "vivid", "fleet", "fleet-dark", "fleet-light", "monokai-pro", "monokai-classic", "one-dark", "github-dark", "github-light"] {
-            let settings: EditorSettings = serde_json::from_value(serde_json::json!({"syntaxStyle": style})).unwrap();
+        for style in [
+            "soft",
+            "standard",
+            "vivid",
+            "fleet",
+            "fleet-dark",
+            "fleet-light",
+            "monokai-pro",
+            "monokai-classic",
+            "one-dark",
+            "github-dark",
+            "github-light",
+        ] {
+            let settings: EditorSettings =
+                serde_json::from_value(serde_json::json!({"syntaxStyle": style})).unwrap();
             save(&path, &settings).unwrap();
             let expected = match style {
                 "fleet" | "fleet-dark" | "fleet-light" => "soft",
@@ -285,13 +355,22 @@ mod branding_tests {
         assert!(!legacy.compact_folders);
     }
     #[test]
-    fn background_update_preferences_default_and_disk_round_trip(){
-        let old:EditorSettings=serde_json::from_str(r#"{"theme":"dark","fontSize":18}"#).unwrap();
-        assert!(old.auto_check_updates);assert!(!old.auto_download_updates);
-        let temp=tempfile::tempdir().unwrap();let path=temp.path().join("settings.json");
-        let mut settings=old;settings.auto_check_updates=false;settings.auto_download_updates=true;
-        save(&path,&settings).unwrap();let loaded=load(&path).unwrap();
-        assert!(!loaded.auto_check_updates);assert!(loaded.auto_download_updates);assert_eq!(loaded.theme,"dark");assert_eq!(loaded.font_size,18);
+    fn background_update_preferences_default_and_disk_round_trip() {
+        let old: EditorSettings =
+            serde_json::from_str(r#"{"theme":"dark","fontSize":18}"#).unwrap();
+        assert!(old.auto_check_updates);
+        assert!(!old.auto_download_updates);
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        let mut settings = old;
+        settings.auto_check_updates = false;
+        settings.auto_download_updates = true;
+        save(&path, &settings).unwrap();
+        let loaded = load(&path).unwrap();
+        assert!(!loaded.auto_check_updates);
+        assert!(loaded.auto_download_updates);
+        assert_eq!(loaded.theme, "dark");
+        assert_eq!(loaded.font_size, 18);
     }
 
     #[test]
@@ -302,15 +381,20 @@ mod branding_tests {
         let path = directory.path().join("editor-settings.json");
         for mode in ["off", "quick", "smooth"] {
             // Includes the mode preference saved after clicking rich text.
-            let input = serde_json::json!({"caretAnimation": mode, "fileModes": {"C:/README.md": "live"}});
+            let input =
+                serde_json::json!({"caretAnimation": mode, "fileModes": {"C:/README.md": "live"}});
             let settings: EditorSettings = serde_json::from_value(input).unwrap();
             save(&path, &settings).unwrap();
             let loaded = load(&path).unwrap();
             assert_eq!(loaded.caret_animation, mode);
             assert_eq!(loaded.file_modes["C:/README.md"], "live");
-            assert_eq!(serde_json::to_value(loaded).unwrap()["caretAnimation"], mode);
+            assert_eq!(
+                serde_json::to_value(loaded).unwrap()["caretAnimation"],
+                mode
+            );
         }
-        let invalid: EditorSettings = serde_json::from_str(r#"{"caretAnimation":"invalid"}"#).unwrap();
+        let invalid: EditorSettings =
+            serde_json::from_str(r#"{"caretAnimation":"invalid"}"#).unwrap();
         assert!(validate(&invalid).is_err());
         assert!(serde_json::from_str::<EditorSettings>(r#"{"caretAnimation":null}"#).is_err());
     }
@@ -326,14 +410,14 @@ mod branding_tests {
                 "caretAnimation":"quick","autoDownloadUpdates":true
             });
             let settings: EditorSettings = serde_json::from_value(input).unwrap();
-            save(&path,&settings).unwrap();
+            save(&path, &settings).unwrap();
             let loaded = load(&path).unwrap();
-            assert_eq!(loaded.shortcut_version,4);
-            assert_eq!(loaded.keymap_preset,preset);
-            assert_eq!(loaded.shortcuts["table"],"");
-            assert_eq!(loaded.shortcuts["close-pane"],"Mod+Alt+W");
-            assert_eq!(loaded.custom_shortcuts,vec!["table","close-pane"]);
-            assert_eq!(loaded.caret_animation,"quick");
+            assert_eq!(loaded.shortcut_version, 4);
+            assert_eq!(loaded.keymap_preset, preset);
+            assert_eq!(loaded.shortcuts["table"], "");
+            assert_eq!(loaded.shortcuts["close-pane"], "Mod+Alt+W");
+            assert_eq!(loaded.custom_shortcuts, vec!["table", "close-pane"]);
+            assert_eq!(loaded.caret_animation, "quick");
             assert!(loaded.auto_download_updates);
         }
     }
@@ -346,7 +430,8 @@ mod branding_tests {
         validate(&settings).unwrap();
         assert_eq!(serde_json::to_value(settings).unwrap()["outlineWidth"], 360);
         for width in [0, 159, 521] {
-            let invalid: EditorSettings = serde_json::from_str(&format!(r#"{{"outlineWidth":{width}}}"#)).unwrap();
+            let invalid: EditorSettings =
+                serde_json::from_str(&format!(r#"{{"outlineWidth":{width}}}"#)).unwrap();
             assert!(validate(&invalid).is_err());
         }
     }
@@ -356,12 +441,18 @@ mod branding_tests {
         let old: EditorSettings = serde_json::from_str("{}").unwrap();
         assert!(!old.markdown_clipboard.copy_markdown);
         assert!(!old.markdown_clipboard.copy_whole_line);
-        let settings: EditorSettings = serde_json::from_str(r#"{"markdownClipboard":{"copyMarkdown":false,"copyWholeLine":true}}"#).unwrap();
+        let settings: EditorSettings = serde_json::from_str(
+            r#"{"markdownClipboard":{"copyMarkdown":false,"copyWholeLine":true}}"#,
+        )
+        .unwrap();
         validate(&settings).unwrap();
         let value = serde_json::to_value(settings).unwrap();
         assert_eq!(value["markdownClipboard"]["copyMarkdown"], false);
         assert_eq!(value["markdownClipboard"]["copyWholeLine"], true);
-        assert!(serde_json::from_str::<EditorSettings>(r#"{"markdownClipboard":{"copyMarkdown":"false"}}"#).is_err());
+        assert!(serde_json::from_str::<EditorSettings>(
+            r#"{"markdownClipboard":{"copyMarkdown":"false"}}"#
+        )
+        .is_err());
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         // Legacy versions (1, 5) and current version (6) preserve explicitly saved copyMarkdown values (true or false).
@@ -370,7 +461,8 @@ mod branding_tests {
             let settings: EditorSettings = serde_json::from_value(serde_json::json!({
                 "settingsVersion": version,
                 "markdownClipboard": {"copyMarkdown": true, "copyWholeLine": true}
-            })).unwrap();
+            }))
+            .unwrap();
             save(&path, &settings).unwrap();
             let loaded = load(&path).unwrap();
             assert!(loaded.markdown_clipboard.copy_markdown);
@@ -380,7 +472,8 @@ mod branding_tests {
             let settings: EditorSettings = serde_json::from_value(serde_json::json!({
                 "settingsVersion": version,
                 "markdownClipboard": {"copyMarkdown": false, "copyWholeLine": true}
-            })).unwrap();
+            }))
+            .unwrap();
             save(&path, &settings).unwrap();
             let loaded = load(&path).unwrap();
             assert!(!loaded.markdown_clipboard.copy_markdown);
@@ -390,7 +483,8 @@ mod branding_tests {
             let settings: EditorSettings = serde_json::from_value(serde_json::json!({
                 "settingsVersion": version,
                 "markdownClipboard": {"copyWholeLine": true}
-            })).unwrap();
+            }))
+            .unwrap();
             save(&path, &settings).unwrap();
             let loaded = load(&path).unwrap();
             assert!(!loaded.markdown_clipboard.copy_markdown);
@@ -399,7 +493,8 @@ mod branding_tests {
         for version in [1, 5, 6] {
             let settings: EditorSettings = serde_json::from_value(serde_json::json!({
                 "settingsVersion": version
-            })).unwrap();
+            }))
+            .unwrap();
             save(&path, &settings).unwrap();
             let loaded = load(&path).unwrap();
             assert!(!loaded.markdown_clipboard.copy_markdown);
@@ -409,7 +504,9 @@ mod branding_tests {
 
     #[test]
     fn old_preset_is_read_but_only_markumo_is_serialized() {
-        let settings: EditorSettings = serde_json::from_str(r#"{"keymapPreset":"lightedit","fontSize":19,"autoSave":true}"#).unwrap();
+        let settings: EditorSettings =
+            serde_json::from_str(r#"{"keymapPreset":"lightedit","fontSize":19,"autoSave":true}"#)
+                .unwrap();
         validate(&settings).unwrap();
         let value = serde_json::to_value(&settings).unwrap();
         assert_eq!(value["keymapPreset"], "markumo");
@@ -447,7 +544,12 @@ mod branding_tests {
         ] {
             let mut settings = EditorSettings::default();
             settings.image_rules.custom_directory = value.to_string();
-            assert_eq!(save(&path, &settings).is_ok(), accepted, "customDirectory bytes={}", value.len());
+            assert_eq!(
+                save(&path, &settings).is_ok(),
+                accepted,
+                "customDirectory bytes={}",
+                value.len()
+            );
         }
     }
 
@@ -470,11 +572,25 @@ mod branding_tests {
             (emoji_over.as_str(), false),
         ] {
             let mut modes = EditorSettings::default();
-            modes.file_modes.insert(key.to_string(), "source".to_string());
-            assert_eq!(save(&path, &modes).is_ok(), accepted, "fileModes key bytes={}", key.len());
+            modes
+                .file_modes
+                .insert(key.to_string(), "source".to_string());
+            assert_eq!(
+                save(&path, &modes).is_ok(),
+                accepted,
+                "fileModes key bytes={}",
+                key.len()
+            );
             let mut rules = EditorSettings::default();
-            rules.document_image_rules.insert(key.to_string(), ImageRules::default());
-            assert_eq!(save(&path, &rules).is_ok(), accepted, "documentImageRules key bytes={}", key.len());
+            rules
+                .document_image_rules
+                .insert(key.to_string(), ImageRules::default());
+            assert_eq!(
+                save(&path, &rules).is_ok(),
+                accepted,
+                "documentImageRules key bytes={}",
+                key.len()
+            );
         }
     }
 
@@ -493,10 +609,16 @@ mod branding_tests {
         save(&path, &settings).unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.file_modes.len(), 3);
-        assert_eq!(loaded.file_modes.get("__proto__").map(String::as_str), Some("source"));
+        assert_eq!(
+            loaded.file_modes.get("__proto__").map(String::as_str),
+            Some("source")
+        );
         assert_eq!(loaded.document_image_rules.len(), 1);
         let value = serde_json::to_value(&loaded).unwrap();
         assert_eq!(value["fileModes"]["constructor"], "live");
-        assert_eq!(value["documentImageRules"]["__proto__"]["location"], "sibling");
+        assert_eq!(
+            value["documentImageRules"]["__proto__"]["location"],
+            "sibling"
+        );
     }
 }

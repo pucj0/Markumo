@@ -30,31 +30,46 @@ pub async fn open_external_link(url: String) -> Result<(), String> {
         #[cfg(windows)]
         {
             use windows_sys::Win32::UI::Shell::ShellExecuteW;
-            let wide:Vec<u16>=url.encode_utf16().chain(Some(0)).collect();
+            let wide: Vec<u16> = url.encode_utf16().chain(Some(0)).collect();
             // Dispatch directly through the registered URL association. Waiting
             // for rundll32 can otherwise leave a click pending without feedback.
-            let result=unsafe{ShellExecuteW(std::ptr::null_mut(),std::ptr::null(),wide.as_ptr(),std::ptr::null(),std::ptr::null(),1)} as isize;
-            return if result>32 {Ok(())}else{Err(format!("系统浏览器未能打开链接（错误 {result}），请检查 HTTP/HTTPS 默认浏览器。"))};
+            let result = unsafe {
+                ShellExecuteW(
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    wide.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    1,
+                )
+            } as isize;
+            if result > 32 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "系统浏览器未能打开链接（错误 {result}），请检查 HTTP/HTTPS 默认浏览器。"
+                ))
+            }
         }
         #[cfg(not(windows))]
         {
-        #[cfg(target_os = "macos")]
-        let mut command = {
-            let mut command = std::process::Command::new("open");
-            command.arg(&url);
-            command
-        };
-        #[cfg(all(not(windows), not(target_os = "macos")))]
-        let mut command = {
-            let mut command = std::process::Command::new("xdg-open");
-            command.arg(&url);
-            command
-        };
-        let status = command.status().map_err(|e| format!("打开链接失败: {e}"))?;
-        if !status.success() {
-            return Err("系统浏览器未能打开链接".into());
-        }
-        Ok(())
+            #[cfg(target_os = "macos")]
+            let mut command = {
+                let mut command = std::process::Command::new("open");
+                command.arg(&url);
+                command
+            };
+            #[cfg(all(not(windows), not(target_os = "macos")))]
+            let mut command = {
+                let mut command = std::process::Command::new("xdg-open");
+                command.arg(&url);
+                command
+            };
+            let status = command.status().map_err(|e| format!("打开链接失败: {e}"))?;
+            if !status.success() {
+                return Err("系统浏览器未能打开链接".into());
+            }
+            Ok(())
         }
     })
     .await
@@ -64,7 +79,8 @@ pub async fn open_external_link(url: String) -> Result<(), String> {
 #[cfg(test)]
 mod link_tests {
     use super::*;
-    #[test] fn browser_links_reject_executable_schemes_and_embedded_credentials(){
+    #[test]
+    fn browser_links_reject_executable_schemes_and_embedded_credentials() {
         assert!(validated_external_url("https://github.com/pucj0/Markumo/releases/latest").is_ok());
         assert!(validated_external_url("javascript:alert(1)").is_err());
         assert!(validated_external_url("file:///C:/Windows/system32/cmd.exe").is_err());
