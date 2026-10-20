@@ -169,7 +169,6 @@ function changeMarkdownMode(mode: MarkdownMode) {
 }
 
 function updateMarkdownWidth(width: number) {
-  props.manager.setMarkdownTypography({ ...props.manager.getMarkdownTypography(), width })
   emit('update:markdown-width', width)
 }
 

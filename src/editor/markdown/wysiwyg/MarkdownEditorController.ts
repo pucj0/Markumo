@@ -69,6 +69,7 @@ export class MarkdownEditorController implements LiveEditor {
   private onCompositionStart = () => {
     this.compositionActive = true
     this.fenceAutocomplete?.hide()
+    queueMicrotask(() => { if (!this.disposed) this.options.compositionChanged?.() })
   }
   private settings: MarkdownTypography
   private caretMode: CaretAnimation
@@ -104,6 +105,7 @@ export class MarkdownEditorController implements LiveEditor {
   private onCompositionEnd = () => {
     this.compositionActive = false
     setTimeout(() => {
+      if (!this.disposed) this.options.compositionChanged?.()
       if (!this.disposed && this.pendingSource !== null) {
         const source = this.pendingSource
         this.pendingSource = null

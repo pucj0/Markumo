@@ -8,6 +8,7 @@ import { chromium } from 'playwright'
 
 const output = 'test-results/markdown-toolbar'
 fs.mkdirSync(output, { recursive: true })
+fs.writeFileSync(`${output}/results.json`, JSON.stringify({ passed: false, status: 'running' }))
 fs.writeFileSync(`${output}/index.html`, '<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><div id="app"></div><script type="module" src="./fixture.js"></script>')
 fs.writeFileSync(`${output}/fixture.js`, `
 import '/src/styles/reset.css';
@@ -17,9 +18,12 @@ import '/src/editor/markdown/styles.css';
 import '/src/editor/core/searchPanel.css';
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { createApp } from 'vue';
+import { EditorSelection } from '@codemirror/state';
+import { undoDepth, redoDepth } from '@codemirror/commands';
 import App from '/src/App.vue';
 window.isTauri = true;
 mockWindows('main');
+window.savedSettings = [];
 const launch = { kind: 'app', ownsSession: true, files: { files: [], errors: [] }, roots: [], activePath: null,
   layout: { mode: 'single', sidebarWidth: 254, sidebarVisible: false }, warnings: [] };
 mockIPC((command, args) => {
@@ -31,7 +35,9 @@ mockIPC((command, args) => {
   if (command === 'file_preferences') return { recent: [], layout: launch.layout };
   if (command === 'drain_pending') return { files: [], errors: [] };
   if (command === 'release_file') return;
+  if (command === 'watch_external_files') return { watcherCount: 0, directoryCount: 0, fileCount: 0 };
   if (command === 'recovery_list') return { records: [], warnings: [] };
+  if (command === 'save_editor_settings') { window.savedSettings.push(structuredClone(args)); return; }
   if (command === 'persist_session' || command === 'save_editor_settings' || command === 'persist_layout' ||
       command === 'plugin:window|set_theme' || command === 'plugin:window|destroy' || command === 'report_update_window') return;
   if (command === 'update_runtime') return { version: '1.0.4', platform: 'win32', installSupported: false };
@@ -41,16 +47,18 @@ mockIPC((command, args) => {
 const app = createApp(App);
 app.mount('#app');
 window.appTest = { app, setup: app._instance.setupState };
+window.toolbarTools = { EditorSelection, undoDepth, redoDepth };
 `)
 
-const port = 1489
-const server = await createServer({ server: { host: '127.0.0.1', port, strictPort: true, hmr: false, watch: null } })
+const server = await createServer({ server: { host: '127.0.0.1', port: 0, strictPort: true, hmr: false, watch: null } })
 await server.listen()
+const port = server.httpServer.address().port
 const browser = await chromium.launch({ executablePath: process.env.MARKUMO_CHROME, headless: true, args: ['--no-sandbox'] })
 const page = await browser.newPage({ viewport: { width: 1200, height: 850 } })
 const errors = []
 page.on('pageerror', error => errors.push(error.message))
 const results = []
+let passed = false
 const test = async (name, work) => {
   try { await work(); results.push(name); console.log('PASS ' + name) }
   catch (error) { console.error('FAIL ' + name, error); throw error }
@@ -74,6 +82,12 @@ const activeSelection = () => page.evaluate(() => {
   const selection = window.appTest.setup.manager.getState(window.appTest.setup.manager.activeId).selection.main
   return { from: selection.from, to: selection.to, empty: selection.empty }
 })
+const sourceSelection = (pane, from, to = from) => page.evaluate(({ pane, from, to }) => {
+  const manager = window.appTest.setup.manager
+  manager.focusPane(pane, false)
+  manager.paneView(pane).dispatch({ selection: { anchor: from, head: to } })
+}, { pane, from, to })
+const frames = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 
 try {
   await page.goto(`http://127.0.0.1:${port}/${output}/index.html`)
@@ -289,6 +303,7 @@ try {
     await page.locator('.md-live-toolbar button[aria-label="内容宽度"]').click()
     const range = page.locator('.md-width-popover input[type="range"]')
     await range.evaluate(input => { input.value = '1020'; input.dispatchEvent(new Event('input', { bubbles: true })) })
+    await page.waitForFunction(() => window.appTest.setup.manager.getMarkdownTypography().width === 1020)
     assert.equal(await page.evaluate(() => window.appTest.setup.manager.getMarkdownTypography().width), 1020)
     await page.keyboard.press('Escape')
     await page.locator('.md-live-toolbar button[aria-label="搜索与替换"]').click()
@@ -426,9 +441,344 @@ try {
     await closeMain(id)
   })
 
+  await test('Source/Split use Markdown syntax for fences, boundaries, nested blocks and crossing/multiple selections', async () => {
+    const cases = [
+      'Intro\n\n```ts\n# code heading\n- item\n```\n\nTail\n',
+      'Intro\n\n~~~js\n# code heading\n~~~\n\nTail\n',
+      'Intro\n\n````md\n```js\n# code heading\n```\n````\n\nTail\n',
+      'Intro\n\n> ```js\n> # code heading\n> ```\n\nTail\n',
+      'Intro\n\n    # code heading\n\nTail\n',
+      'Intro\n\nTail\n\n```ts\n# code heading', // unterminated fence at EOF
+    ]
+    for (const mode of ['source', 'split']) for (const text of cases) {
+      const id = await newDoc(text)
+      await page.evaluate(({ id, mode }) => window.appTest.setup.manager.setMarkdownMode(id, mode, 'main'), { id, mode })
+      await page.waitForFunction(id => window.appTest.setup.manager.metadata(id).languageStatus === 'ready', id)
+      const codeAt = text.indexOf('code heading')
+      for (const [from, to] of [[codeAt, codeAt], [0, codeAt + 2], [codeAt, text.length]]) {
+        await sourceSelection('main', from, to)
+        const state = await page.evaluate(() => window.appTest.setup.manager.markdownToolbarState('main'))
+        assert.equal(state.inCodeBlock, true, mode + ': ' + text)
+        assert.equal(state.codeBlock, true)
+        assert.equal(state.heading, 0)
+        assert.equal(await page.locator('.md-live-toolbar button[aria-label="加粗"]').isDisabled(), true)
+        assert.equal(await page.evaluate(() => window.appTest.setup.manager.formatMarkdown('bold', 'main')), false)
+        assert.equal(await page.evaluate(() => window.appTest.setup.manager.insertMarkdownTable(2, 2, 'main')), false)
+        assert.equal(await source(), text)
+      }
+      const tailAt = text.indexOf('Tail')
+      await sourceSelection('main', tailAt, tailAt + 4)
+      assert.equal(await page.locator('.md-live-toolbar button[aria-label="加粗"]').isDisabled(), false)
+      await page.locator('.md-live-toolbar button[aria-label="加粗"]').click()
+      assert.equal(await source(), text.replace('Tail', '**Tail**'))
+      await page.keyboard.press('Control+z')
+      assert.equal(await source(), text)
+      await page.keyboard.press('Control+Shift+z')
+      assert.equal(await source(), text.replace('Tail', '**Tail**'))
+      await page.keyboard.press('Control+z')
+      // A range ending exactly at the block start must not select that block.
+      const blockStart = text.includes('> ```') ? text.indexOf('> ```') : text.includes('    #') ? text.indexOf('    #')
+        : text.includes('~~~') ? text.indexOf('~~~') : text.indexOf('```')
+      await sourceSelection('main', 0, blockStart)
+      assert.equal(await page.evaluate(() => window.appTest.setup.manager.markdownToolbarState('main').inCodeBlock), false)
+      await sourceSelection('main', blockStart)
+      assert.equal(await page.evaluate(() => window.appTest.setup.manager.markdownToolbarState('main').inCodeBlock), true, mode + ': fence start ' + text)
+      await page.evaluate(({ codeAt, tailAt }) => {
+        const view = window.appTest.setup.manager.paneView('main'), { EditorSelection } = window.toolbarTools
+        view.dispatch({ selection: EditorSelection.create([EditorSelection.range(codeAt, codeAt + 2), EditorSelection.range(tailAt, tailAt + 4)].sort((a, b) => a.from - b.from), 1) })
+      }, { codeAt, tailAt })
+      assert.equal(await page.evaluate(() => window.appTest.setup.manager.markdownToolbarState('main').inCodeBlock), true)
+      await closeMain(id)
+    }
+  })
+
+  await test('the same file in two panes reads each pane selection and keeps state/format/history independent', async () => {
+    const text = '# Heading\n\n- bullet\n\n> quote\n\n1. ordered\n\n- [ ] task\n\n```js\ncode\n```\n'
+    const id = await newDoc(text)
+    await page.evaluate(id => window.appTest.setup.manager.setMarkdownMode(id, 'source', 'main'), id)
+    const secondary = await page.evaluate(() => window.appTest.setup.manager.splitPane('right', 'main'))
+    await page.waitForFunction(pane => !!window.appTest.setup.manager.paneView(pane), secondary)
+    await sourceSelection('main', text.indexOf('Heading'))
+    for (const [word, field] of [['bullet', 'bullet'], ['quote', 'quote'], ['ordered', 'ordered'], ['task', 'task'], ['code', 'inCodeBlock']]) {
+      await sourceSelection(secondary, text.indexOf(word))
+      for (const active of ['main', secondary]) {
+        const state = await page.evaluate(({ active, secondary }) => {
+          const manager = window.appTest.setup.manager; manager.focusPane(active, false)
+          return { main: manager.markdownToolbarState('main'), other: manager.markdownToolbarState(secondary) }
+        }, { active, secondary })
+        assert.equal(state.main.heading, 1)
+        assert.equal(state.main[field], false)
+        assert.equal(state.other.heading, 0)
+        assert.equal(state.other[field], true, field)
+        assert.equal((await page.locator('[data-pane-id="main"] .md-toolbar-heading-btn').textContent()).trim(), 'H1')
+      }
+    }
+    await sourceSelection(secondary, text.indexOf('quote'))
+    await page.evaluate(() => window.appTest.setup.manager.formatMarkdown('heading-2', 'main'))
+    assert.equal(await source(), text.replace('# Heading', '## Heading'))
+    assert.equal(await page.evaluate(pane => window.appTest.setup.manager.markdownToolbarState(pane).quote, secondary), true)
+    await page.evaluate(() => window.appTest.setup.manager.markdownHistory(false, 'main'))
+    assert.equal(await source(), text)
+    await page.evaluate(() => window.appTest.setup.manager.markdownHistory(true, 'main'))
+    assert.equal(await source(), text.replace('# Heading', '## Heading'))
+    await page.evaluate(() => window.appTest.setup.manager.markdownHistory(false, 'main'))
+    await page.evaluate(pane => window.appTest.setup.manager.closePane(pane), secondary)
+    await closeMain(id)
+  })
+
+  await test('continuous width inputs coalesce once per frame, flush the last value and persist without replacing the editor', async () => {
+    const id = await newDoc(Array.from({ length: 90 }, (_, i) => `Paragraph ${i} target text.`).join('\n\n') + '\n')
+    await page.locator('.md-prose p').nth(20).click()
+    await page.locator('.md-prose p').nth(20).selectText()
+    await page.waitForFunction(() => !window.appTest.setup.manager.getState(window.appTest.setup.manager.activeId).selection.main.empty)
+    const selection = await activeSelection()
+    await page.evaluate(() => { document.querySelector('.markdown-live').scrollTop = 500 })
+    await frames()
+    await page.locator('.md-live-toolbar button[aria-label="内容宽度"]').click()
+    await page.evaluate(() => {
+      const manager = window.appTest.setup.manager, { undoDepth, redoDepth } = window.toolbarTools
+      const view = manager.liveViews.get('main').editor.view
+      const root = document.querySelector('.markdown-live')
+      window.widthCheck = { root, view, top: root.scrollTop, doc: view.state.doc,
+        undo: undoDepth(manager.getState(manager.activeId)), redo: redoDepth(manager.getState(manager.activeId)),
+        updates: [], original: manager.setMarkdownTypography }
+      manager.setMarkdownTypography = function (settings) { window.widthCheck.updates.push(settings.width); return window.widthCheck.original.call(this, settings) }
+      window.savedSettings.length = 0
+    })
+    const range = page.locator('.md-width-popover input')
+    for (const final of [1100, 980, 1200]) {
+      await range.evaluate((input, final) => {
+        for (let value = 480; value <= final; value += 20) { input.value = String(value); input.dispatchEvent(new Event('input', { bubbles: true })) }
+      }, final)
+      await frames()
+    }
+    await range.evaluate(input => {
+      input.value = '1140'; input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await page.waitForFunction(() => window.appTest.setup.manager.getMarkdownTypography().width === 1140)
+    await page.waitForFunction(() => window.savedSettings.some(args => args.settings?.markdownTypography?.width === 1140))
+    const result = await page.evaluate(() => {
+      const manager = window.appTest.setup.manager, check = window.widthCheck, { undoDepth, redoDepth } = window.toolbarTools
+      const current = manager.liveViews.get('main').editor.view
+      manager.setMarkdownTypography = check.original
+      return { updates: check.updates, sameView: current === check.view, sameDoc: current.state.doc === check.doc,
+        scrollDelta: Math.abs(check.root.scrollTop - check.top), undo: undoDepth(manager.getState(manager.activeId)) === check.undo,
+        redo: redoDepth(manager.getState(manager.activeId)) === check.redo }
+    })
+    assert.deepEqual(result.updates, [1100, 980, 1200, 1140])
+    assert.equal(result.sameView, true); assert.equal(result.sameDoc, true)
+    assert(result.scrollDelta <= 1, JSON.stringify(result))
+    assert.equal(result.undo, true); assert.equal(result.redo, true)
+    assert.deepEqual(await activeSelection(), selection)
+    // Close before the next animation frame: the final pending input must flush.
+    await range.evaluate(input => { input.value = '1000'; input.dispatchEvent(new Event('input', { bubbles: true })); window.dispatchEvent(new Event('blur')) })
+    await page.waitForFunction(() => window.appTest.setup.manager.getMarkdownTypography().width === 1000)
+    await page.waitForFunction(() => window.savedSettings.some(args => args.settings?.markdownTypography?.width === 1000))
+    await page.locator('.md-live-toolbar button[aria-label="内容宽度"]').click()
+    const box = await range.boundingBox()
+    await page.mouse.move(box.x + 8, box.y + box.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(box.x + box.width * .7, box.y + box.height / 2, { steps: 40 })
+    await page.mouse.up()
+    const dragged = Number(await range.inputValue())
+    assert.notEqual(dragged, 1000)
+    await page.waitForFunction(width => window.appTest.setup.manager.getMarkdownTypography().width === width, dragged)
+    await page.waitForFunction(width => window.savedSettings.some(args => args.settings?.markdownTypography?.width === width), dragged)
+    assert.deepEqual(await activeSelection(), selection)
+    await page.keyboard.press('Escape')
+    for (const mode of ['source', 'split']) {
+      await page.evaluate(({ id, mode }) => window.appTest.setup.manager.setMarkdownMode(id, mode, 'main'), { id, mode })
+      await page.waitForFunction(() => !!window.appTest.setup.manager.paneView('main'))
+      await sourceSelection('main', 10, 20)
+      await page.evaluate(() => { window.appTest.setup.manager.paneView('main').scrollDOM.scrollTop = 400 })
+      await frames()
+      const selected = await activeSelection()
+      await page.locator('.md-live-toolbar button[aria-label="内容宽度"]').click()
+      await page.evaluate(() => {
+        const manager = window.appTest.setup.manager, view = manager.paneView('main')
+        window.sourceWidthCheck = { view, doc: view.state.doc, top: view.scrollDOM.scrollTop, undo: window.toolbarTools.undoDepth(manager.getState(manager.activeId)) }
+      })
+      await range.evaluate(input => { input.value = '1040'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })) })
+      await frames()
+      assert.deepEqual(await page.evaluate(() => {
+        const manager = window.appTest.setup.manager, view = manager.paneView('main'), check = window.sourceWidthCheck
+        return { sameView: view === check.view, sameDoc: view.state.doc === check.doc, sameTop: view.scrollDOM.scrollTop === check.top,
+          sameHistory: window.toolbarTools.undoDepth(manager.getState(manager.activeId)) === check.undo }
+      }), { sameView: true, sameDoc: true, sameTop: true, sameHistory: true })
+      assert.deepEqual(await activeSelection(), selected)
+      await page.keyboard.press('Escape')
+    }
+    await closeMain(id)
+  })
+
+  await test('240/320/480/768/1024px panes progressively pack a stable 44px row and show unclipped menus', async () => {
+    const id = await newDoc('# Heading\n\nTarget paragraph.\n')
+    const levels = []
+    for (const width of [1024, 768, 480, 320, 240]) {
+      await page.evaluate(width => {
+        const pane = document.querySelector('[data-pane-id="main"]')
+        pane.style.width = `${width}px`; pane.style.maxWidth = `${width}px`; pane.style.flex = 'none'
+      }, width)
+      await frames()
+      const geometry = await page.evaluate(() => {
+        const row = document.querySelector('.md-live-toolbar'), rect = row.getBoundingClientRect()
+        return { height: rect.height, width: rect.width, overflow: row.scrollWidth > row.clientWidth + 1,
+          classes: row.className, visible: [...row.querySelectorAll('button')].filter(button => button.getClientRects().length).map(button => button.getAttribute('aria-label')) }
+      })
+      assert.equal(geometry.height, 44); assert.equal(geometry.width, width); assert.equal(geometry.overflow, false)
+      assert(geometry.visible.includes('更多 Markdown 操作')); assert(geometry.visible.includes('实时排版模式'))
+      levels.push(geometry.classes.split('compact-').length - 1)
+      await page.locator('.md-live-toolbar button[aria-label="更多 Markdown 操作"]').click()
+      await frames()
+      const popover = await page.locator('.md-more-menu').evaluate(menu => {
+        const rect = menu.getBoundingClientRect()
+        const x = rect.right - 10, y = rect.top + 20
+        return { portalled: menu.parentElement === document.body, left: rect.left, right: rect.right, bottom: rect.bottom,
+          visibleAtEdge: menu.contains(document.elementFromPoint(x, y)), noHorizontalScroll: menu.scrollWidth <= menu.clientWidth + 1,
+          neutralText: getComputedStyle(menu.querySelector('.md-more-format-grid button')).color === getComputedStyle(document.querySelector('.md-toolbar-format button')).color }
+      })
+      assert.equal(popover.portalled, true); assert.equal(popover.visibleAtEdge, true)
+      assert(popover.left >= 8 && popover.right <= 1192 && popover.bottom <= 842)
+      assert.equal(popover.noHorizontalScroll, true)
+      assert.equal(popover.neutralText, true)
+      await page.locator('.md-more-menu').evaluate(menu => Promise.all(menu.getAnimations().map(animation => animation.finished)))
+      await page.screenshot({ path: `${output}/pane-${width}.png` })
+      await page.keyboard.press('Escape')
+    }
+    assert.deepEqual([...levels].sort((a, b) => a - b), levels)
+    assert(new Set(levels).size >= 3, 'commands should collapse progressively')
+    // Menus must also fit the viewport when it is as narrow as the pane.
+    await page.setViewportSize({ width: 240, height: 600 })
+    await frames()
+    await page.locator('.md-live-toolbar button[aria-label="更多 Markdown 操作"]').click()
+    const bounds = await page.locator('.md-more-menu').boundingBox()
+    assert(bounds.x >= 8 && bounds.x + bounds.width <= 232)
+    await page.keyboard.press('End')
+    assert.deepEqual(await page.locator('.md-more-menu').evaluate(menu => {
+      const focused = document.activeElement, item = focused.getBoundingClientRect(), rect = menu.getBoundingClientRect()
+      return { last: focused.textContent.trim() === '1200', visible: item.top >= rect.top && item.bottom <= rect.bottom,
+        scrolled: menu.scrollTop > 0 }
+    }), { last: true, visible: true, scrolled: true })
+    await page.keyboard.press('Home')
+    assert.equal(await page.locator('.md-more-menu').evaluate(menu => {
+      const item = document.activeElement.getBoundingClientRect(), rect = menu.getBoundingClientRect()
+      return item.top >= rect.top && item.bottom <= rect.bottom
+    }), true)
+    await page.keyboard.press('Escape')
+    await page.setViewportSize({ width: 1200, height: 850 })
+    // Oscillating a pixel at a threshold should not repeatedly toggle groups.
+    const transitions = await page.evaluate(async () => {
+      const pane = document.querySelector('[data-pane-id="main"]'), row = pane.querySelector('.md-live-toolbar')
+      const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      let previous = '', at = 0
+      for (let width = 240; width <= 1024; width += 4) {
+        pane.style.width = pane.style.maxWidth = `${width}px`; await frame()
+        if (previous && previous !== row.className) { at = width; break }
+        previous = row.className
+      }
+      let changes = 0
+      for (let i = 0; i < 8; i++) {
+        pane.style.width = pane.style.maxWidth = `${at + (i % 2)}px`; await frame()
+        if (previous !== row.className) changes++
+        previous = row.className
+      }
+      return { at, changes }
+    })
+    assert(transitions.at > 240); assert(transitions.changes <= 1, JSON.stringify(transitions))
+    await page.evaluate(() => document.querySelector('[data-pane-id="main"]').removeAttribute('style'))
+    await frames()
+    await closeMain(id)
+  })
+
+  await test('popup arrows/Home/End/Tab/Escape navigate enabled items and preserve selection and undo', async () => {
+    const id = await newDoc('Target paragraph.\n')
+    await page.locator('.md-prose p').click()
+    await page.keyboard.press('Control+a')
+    const before = await source(), selection = await activeSelection()
+    await page.locator('.md-toolbar-heading-btn').focus()
+    await page.keyboard.press('ArrowDown')
+    assert.equal(await page.evaluate(() => document.activeElement.textContent.trim()), '正文')
+    await page.keyboard.press('End')
+    assert.equal(await page.evaluate(() => document.activeElement.textContent.trim()), 'H6')
+    await page.keyboard.press('Home')
+    await page.keyboard.press('ArrowDown')
+    assert.equal(await page.evaluate(() => document.activeElement.textContent.trim()), 'H1')
+    await page.keyboard.press('Enter')
+    assert.match(await source(), /^# /)
+    await page.keyboard.press('Control+z'); assert.equal(await source(), before)
+    await page.keyboard.press('Control+Shift+z'); assert.match(await source(), /^# /)
+    await page.keyboard.press('Control+z'); assert.equal(await source(), before)
+    await page.locator('.md-live-toolbar button[aria-label="插入表格"]').focus()
+    await page.keyboard.press('ArrowDown')
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), '插入 1 行 1 列表格')
+    await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowDown')
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), '插入 2 行 2 列表格')
+    await page.keyboard.press('Escape')
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), '插入表格')
+    await page.locator('.md-live-toolbar button[aria-label="更多 Markdown 操作"]').focus()
+    await page.keyboard.press('ArrowUp')
+    assert.equal(await page.evaluate(() => document.activeElement.textContent.trim()), '1200')
+    await page.keyboard.press('Home'); await page.keyboard.press('ArrowUp')
+    assert.equal(await page.evaluate(() => document.activeElement.textContent.trim()), '1200')
+    await page.keyboard.press('Tab')
+    assert.equal(await page.locator('.md-more-menu').count(), 0)
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), '搜索与替换')
+    assert.deepEqual(await activeSelection(), selection)
+    await closeMain(id)
+  })
+
+  await test('Chinese composition guards Live/Source/Split toolbar operations and repeated mode changes retain selection/history', async () => {
+    const text = '# Heading\n\n中文 target paragraph.\n'
+    const id = await newDoc(text)
+    for (const mode of ['source', 'split', 'live', 'source', 'split', 'live']) {
+      await page.evaluate(({ id, mode }) => window.appTest.setup.manager.setMarkdownMode(id, mode, 'main'), { id, mode })
+      if (mode === 'live') await page.waitForFunction(() => window.appTest.setup.manager.liveReady('main'))
+      else await page.waitForFunction(() => !!window.appTest.setup.manager.paneView('main'))
+      await frames()
+      if (mode === 'live') {
+        await page.locator('.md-prose p').click()
+        await page.locator('.md-prose p').selectText()
+      } else await sourceSelection('main', text.indexOf('中文'), text.indexOf('中文') + 2)
+      await page.waitForFunction(() => !window.appTest.setup.manager.getState(window.appTest.setup.manager.activeId).selection.main.empty)
+      const before = await source(), selection = await activeSelection()
+      const check = await page.evaluate(() => {
+        const manager = window.appTest.setup.manager, cm = manager.paneView('main')
+        const content = cm?.contentDOM || document.querySelector('.md-prose')
+        const target = content.editContext || content
+        window.compositionTarget = target
+        target.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '中' }))
+        return { composing: manager.isComposing, format: manager.formatMarkdown('bold', 'main'),
+          modeChange: manager.setMarkdownMode(manager.activeId, 'source', 'main'), table: manager.insertMarkdownTable(2, 2, 'main') }
+      })
+      assert.deepEqual(check, { composing: true, format: false, modeChange: false, table: false })
+      await frames()
+      assert.equal(await page.locator('.md-live-toolbar button[aria-label="加粗"]').isDisabled(), true)
+      assert.equal(await page.locator('.md-live-toolbar [aria-label="源码模式"]').isDisabled(), true)
+      assert.equal(await source(), before); assert.deepEqual(await activeSelection(), selection)
+      await page.evaluate(() => window.compositionTarget.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '中文' })))
+      await page.waitForFunction(() => !window.appTest.setup.manager.isComposing)
+      await page.locator('.md-live-toolbar button[aria-label="加粗"]').click()
+      const formatted = await source(); assert(formatted.includes('**'), JSON.stringify({ mode, formatted, selection: await activeSelection() }))
+      await page.keyboard.press('Control+z'); assert.equal(await source(), before)
+      await page.keyboard.press('Control+Shift+z'); assert.equal(await source(), formatted)
+      await page.keyboard.press('Control+z'); assert.equal(await source(), before)
+      // A source selection survives Source -> Split -> Source exactly.
+      if (mode !== 'live') {
+        await sourceSelection('main', text.indexOf('中文'), text.indexOf('中文') + 2)
+        const selected = await activeSelection()
+        await page.evaluate(id => { const m = window.appTest.setup.manager; m.setMarkdownMode(id, 'split', 'main'); m.setMarkdownMode(id, 'source', 'main') }, id)
+        assert.deepEqual(await activeSelection(), selected)
+      }
+    }
+    await closeMain(id)
+  })
+
   assert.deepEqual(errors, [])
+  passed = true
   console.log(`PASS all ${results.length} Markdown toolbar regressions`)
 } finally {
+  fs.writeFileSync(`${output}/results.json`, JSON.stringify({ passed, cases: results, errors }, null, 2))
   await browser.close()
   await server.close()
 }
