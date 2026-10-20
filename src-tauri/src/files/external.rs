@@ -10,7 +10,7 @@ use super::{FileError, Result};
 pub struct Hint { pub generation: u64, pub tokens: Vec<String>, pub error: Option<String> }
 #[derive(Default)]
 struct Targets { owners: HashMap<String, (u64, HashMap<String, PathBuf>)> }
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct WatchStatus { pub watcher_count: usize, pub directory_count: usize, pub file_count: usize }
 
