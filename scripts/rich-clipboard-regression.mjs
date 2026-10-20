@@ -238,7 +238,7 @@ try {
     assert.equal(copy.source,tableSource);
     await page.screenshot({path:`${output}/selected-table-copy.png`});
   })
-  await test('rows, columns, rectangles, single cells and whole-table cell selections keep their grid', async () => {
+  await test('rows, columns, rectangles and whole-table cell selections keep their grid while one cell stays text', async () => {
     const cases=[{range:[1,0,1,2],grid:[['系统管理员','admin','123456']]},{range:[0,1,2,1],grid:[['测试账号'],['admin'],['zhangsan']]},{range:[1,1,2,2],grid:[['admin','123456'],['zhangsan','123456']]},{range:[1,1,1,1],grid:[['admin']]},{range:[0,0,2,2],grid:[['角色','测试账号','测试密码'],['系统管理员','admin','123456'],['普通用户','zhangsan','123456']]},{range:[1,2,0,0],grid:[['角色','测试账号','测试密码'],['系统管理员','admin','123456']]}];
     for(const item of cases){
       const value=await page.evaluate(async item=>{
@@ -248,8 +248,18 @@ try {
         const headers=dom.querySelectorAll('th').length;await f.live().clipboard('markdown');
         return {copy,menu,grid,headers,markdown:f.copied(),source:f.source()};
       },item);
-      assert.deepEqual(value.grid,item.grid,JSON.stringify(item.range));assert.equal(value.menu.text,value.copy.text);assert.equal(value.markdown.text,value.copy.text);
-      assert.match(value.copy.text,/\|.*\|\n\|.*---/);assert.equal(value.headers,Math.min(...[item.range[0],item.range[2]])===0?item.grid[0].length:0);
+      const single=item.range[0]===item.range[2]&&item.range[1]===item.range[3];
+      if(single){
+        assert.deepEqual(value.grid,[]);
+        assert.equal(value.copy.text,'admin');
+        assert.equal(value.menu.text,'admin');
+        assert.equal(value.markdown.text,'admin');
+        assert.doesNotMatch(value.copy.html,/<table>/i);
+        assert.equal(value.headers,0);
+      }else{
+        assert.deepEqual(value.grid,item.grid,JSON.stringify(item.range));assert.equal(value.menu.text,value.copy.text);assert.equal(value.markdown.text,value.copy.text);
+        assert.match(value.copy.text,/\|.*\|\n\|.*---/);assert.equal(value.headers,Math.min(...[item.range[0],item.range[2]])===0?item.grid[0].length:0);
+      }
       assert.equal(value.source,tableSource);
     }
   })

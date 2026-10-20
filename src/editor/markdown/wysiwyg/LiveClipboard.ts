@@ -43,6 +43,11 @@ export class LiveClipboard {
     if (selection.empty) return null
     const slice = selection.content()
     const full = selection instanceof AllSelection || (selection.from <= 1 && selection.to >= state.doc.content.size - 1)
+    // A one-cell structural selection is not a table copy. Triple click and
+    // programmatic single-cell selections must yield the cell's text, never a
+    // one-cell Markdown table.
+    const singleCell = selection instanceof CellSelection && selection.$anchorCell.pos === selection.$headCell.pos
+    const cellNode = singleCell ? selection.$anchorCell.nodeAfter : null
     // Native mouse drags become CellSelection at the cell boundary. A cross-cell
     // TextSelection can still be produced programmatically (or by an external
     // selection API); keep that copy textual rather than inventing unselected
@@ -58,7 +63,7 @@ export class LiveClipboard {
     if (selection instanceof CellSelection && selected.firstChild?.type.spec.tableRole === 'row') {
       selected = Fragment.from(state.schema.nodes.table.create(null, selected))
     }
-    const table = !acrossCells && selected.childCount === 1 && selected.firstChild?.type.spec.tableRole === 'table' ? selected.firstChild : null
+    const table = !singleCell && !acrossCells && selected.childCount === 1 && selected.firstChild?.type.spec.tableRole === 'table' ? selected.firstChild : null
     let markdownContent = selected
     if (table && table.firstChild?.firstChild?.type.spec.tableRole !== 'header_cell') {
       // GFM requires a header. A data-only selection gets an empty header in the
@@ -76,15 +81,23 @@ export class LiveClipboard {
       if (node.type.name === 'image') return node.attrs.alt || ''
       return node.attrs.latex || node.attrs.source || (/^(soft_break|hard_break)$/.test(node.type.name) ? '\n' : '')
     }
-    const plain = selection instanceof TextSelection
-      ? state.doc.textBetween(selection.from, selection.to, '\n', leafText)
-      : slice.content.textBetween(0, slice.content.size, '\n', leafText)
+    const plain = singleCell
+      ? cellNode ? cellNode.textBetween(0, cellNode.content.size, '\n', leafText) : ''
+      : selection instanceof TextSelection
+        ? state.doc.textBetween(selection.from, selection.to, '\n', leafText)
+        : slice.content.textBetween(0, slice.content.size, '\n', leafText)
     // A partial cross-cell text selection has no exact Markdown table
     // representation: serializing the open slice would add cells the user did
-    // not select. Use the selected plain range for every copy mode.
-    const markdown = acrossCells ? plain : full ? this.bridge().source : markdownSerializer.serialize(state.schema.nodes.doc.create(null, markdownContent))
+    // not select. Use the selected plain range for every copy mode. A single
+    // cell is never represented as Markdown, even through the explicit
+    // copy-Markdown command.
+    const markdown = singleCell || acrossCells ? plain : full ? this.bridge().source : markdownSerializer.serialize(state.schema.nodes.doc.create(null, markdownContent))
     let rich = renderer.render(markdown)
-    if (table) {
+    if (singleCell && cellNode) {
+      const container = document.createElement('div')
+      container.appendChild(DOMSerializer.fromSchema(state.schema).serializeFragment(cellNode.content))
+      rich = container.innerHTML
+    } else if (table) {
       const container = document.createElement('div')
       container.appendChild(DOMSerializer.fromSchema(state.schema).serializeFragment(selected))
       rich = container.innerHTML
@@ -109,7 +122,7 @@ export class LiveClipboard {
     // boundary, even though no character in that next block was selected.
     const crossesBlocks = selection instanceof TextSelection && !selection.$from.sameParent(selection.$to)
     const multipleLines = crossesBlocks || /[\r\n]/.test(plain)
-    const useMarkdown = this.settings().copyMarkdown || (!acrossCells && (table || multipleLines))
+    const useMarkdown = !singleCell && (this.settings().copyMarkdown || (!acrossCells && (table || multipleLines)))
     return { selection, markdown, plain, html, text: useMarkdown ? markdown : plain }
   }
 

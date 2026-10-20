@@ -323,6 +323,10 @@ try {
     assert.equal(selection.type, 'cell')
     assert.equal(selection.selectedCells, 1)
     assert.deepEqual(selection.cells, ['admin'])
+    const singleCellCopy = await copy()
+    assert.equal(singleCellCopy.text.trim(), 'admin')
+    assert.doesNotMatch(singleCellCopy.text, /\|/)
+    assert.doesNotMatch(singleCellCopy.html, /<table>/i)
   })
 
   await test('I. Tab, Shift+Tab and table toolbar operations still work', async () => {
