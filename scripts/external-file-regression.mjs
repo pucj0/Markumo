@@ -97,6 +97,7 @@ try {
  await page.screenshot({path:`${output}/conflict-diff-theme.png`})
  await page.getByRole('button',{name:'关闭比较并返回编辑器'}).click()
  await page.evaluate(()=>window.ui.dispose())
+ await test('24 a failed recovery snapshot write blocks the destructive disk reload',async()=>{const t=make();const recovery=new f.RecoveryController(t.manager,t.files,{list:async()=>({records:[],warnings:[]}),read:async()=>{throw Error('unused')},save:async()=>{throw Error('injected snapshot write failure')},remove:async()=>{}},()=>{},{debounceMs:15});try{t.external.setRecoveryCheckpoint(id=>recovery.checkpointBeforeReload(id));await recovery.start();t.edit();t.change();await t.external.check(t.id);await t.external.requestReload(t.id);ok(!await t.external.confirmReload(),'failed checkpoint must not reload');ok(t.manager.getText(t.id).includes('local'),'dirty buffer was discarded');ok(t.manager.metadata(t.id).dirty);ok((recovery.lastError.value||'').includes('injected snapshot write failure'))}finally{recovery.dispose();t.dispose()}})
  assert.deepEqual(errors,[])
  fs.writeFileSync(`${output}/results.json`,JSON.stringify({results,eventMetrics},null,2))
  console.log(`PASS ${results.length} groups; event metrics ${JSON.stringify(eventMetrics)}`)

@@ -1,5 +1,5 @@
 <template>
-  <aside v-if="state && state.conflictValid" class="external-banner" role="status" aria-live="polite">
+  <aside v-if="revision >= 0 && state && state.conflictValid" class="external-banner" role="status" aria-live="polite">
     <template v-if="state.hidden">
       <button class="summary" @click="external.keep(id, false)">⚠ {{ title }} · 查看处理选项</button>
     </template>
@@ -20,6 +20,10 @@ import { computed } from 'vue'
 import type { FileController } from '../../features/files/FileController'
 const props = defineProps<{ files: FileController; id: string }>()
 const external = props.files.external
+// `state()` returns a mutable binding object. Vue 3.5 only notifies a computed's
+// subscribers when the computed value itself changes, so a field-only change
+// (keep/hide) would leave this banner stale. Track the revision ref directly.
+const revision = external.revision
 const state = computed(() => external.state(props.id))
 const busy = computed(() => !!state.value?.operation)
 const doc = computed(() => { external.revision.value; return props.files.manager.metadata(props.id) })

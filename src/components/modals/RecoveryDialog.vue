@@ -10,6 +10,7 @@
       </header>
 
       <p v-if="error" class="error" role="alert">{{ error }}</p>
+      <p v-if="records.length" class="hint keep-hint">恢复稿会保留到您明确恢复或丢弃为止；“暂不处理”只关闭面板，不会删除任何恢复稿。</p>
       <p v-if="!records.length" class="empty">没有可恢复的未保存文档。</p>
 
       <ul v-else class="recovery-list">

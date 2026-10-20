@@ -1,5 +1,5 @@
 use crate::{
-    recovery::{RecoveryInput, RecoveryList, RecoveryRecord, RecoverySaveResult, RecoveryStore},
+    recovery::{RecoveryInput, RecoveryList, RecoveryRead, RecoverySaveResult, RecoveryStore},
     session::LaunchStore,
 };
 use tauri::{State, Window};
@@ -33,7 +33,7 @@ pub fn recovery_read(
     id: String,
     launches: State<'_, LaunchStore>,
     store: State<'_, RecoveryStore>,
-) -> Result<RecoveryRecord, String> {
+) -> Result<RecoveryRead, String> {
     require_owner(&window, &launches)?;
     store.lock().map_err(|e| e.to_string())?.read(&id)
 }

@@ -4,7 +4,7 @@
 //! self-contained JSON record with its own checksum, so a crash can leave at
 //! worst an unreadable temporary file; a half-written record is never accepted
 //! as valid. User paths are metadata only and are never used as storage names.
-use crate::files::atomic;
+use crate::files::{atomic, disk_version, version_of};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -51,6 +51,11 @@ pub struct RecoveryInput {
     pub panes: Vec<RecoveryPane>,
     #[serde(default)]
     pub disk_version: Option<String>,
+    /// Version of the snapshot file this caller last observed. When present the
+    /// write is a compare-and-swap: a concurrent change is never overwritten,
+    /// it is preserved under a fresh snapshot id instead.
+    #[serde(default)]
+    pub expected_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,12 +107,30 @@ pub struct RecoveryList {
 pub struct RecoverySaveResult {
     pub record: RecoverySummary,
     pub warnings: Vec<String>,
+    /// Version of the snapshot as just written. The next update must send this
+    /// back as `expectedVersion`.
+    pub version: String,
+}
+
+/// A snapshot body plus the version of the exact bytes that were read. The
+/// version is not stored in the JSON: it describes the file, not the record.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryRead {
+    #[serde(flatten)]
+    pub record: RecoveryRecord,
+    pub version: String,
 }
 
 #[derive(Default)]
 pub struct RecoveryService {
     dir: Option<PathBuf>,
     limits: Limits,
+    /// Serializes every operation that mutates the snapshot directory. The
+    /// Tauri store already has an outer mutex, but the service must also be safe
+    /// when used directly (tests, future callers) and `list` must not prune a
+    /// record while another thread is writing it.
+    sync: Mutex<()>,
 }
 
 #[derive(Clone, Copy)]
@@ -143,42 +166,49 @@ impl RecoveryService {
     }
 
     pub fn list(&self) -> Result<RecoveryList, String> {
-        let dir = self.directory()?;
-        let mut warnings = self.prune_files()?;
-        let mut entries = Vec::new();
-        for entry in fs::read_dir(&dir).map_err(|e| format!("读取恢复目录失败: {e}"))? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
-                continue;
-            }
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
-                continue;
-            };
-            if validate_id(stem).is_err() {
-                continue;
-            }
-            match read_record(&path, stem, self.limits.records) {
-                Ok(record) => {
-                    let size = entry.metadata().map_err(|e| e.to_string())?.len();
-                    entries.push((record, path, size));
+        // Hold the mutation lock only for pruning and reading records. The
+        // summaries below probe the user's original paths, which can be slow
+        // (for example a network file) and must not block a snapshot save.
+        let (mut entries, warnings) = {
+            let _guard = self.lock();
+            let dir = self.directory()?;
+            let mut warnings = self.prune_files()?;
+            let mut entries = Vec::new();
+            for entry in fs::read_dir(&dir).map_err(|e| format!("读取恢复目录失败: {e}"))? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
+                    continue;
                 }
-                Err(LoadError::Corrupt(reason)) => {
-                    let quarantined = quarantine(&path, stem);
-                    warnings.push(if quarantined {
-                        format!("恢复快照 {stem} 损坏，已隔离：{reason}")
-                    } else {
-                        format!("恢复快照 {stem} 损坏，无法隔离：{reason}")
-                    });
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
                 }
-                Err(LoadError::Io(reason)) => {
-                    warnings.push(format!("恢复快照 {stem} 暂时无法读取：{reason}"));
+                let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                    continue;
+                };
+                if validate_id(stem).is_err() {
+                    continue;
+                }
+                match read_record(&path, stem, self.limits.records) {
+                    Ok((record, _version)) => {
+                        let size = entry.metadata().map_err(|e| e.to_string())?.len();
+                        entries.push((record, path, size));
+                    }
+                    Err(LoadError::Corrupt(reason)) => {
+                        let quarantined = quarantine(&path, stem);
+                        warnings.push(if quarantined {
+                            format!("恢复快照 {stem} 损坏，已隔离：{reason}")
+                        } else {
+                            format!("恢复快照 {stem} 损坏，无法隔离：{reason}")
+                        });
+                    }
+                    Err(LoadError::Io(reason)) => {
+                        warnings.push(format!("恢复快照 {stem} 暂时无法读取：{reason}"));
+                    }
                 }
             }
-        }
+            (entries, warnings)
+        };
         entries.sort_by_key(|(record, _, _)| std::cmp::Reverse(record.updated_at));
         let records = entries
             .iter()
@@ -187,11 +217,11 @@ impl RecoveryService {
         Ok(RecoveryList { records, warnings })
     }
 
-    pub fn read(&self, id: &str) -> Result<RecoveryRecord, String> {
+    pub fn read(&self, id: &str) -> Result<RecoveryRead, String> {
         validate_id(id)?;
         let path = self.directory()?.join(format!("{id}.json"));
         match read_record(&path, id, self.limits.records) {
-            Ok(record) => Ok(record),
+            Ok((record, version)) => Ok(RecoveryRead { record, version }),
             Err(LoadError::Io(reason)) => Err(format!("读取恢复快照失败：{reason}")),
             Err(LoadError::Corrupt(reason)) => {
                 let _ = quarantine(&path, id);
@@ -213,12 +243,19 @@ impl RecoveryService {
                 MAX_TEXT / (1024 * 1024)
             ));
         }
-        let id = match input.id.as_deref() {
+        let requested_id = match input.id.as_deref() {
             Some(id) => {
                 validate_id(id)?;
-                id.to_owned()
+                Some(id.to_owned())
             }
-            None => random_id()?,
+            None => None,
+        };
+        let expected_version = match input.expected_version.as_deref() {
+            Some(version) => {
+                valid_version(version)?;
+                Some(version.to_owned())
+            }
+            None => None,
         };
         let (disk_size, disk_modified_ns) = path
             .as_deref()
@@ -228,9 +265,9 @@ impl RecoveryService {
             });
         let updated_at = now_ms();
         let checksum = checksum(&input.text);
-        let record = RecoveryRecord {
+        let mut record = RecoveryRecord {
             schema_version: SCHEMA_VERSION,
-            id: id.clone(),
+            id: requested_id.clone().unwrap_or_default(),
             name,
             path,
             text: input.text,
@@ -246,31 +283,179 @@ impl RecoveryService {
             updated_at,
             checksum,
         };
-        let record = with_derived(&record)?;
-        let bytes = serde_json::to_vec(&record).map_err(|e| e.to_string())?;
-        if bytes.len() > MAX_FILE {
-            return Err("恢复快照编码后超过大小上限，未写入".into());
-        }
+        record = with_derived(&record)?;
+        // Serialize saves, deletes and pruning. Without this, a list()-driven
+        // prune could remove a record between its version read and replacement.
+        let _guard = self.lock();
         let dir = self.directory()?;
-        let target = dir.join(format!("{id}.json"));
-        atomic::write_checked(&target, &bytes, None).map_err(|e| e.message)?;
+        let (target, bytes, warnings) = if let Some(id) = requested_id {
+            record.id = id.clone();
+            let target = dir.join(format!("{id}.json"));
+            let bytes = encode_record(&record)?;
+            if bytes.len() as u64 > self.limits.total {
+                return Err("恢复快照超过存储预算，未写入；已有快照保持不变".into());
+            }
+            // Conditional update: use the caller's compare-and-swap version when
+            // it has one, otherwise read the actual on-disk version. Both paths
+            // are conditional; `write_checked` re-verifies it again immediately
+            // before the atomic replacement.
+            let expected = match expected_version {
+                Some(version) => Some(version),
+                None => disk_version(&target).map_err(|error| error.message)?,
+            };
+            match atomic::write_checked(&target, &bytes, expected.as_deref()) {
+                Ok(()) => {
+                    let warnings = self.prune_after_write(bytes.len() as u64, &id);
+                    (target, bytes, warnings)
+                }
+                Err(error) if error.code == "conflict" => {
+                    // Never replace a snapshot another process changed or
+                    // deleted. Keep the current dirty content protected by
+                    // writing it under a fresh id instead of silently winning.
+                    self.write_new_snapshot(&dir, &mut record)?
+                }
+                Err(error) => return Err(error.message),
+            }
+        } else {
+            self.write_new_snapshot(&dir, &mut record)?
+        };
         restrict(&target, false);
-        let warnings = self.prune_files()?;
-        let size = fs::metadata(&target).map_err(|e| e.to_string())?.len();
+        let version = written_version(&target, &bytes)?;
+        let size = fs::metadata(&target)
+            .map_err(|e| format!("读取恢复快照大小失败: {e}"))?
+            .len();
+        // Summary probing of the user's original path can be slow; do it after
+        // releasing the snapshot mutation lock.
+        drop(_guard);
         Ok(RecoverySaveResult {
             record: summary(&record, size),
             warnings,
+            version,
         })
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
         validate_id(id)?;
+        let _guard = self.lock();
         let path = self.directory()?.join(format!("{id}.json"));
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!("删除恢复快照失败: {error}")),
         }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        // A panic in one save must not brick crash recovery for the session.
+        self.sync
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Allocate a brand-new snapshot id. Creation stays an atomic `expected
+    /// None` write, so a file appearing concurrently is never overwritten.
+    fn write_new_snapshot(
+        &self,
+        dir: &Path,
+        record: &mut RecoveryRecord,
+    ) -> Result<(PathBuf, Vec<u8>, Vec<String>), String> {
+        for attempt in 0..3 {
+            let id = random_id()?;
+            record.id = id.clone();
+            let target = dir.join(format!("{id}.json"));
+            let bytes = encode_record(record)?;
+            if bytes.len() as u64 > self.limits.total {
+                return Err("恢复快照超过存储预算，未写入；已有快照保持不变".into());
+            }
+            match atomic::write_checked(&target, &bytes, None) {
+                Ok(()) => {
+                    let warnings = self.prune_after_write(bytes.len() as u64, &id);
+                    return Ok((target, bytes, warnings));
+                }
+                Err(error) if error.code == "conflict" && attempt < 2 => continue,
+                Err(error) => return Err(error.message),
+            }
+        }
+        Err("恢复快照标识冲突，未能写入；当前内容仍保留在编辑器中".into())
+    }
+
+    /// Enforce the limits after a successful write. The new record is excluded
+    /// from eviction, so a budget prune can never remove the snapshot that was
+    /// just made durable. A prune failure is reported as a warning, never as a
+    /// failed save, because the new snapshot already exists.
+    fn prune_after_write(&self, incoming: u64, keep: &str) -> Vec<String> {
+        match self.prune_to_fit(incoming, Some(keep)) {
+            Ok(warnings) => warnings,
+            Err(error) => vec![format!("恢复快照已写入，但清理超限旧记录失败：{error}")],
+        }
+    }
+
+    /// Remove the oldest snapshots until `incoming` fits both limits. The file
+    /// being replaced/kept is excluded from eviction. If the new record alone
+    /// exceeds the space budget nothing is deleted.
+    fn prune_to_fit(&self, incoming: u64, keep: Option<&str>) -> Result<Vec<String>, String> {
+        if incoming > self.limits.total {
+            return Err("恢复快照超过存储预算，未写入；已有快照保持不变".into());
+        }
+        let dir = self.directory()?;
+        let mut others: Vec<(String, PathBuf, u64, u64)> = Vec::new();
+        let mut total: u64 = 0;
+        for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json")
+                || validate_id(stem).is_err()
+            {
+                continue;
+            }
+            if keep == Some(stem) {
+                continue;
+            }
+            let metadata = entry.metadata().map_err(|e| e.to_string())?;
+            total = total.saturating_add(metadata.len());
+            others.push((
+                stem.to_owned(),
+                path,
+                metadata.len(),
+                file_mtime_ns(&metadata),
+            ));
+        }
+        others.sort_by_key(|(_, _, _, modified)| *modified);
+        let mut count = others.len() + 1;
+        let mut warnings = Vec::new();
+        while count > self.limits.records || total.saturating_add(incoming) > self.limits.total {
+            let Some((id, path, size, _)) = others.first().cloned() else {
+                return Err(
+                    "恢复快照超过数量/空间上限且没有可清理的旧记录，未写入；已有快照保持不变"
+                        .into(),
+                );
+            };
+            match fs::remove_file(&path) {
+                Ok(()) => {
+                    total = total.saturating_sub(size);
+                    count -= 1;
+                    others.remove(0);
+                    warnings.push(format!("恢复快照数量或空间超限，已清理最旧记录 {id}"));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    total = total.saturating_sub(size);
+                    count -= 1;
+                    others.remove(0);
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "恢复快照超过数量/空间上限，且清理最旧记录失败: {error}"
+                    ))
+                }
+            }
+        }
+        Ok(warnings)
     }
 
     /// Enforce count/space limits from metadata only. Startup must not parse
@@ -378,7 +563,26 @@ fn disk_stat(path: &str) -> Option<(u64, u64)> {
 
 /// Never make a network/device metadata request from a startup list. A
 /// tampered recovery record must not be able to trigger UNC authentication.
+/// Rust canonicalizes local Windows paths to the verbatim form `\\?\C:\...`;
+/// that prefix is local and must not be confused with a UNC share. Verbatim
+/// UNC paths (`\\?\UNC\server\share`) remain remote.
 fn remote_path(path: &str) -> bool {
+    let path = path
+        .strip_prefix(r"\\?\")
+        .or_else(|| path.strip_prefix("//?/"))
+        .unwrap_or(path);
+    if path.starts_with(r"UNC\") || path.starts_with("UNC/") {
+        return true;
+    }
+    // Device namespaces can block or require privileged access; a recovery
+    // record must never make startup probe them.
+    if path.starts_with(r"GLOBALROOT\")
+        || path.starts_with("GLOBALROOT/")
+        || path.starts_with(r"PIPE\")
+        || path.starts_with("PIPE/")
+    {
+        return true;
+    }
     path.starts_with("\\\\") || path.starts_with("//")
 }
 
@@ -391,11 +595,42 @@ fn file_mtime_ns(metadata: &fs::Metadata) -> u64 {
     modified_ns(metadata).unwrap_or(0)
 }
 
+fn encode_record(record: &RecoveryRecord) -> Result<Vec<u8>, String> {
+    let bytes = serde_json::to_vec(record).map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_FILE {
+        return Err("恢复快照编码后超过大小上限，未写入".into());
+    }
+    Ok(bytes)
+}
+
+/// Build the same version string the file service uses for conditional writes.
+/// It is derived from the bytes we just wrote plus the target metadata, so a
+/// successful save does not need to read the whole snapshot back.
+fn written_version(path: &Path, bytes: &[u8]) -> Result<String, String> {
+    let modified = fs::metadata(path)
+        .map_err(|e| format!("读取恢复快照状态失败: {e}"))?
+        .modified()
+        .ok();
+    Ok(version_of(bytes, modified))
+}
+
+fn valid_version(version: &str) -> Result<(), String> {
+    if version.is_empty()
+        || version.len() > 256
+        || !version
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b':')
+    {
+        return Err("恢复快照版本无效".into());
+    }
+    Ok(())
+}
+
 fn read_record(
     path: &Path,
     expected_id: &str,
     _max_records: usize,
-) -> Result<RecoveryRecord, LoadError> {
+) -> Result<(RecoveryRecord, String), LoadError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -417,7 +652,8 @@ fn read_record(
     let record: RecoveryRecord = serde_json::from_slice(&bytes)
         .map_err(|error| LoadError::Corrupt(format!("JSON 无效: {error}")))?;
     validate_record(&record, expected_id).map_err(LoadError::Corrupt)?;
-    Ok(record)
+    let version = version_of(&bytes, metadata.modified().ok());
+    Ok((record, version))
 }
 
 fn validate_record(record: &RecoveryRecord, expected_id: &str) -> Result<(), String> {
@@ -599,7 +835,14 @@ mod tests {
                 mode: None,
             }],
             disk_version: None,
+            expected_version: None,
         }
+    }
+
+    fn update(text: &str, id: &str) -> RecoveryInput {
+        let mut next = input(text);
+        next.id = Some(id.to_owned());
+        next
     }
 
     #[test]
@@ -607,13 +850,219 @@ mod tests {
         let (_dir, service) = service();
         let saved = service.save(input("hello 世界\n")).unwrap();
         assert!(saved.record.id.len() == 32);
+        assert!(!saved.version.is_empty());
         let list = service.list().unwrap();
         assert_eq!(list.records.len(), 1);
         assert_eq!(list.records[0].char_count, 9);
         assert!(!list.records[0].disk_exists);
         let record = service.read(&saved.record.id).unwrap();
-        assert_eq!(record.text, "hello 世界\n");
-        assert_eq!(record.checksum, checksum(&record.text));
+        assert_eq!(record.record.text, "hello 世界\n");
+        assert_eq!(record.record.checksum, checksum(&record.record.text));
+        assert_eq!(record.version, saved.version);
+    }
+
+    #[test]
+    fn same_id_supports_repeated_durable_updates_across_a_service_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = dir.path().join("recovery");
+        let mut service = RecoveryService::default();
+        service.configure(storage.clone());
+        let first = service.save(input("A")).unwrap();
+        let id = first.record.id.clone();
+
+        // No caller version: the backend reads the actual current version and
+        // performs a conditional replacement, so A can be updated at all.
+        let second = service.save(update("B", &id)).unwrap();
+        assert_eq!(second.record.id, id);
+
+        // The frontend protocol: send back the last written version.
+        let mut third = update("C", &id);
+        third.expected_version = Some(second.version.clone());
+        let third = service.save(third).unwrap();
+        assert_eq!(third.record.id, id);
+
+        // A failed update must leave C intact and report failure.
+        crate::files::atomic::fault::set(crate::files::atomic::fault::TEMP_WRITE);
+        let mut failed = update("D", &id);
+        failed.expected_version = Some(third.version.clone());
+        assert!(service.save(failed).is_err());
+        crate::files::atomic::fault::clear();
+        assert_eq!(service.read(&id).unwrap().record.text, "C");
+
+        // Destroy the in-memory service and read the snapshot from a new one.
+        drop(service);
+        let mut reopened = RecoveryService::default();
+        reopened.configure(storage);
+        let record = reopened.read(&id).unwrap();
+        assert_eq!(record.record.text, "C");
+        assert_eq!(record.record.checksum, checksum("C"));
+        let list = reopened.list().unwrap();
+        assert_eq!(list.records.len(), 1);
+        assert_eq!(list.records[0].id, id);
+        assert_eq!(list.records[0].char_count, 1);
+    }
+
+    #[test]
+    fn failed_second_and_third_writes_keep_the_previous_snapshot_valid() {
+        let (_dir, service) = service();
+        let first = service.save(input("A")).unwrap();
+        let id = first.record.id.clone();
+
+        crate::files::atomic::fault::set(crate::files::atomic::fault::TEMP_WRITE);
+        assert!(service.save(update("B", &id)).is_err());
+        crate::files::atomic::fault::clear();
+        assert_eq!(service.read(&id).unwrap().record.text, "A");
+
+        let second = service.save(update("B", &id)).unwrap();
+        crate::files::atomic::fault::set(crate::files::atomic::fault::REPLACE);
+        let mut third = update("C", &id);
+        third.expected_version = Some(second.version.clone());
+        assert!(service.save(third).is_err());
+        crate::files::atomic::fault::clear();
+        assert_eq!(service.read(&id).unwrap().record.text, "B");
+        assert_eq!(service.list().unwrap().records.len(), 1);
+    }
+
+    #[test]
+    fn a_stale_expected_version_never_overwrites_another_writer() {
+        let (_dir, service) = service();
+        let first = service.save(input("A")).unwrap();
+        let id = first.record.id.clone();
+
+        // Another writer updates the snapshot after this caller last looked.
+        let external = service.save(update("external", &id)).unwrap();
+        assert_eq!(external.record.id, id);
+
+        // The stale writer must not win: its content is preserved under a new
+        // id and the external snapshot remains byte-for-byte readable.
+        let mut stale = update("stale", &id);
+        stale.expected_version = Some(first.version.clone());
+        let saved = service.save(stale).unwrap();
+        assert_ne!(saved.record.id, id);
+        assert_eq!(service.read(&id).unwrap().record.text, "external");
+        assert_eq!(service.read(&saved.record.id).unwrap().record.text, "stale");
+        assert_eq!(service.list().unwrap().records.len(), 2);
+    }
+
+    #[test]
+    fn a_deleted_snapshot_is_never_silently_resurrected_at_the_same_id() {
+        let (_dir, service) = service();
+        let first = service.save(input("A")).unwrap();
+        let id = first.record.id.clone();
+        service.delete(&id).unwrap();
+
+        let mut next = update("B", &id);
+        next.expected_version = Some(first.version.clone());
+        let saved = service.save(next).unwrap();
+        assert_ne!(saved.record.id, id);
+        assert!(service.read(&id).is_err());
+        assert_eq!(service.read(&saved.record.id).unwrap().record.text, "B");
+    }
+
+    #[test]
+    fn concurrent_updates_to_the_same_id_never_corrupt_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut service = RecoveryService::default();
+        service.configure(dir.path().join("recovery"));
+        let first = service.save(input("base")).unwrap();
+        let id = first.record.id.clone();
+        let shared = std::sync::Arc::new(service);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let mut handles = Vec::new();
+        for index in 0..8 {
+            let service = std::sync::Arc::clone(&shared);
+            let barrier = std::sync::Arc::clone(&barrier);
+            let id = id.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                service
+                    .save(update(&format!("writer-{index}"), &id))
+                    .map(|saved| saved.record.id)
+            }));
+        }
+        for handle in handles {
+            assert_eq!(handle.join().unwrap().unwrap(), id);
+        }
+        let record = shared.read(&id).unwrap();
+        assert!(record.record.text.starts_with("writer-"));
+        assert_eq!(record.record.checksum, checksum(&record.record.text));
+        assert_eq!(shared.list().unwrap().records.len(), 1);
+    }
+
+    #[test]
+    fn update_and_delete_racing_never_produce_corrupt_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut service = RecoveryService::default();
+        service.configure(dir.path().join("recovery"));
+        let id = service.save(input("A")).unwrap().record.id;
+        let shared = std::sync::Arc::new(service);
+        for round in 0..10 {
+            let text = format!("update-{round}");
+            let updater = {
+                let service = std::sync::Arc::clone(&shared);
+                let id = id.clone();
+                std::thread::spawn(move || service.save(update(&text, &id)))
+            };
+            let deleter = {
+                let service = std::sync::Arc::clone(&shared);
+                let id = id.clone();
+                std::thread::spawn(move || service.delete(&id))
+            };
+            let _ = updater.join().unwrap();
+            let _ = deleter.join().unwrap();
+            let dir = shared.directory().unwrap();
+            for entry in fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
+                }
+                let stem = path.file_stem().unwrap().to_str().unwrap().to_owned();
+                assert!(
+                    read_record(&path, &stem, MAX_RECORDS).is_ok(),
+                    "corrupt snapshot after a save/delete race: {}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn storage_budget_never_corrupts_an_existing_snapshot() {
+        let (_dir, mut service) = service();
+        service.limits = Limits {
+            records: 2,
+            total: u64::MAX,
+        };
+        let first = service.save(input("A")).unwrap();
+        let second = service.save(input("B")).unwrap();
+        let id = first.record.id.clone();
+        // Force the update to need room: the replaced record itself is excluded
+        // from eviction, so only the unrelated older snapshot may be removed.
+        let current_size = fs::metadata(service.directory().unwrap().join(format!("{id}.json")))
+            .unwrap()
+            .len();
+        service.limits.total = current_size;
+        let mut next = update("C", &id);
+        next.expected_version = Some(first.version.clone());
+        let saved = service.save(next).unwrap();
+        assert_eq!(saved.record.id, id);
+        assert!(saved
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("已清理")));
+        assert!(!service
+            .directory()
+            .unwrap()
+            .join(format!("{}.json", second.record.id))
+            .exists());
+        assert_eq!(service.read(&id).unwrap().record.text, "C");
+
+        // A record that cannot fit at all is refused before anything is deleted.
+        service.limits.total = 1;
+        let mut oversized = update(&"x".repeat(4096), &id);
+        oversized.expected_version = Some(saved.version.clone());
+        assert!(service.save(oversized).is_err());
+        assert_eq!(service.read(&id).unwrap().record.text, "C");
     }
 
     #[test]
@@ -726,6 +1175,36 @@ mod tests {
         fs::remove_file(&file).unwrap();
         let list = service.list().unwrap();
         assert!(!list.records[0].disk_exists);
+        assert!(list.records[0].disk_changed);
+    }
+
+    #[test]
+    fn canonical_local_paths_are_not_mistaken_for_network_shares() {
+        assert!(!remote_path(r"\\?\E:\notes.txt"));
+        assert!(!remote_path(r"\\?\E:\folder\note.txt"));
+        assert!(!remote_path("//?/home/user/note.txt"));
+        assert!(remote_path(r"\\?\UNC\server\share\note.txt"));
+        assert!(remote_path(r"\\server\share\note.txt"));
+        assert!(remote_path("//server/share/note.txt"));
+
+        let (dir, service) = service();
+        let file = dir.path().join("note.txt");
+        fs::write(&file, "disk text").unwrap();
+        // On Windows this is a `\\?\` verbatim path; on Unix it stays absolute.
+        let canonical = fs::canonicalize(&file)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let mut input = input("recovery text");
+        input.path = Some(canonical);
+        let saved = service.save(input).unwrap();
+        assert!(
+            saved.record.disk_exists,
+            "canonical local path must be treated as local"
+        );
+        assert!(!saved.record.disk_changed);
+        fs::write(&file, "changed after snapshot").unwrap();
+        let list = service.list().unwrap();
         assert!(list.records[0].disk_changed);
     }
 

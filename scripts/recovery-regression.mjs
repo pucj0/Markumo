@@ -35,16 +35,17 @@ try {
   const result = await page.evaluate(async () => {
     const f = window.f
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+    const ok = (value, message = 'assertion failed') => { if (!value) throw Error(message) }
     const random = () => Array.from({ length: 32 }, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('')
     class RecoveryTransport {
-      constructor() { this.records = new Map(); this.calls = []; this.removed = []; this.warnings = []; this.fail = false; this.lastId = '' }
+      constructor() { this.records = new Map(); this.calls = []; this.removed = []; this.warnings = []; this.fail = false; this.removeFail = false; this.lastId = ''; this.versions = new Map(); this.sequence = 0 }
       summary(record) {
         return { id: record.id, name: record.name, path: record.path, updatedAt: record.updatedAt, charCount: record.charCount,
           sizeBytes: record.text.length, mode: record.mode, panes: record.panes, diskExists: !!record.path && record.diskExists !== false,
           diskChanged: !!record.diskChanged }
       }
       async list() { return { records: [...this.records.values()].map(record => this.summary(record)), warnings: this.warnings } }
-      async read(id) { const record = this.records.get(id); if (!record) throw Error('missing recovery'); return { ...record } }
+      async read(id) { const record = this.records.get(id); if (!record) throw Error('missing recovery'); return { ...record, version: this.versions.get(id) || 'seed' } }
       async save(input) {
         this.calls.push({ ...input, panes: input.panes.map(pane => ({ ...pane })) })
         if (this.fail) throw Error('injected recovery write failure')
@@ -52,9 +53,11 @@ try {
         const record = { ...input, id, schemaVersion: 1, updatedAt: Date.now(), charCount: input.text.length, checksum: 'test',
           diskVersion: input.diskVersion, diskSize: null, diskModifiedNs: null }
         this.records.set(id, record); this.lastId = id
-        return { record: this.summary(record), warnings: [] }
+        const version = `v${++this.sequence}:${input.text.length}`
+        this.versions.set(id, version)
+        return { record: this.summary(record), warnings: [], version }
       }
-      async remove(id) { this.removed.push(id); this.records.delete(id) }
+      async remove(id) { this.removed.push(id); if (this.removeFail) throw Error('injected remove failure'); this.records.delete(id); this.versions.delete(id) }
     }
     const fileMeta = { token: 'tok-1', name: 'note.txt', path: 'E:/fixture/note.txt', encoding: 'UTF-8', bom: false, eol: 'LF', readOnly: false, version: 'v1' }
     function fileGateway(options = {}) {
@@ -69,9 +72,9 @@ try {
         preferences: async () => ({ recent: [], layout: { mode: 'single', sidebarVisible: false, sidebarWidth: 240 } }),
       }
     }
-    function setup(options = {}) {
+    function setup(options = {}, sharedTransport = null) {
       const manager = new f.DocumentManager([], async () => [])
-      const transport = new RecoveryTransport()
+      const transport = sharedTransport || new RecoveryTransport()
       transport.warnings = options.warnings || []
       const files = new f.FileController(manager, fileGateway(options.file || {}), () => {})
       const notices = []
@@ -199,12 +202,196 @@ try {
       controller.dispose(); manager.dispose()
     }
     {
-      const { manager, transport, controller } = setup()
-      for (const id of ['7'.repeat(32), '8'.repeat(32)]) transport.records.set(id, { schemaVersion: 1, id, name: 'drop.txt', path: null, text: 'drop', encoding: 'UTF-8', bom: false, eol: 'LF', mode: null, panes: [], updatedAt: Date.now(), charCount: 4, checksum: 'x', diskVersion: null, diskSize: null, diskModifiedNs: null })
-      await controller.start()
-      await controller.discardAll()
-      out.discardAll = { records: controller.records.value.length, removed: ['7'.repeat(32), '8'.repeat(32)].every(id => transport.removed.includes(id)) }
-      controller.dispose(); manager.dispose()
+      const transport = new RecoveryTransport()
+      const untouched = ['7'.repeat(32), '8'.repeat(32)]
+      for (const id of untouched) transport.records.set(id, { schemaVersion: 1, id, name: 'drop.txt', path: null, text: 'drop', encoding: 'UTF-8', bom: false, eol: 'LF', mode: null, panes: [], updatedAt: Date.now(), charCount: 4, checksum: 'x', diskVersion: null, diskSize: null, diskModifiedNs: null })
+      const { manager, files, controller } = setup({}, transport)
+      try {
+        await controller.start()
+        const doc = manager.createUntitled('txt')
+        manager.dispatch(doc, { changes: { from: 0, insert: 'active draft' } })
+        await sleep(60)
+        const active = [...transport.records.values()].find(record => record.text === 'active draft')
+        ok(active, 'active snapshot missing')
+        const before = controller.records.value.length
+        await controller.discardAll()
+        out.discardAll = { before, unclaimed: untouched.every(id => transport.records.has(id)),
+          activeRemoved: !transport.records.has(active.id), listed: controller.records.value.length }
+      } finally { controller.dispose(); files.dispose(); manager.dispose() }
+    }
+
+    // Lifecycle A: choosing "later" keeps an unclaimed draft. Saving the
+    // original file afterwards must not delete it, and a restart finds it.
+    {
+      const transport = new RecoveryTransport()
+      let draftId = ''
+      {
+        const { manager, files, controller } = setup({ file: { diskText: 'A', version: 'v1' } }, transport)
+        files.accept({ ...fileMeta, text: 'A' })
+        const id = manager.activeId
+        await controller.start()
+        manager.dispatch(id, { changes: { from: 0, insert: 'B' } })
+        await sleep(80)
+        const record = [...transport.records.values()].find(item => item.text === 'BA')
+        ok(record, 'dirty snapshot was not written')
+        draftId = record.id
+        // Abrupt stop: no discard/cleanup path runs.
+        controller.dispose(); files.dispose(); manager.dispose()
+      }
+      {
+        const { manager, files, controller } = setup({ file: { diskText: 'A', version: 'v1' } }, transport)
+        files.accept({ ...fileMeta, text: 'A' })
+        const id = manager.activeId
+        await controller.start()
+        ok(controller.records.value.some(record => record.id === draftId), 'unclaimed draft missing from the list')
+        controller.close()
+        manager.dispatch(id, { changes: { from: 0, insert: 'C' } })
+        await sleep(80)
+        ok(await files.save(id), 'ordinary save failed')
+        await sleep(20)
+        ok(transport.records.has(draftId), 'ordinary save deleted the unclaimed recovery draft')
+        await controller.open()
+        ok(controller.records.value.some(record => record.id === draftId), 'unclaimed draft not listed after save')
+        const samePath = [...transport.records.values()].filter(item => item.path === 'E:/fixture/note.txt')
+        out.defer = { listedAfterSave: samePath.some(item => item.text === 'BA'), activeRemoved: samePath.every(item => item.id === draftId) }
+        controller.dispose(); files.dispose(); manager.dispose()
+      }
+      {
+        const session = setup({}, transport)
+        try {
+          await session.controller.start()
+          ok(session.transport.records.has(draftId), 'unclaimed draft vanished after a restart')
+          ok((await session.transport.read(draftId)).text === 'BA', 'unclaimed draft content changed')
+          out.deferRestart = session.controller.records.value.some(record => record.id === draftId)
+        } finally { session.controller.dispose(); session.manager.dispose() }
+      }
+    }
+
+    // Lifecycle B: an explicitly recovered draft keeps updating in place, and
+    // the newest text is what a later restart offers.
+    {
+      const transport = new RecoveryTransport()
+      const id = 'bc'.repeat(16)
+      transport.records.set(id, { schemaVersion: 1, id, name: 'recovered.txt', path: null, text: 'B', encoding: 'UTF-8', bom: false, eol: 'LF', mode: null, panes: [], updatedAt: Date.now(), charCount: 1, checksum: 'x', diskVersion: null, diskSize: null, diskModifiedNs: null })
+      transport.versions.set(id, 'seed-b')
+      {
+        const { manager, files, controller } = setup({}, transport)
+        await controller.start()
+        ok(await controller.restore(controller.records.value.find(record => record.id === id)), 'restore failed')
+        const doc = manager.openedDocuments.find(item => item.id.startsWith('recovered-'))
+        ok(doc, 'restored draft missing')
+        const versionAfterRestore = transport.versions.get(id)
+        manager.dispatch(doc.id, { changes: { from: manager.getState(doc.id).doc.length, insert: 'D' } })
+        await sleep(80)
+        const last = [...transport.calls].filter(call => call.id === id).at(-1)
+        out.recoveredUpdate = { text: transport.records.get(id)?.text, expectedVersion: last?.expectedVersion, restoreVersion: versionAfterRestore }
+        ok(transport.records.get(id)?.text === 'BD', 'recovered draft was not updated in place')
+        controller.dispose(); files.dispose(); manager.dispose()
+      }
+      {
+        const { manager, controller } = setup({}, transport)
+        try {
+          await controller.start()
+          const summary = controller.records.value.find(record => record.id === id)
+          ok(summary, 'updated recovered draft missing after restart')
+          await controller.restore(summary)
+          out.recoveredRestart = manager.openedDocuments.some(doc => manager.getText(doc.id) === 'BD')
+        } finally { controller.dispose(); manager.dispose() }
+      }
+    }
+
+    // Lifecycle C: a safe save cleans only the snapshot of that document. A
+    // different unclaimed draft for the same path is left alone.
+    {
+      const transport = new RecoveryTransport()
+      const restored = 'cd'.repeat(16), untouched = 'ce'.repeat(16)
+      const path = 'E:/fixture/note.txt'
+      for (const [id, text] of [[restored, 'B'], [untouched, 'keep me']]) {
+        transport.records.set(id, { schemaVersion: 1, id, name: 'note.txt', path, text, encoding: 'UTF-8', bom: false, eol: 'LF', mode: null, panes: [], updatedAt: Date.now(), charCount: text.length, checksum: 'x', diskVersion: 'v1', diskSize: 1, diskModifiedNs: null, diskExists: true })
+        transport.versions.set(id, `seed-${id}`)
+      }
+      const { manager, files, controller } = setup({ file: { diskText: 'A', version: 'v1' } }, transport)
+      try {
+        files.accept({ ...fileMeta, text: 'A' })
+        const documentId = manager.activeId
+        await controller.start()
+        ok(controller.records.value.length === 2, 'both same-path drafts must be listed')
+        ok(await controller.restore(controller.records.value.find(record => record.id === restored)), 'restore failed')
+        ok(await files.save(documentId), 'save after restore failed')
+        await sleep(20)
+        out.cleanupOne = { restoredGone: !transport.records.has(restored), unrelatedKept: transport.records.has(untouched), listed: controller.records.value.length }
+      } finally { controller.dispose(); files.dispose(); manager.dispose() }
+    }
+
+    // Lifecycle C2: a failed cleanup is surfaced and leaves the record on disk
+    // (not falsely deleted), so it can be listed and discarded on retry.
+    {
+      const transport = new RecoveryTransport()
+      const id = 'cf'.repeat(16)
+      const path = 'E:/fixture/note.txt'
+      transport.records.set(id, { schemaVersion: 1, id, name: 'note.txt', path, text: 'B', encoding: 'UTF-8', bom: false, eol: 'LF', mode: null, panes: [], updatedAt: Date.now(), charCount: 1, checksum: 'x', diskVersion: 'v1', diskSize: 1, diskModifiedNs: null, diskExists: true })
+      transport.versions.set(id, 'seed-cf')
+      const { manager, files, controller } = setup({ file: { diskText: 'A', version: 'v1' } }, transport)
+      try {
+        files.accept({ ...fileMeta, text: 'A' })
+        const documentId = manager.activeId
+        await controller.start()
+        ok(await controller.restore(controller.records.value.find(record => record.id === id)), 'restore failed')
+        transport.removeFail = true
+        ok(await files.save(documentId), 'save itself must still succeed')
+        await sleep(20)
+        const error = controller.lastError.value || ''
+        const keptAfterFailure = transport.records.has(id)
+        ok(keptAfterFailure, 'failed cleanup must not fake deletion')
+        ok(error.includes('injected remove failure'), 'cleanup failure was not surfaced')
+        transport.removeFail = false
+        await controller.open()
+        const listed = controller.records.value.some(record => record.id === id)
+        await controller.discard(controller.records.value.find(record => record.id === id))
+        out.cleanupFailure = { keptAfterFailure, listed, discarded: !transport.records.has(id), error: error.includes('清理恢复快照失败') }
+      } finally { controller.dispose(); files.dispose(); manager.dispose() }
+    }
+
+    // Lifecycle D: several same-path records, multiple panes and untitled
+    // drafts never share or cross-delete a recovery identity.
+    {
+      const transport = new RecoveryTransport()
+      const path = 'E:/fixture/note.txt'
+      const ids = { one: 'da'.repeat(16), two: 'db'.repeat(16), three: 'dc'.repeat(16) }
+      for (const [id, name, text, recordPath] of [[ids.one, 'one.txt', 'draft one', path], [ids.two, 'two.txt', 'draft two', path], [ids.three, 'three.txt', 'draft three', null]]) {
+        transport.records.set(id, { schemaVersion: 1, id, name, path: recordPath, text, encoding: 'UTF-8', bom: false, eol: 'LF', mode: null, panes: [], updatedAt: Date.now(), charCount: text.length, checksum: 'x', diskVersion: recordPath ? 'v1' : null, diskSize: 5, diskModifiedNs: null, diskExists: !!recordPath })
+        transport.versions.set(id, `seed-${id}`)
+      }
+      const { manager, files, controller } = setup({ file: { diskText: 'disk', version: 'v1' } }, transport)
+      try {
+        files.accept({ ...fileMeta, text: 'disk' })
+        const documentId = manager.activeId
+        manager.splitPane('right', 'main', documentId)
+        await controller.start()
+        ok(controller.records.value.length === 3, 'same-path records were auto-claimed')
+        manager.dispatch(documentId, { changes: { from: 0, insert: 'local ' } })
+        await sleep(80)
+        const active = [...transport.records.values()].find(record => record.path === path && record.text === 'local disk')
+        ok(active, 'active snapshot missing')
+        ok(active.panes.length === 2, 'one document must own one snapshot for both panes')
+        ok(transport.records.size === 4, 'active snapshot replaced an unclaimed draft')
+        await controller.discard(controller.records.value.find(record => record.id === ids.one))
+        ok(!transport.records.has(ids.one), 'explicit discard did not remove its target')
+        ok(transport.records.has(ids.two) && transport.records.has(ids.three), 'explicit discard removed unrelated drafts')
+        const first = manager.createUntitled('txt')
+        manager.dispatch(first, { changes: { from: 0, insert: 'untitled one' } })
+        await sleep(60)
+        const second = manager.createUntitled('txt')
+        manager.dispatch(second, { changes: { from: 0, insert: 'untitled two' } })
+        await sleep(60)
+        const untitled = [...transport.records.values()].filter(record => record.text === 'untitled one' || record.text === 'untitled two').map(record => record.id)
+        ok(new Set(untitled).size === 2, 'untitled drafts shared a recovery identity')
+        ok(await files.save(documentId, true), 'save-as with multiple records failed')
+        await sleep(20)
+        ok(!transport.records.has(active.id), 'save-as did not clean only its own active snapshot')
+        ok(transport.records.has(ids.two) && transport.records.has(ids.three), 'unclaimed drafts were deleted by save-as')
+        out.multiRecord = { listed: controller.records.value.length, activePanes: active.panes.length }
+      } finally { controller.dispose(); files.dispose(); manager.dispose() }
     }
 
     // Failure is explicit; a later visit keeps records.
@@ -253,7 +440,16 @@ try {
   assert.deepEqual(result.multi, ['first recovered', 'second recovered'])
   assert.deepEqual(result.quickClose, { before: 0, after: 1, body: 'quick close' })
   assert.deepEqual(result.discard, { before: 1, reopened: 1, after: 0, removed: true })
-  assert.deepEqual(result.discardAll, { records: 0, removed: true })
+  assert.deepEqual(result.discardAll, { before: 2, unclaimed: true, activeRemoved: true, listed: 2 })
+  assert.deepEqual(result.defer, { listedAfterSave: true, activeRemoved: true })
+  assert.equal(result.deferRestart, true)
+  assert.equal(result.recoveredUpdate.text, 'BD')
+  assert.equal(result.recoveredUpdate.expectedVersion, result.recoveredUpdate.restoreVersion)
+  assert.notEqual(result.recoveredUpdate.restoreVersion, 'seed-b')
+  assert.equal(result.recoveredRestart, true)
+  assert.deepEqual(result.cleanupOne, { restoredGone: true, unrelatedKept: true, listed: 1 })
+  assert.deepEqual(result.cleanupFailure, { keptAfterFailure: true, listed: true, discarded: true, error: true })
+  assert.deepEqual(result.multiRecord, { listed: 2, activePanes: 2 })
   assert(result.failure.error.includes('injected recovery write failure'))
   assert.equal(result.failure.visible, true)
   assert.deepEqual(result.dialog, { rendered: true, close: 1, disk: true })
@@ -269,14 +465,14 @@ try {
     f.reset(source)
     for (let i = 0; i < 100 && !f.live(); i++) await sleep(20)
     await sleep(30)
-    const transport = { records: new Map(), next: 1,
+    const transport = { records: new Map(), next: 1, version: 1,
       async list() { return { records: [...this.records.values()].map(record => ({ id: record.id, name: record.name, path: record.path, updatedAt: record.updatedAt, charCount: record.charCount, sizeBytes: record.text.length, mode: record.mode, panes: record.panes, diskExists: false, diskChanged: false })), warnings: [] } },
-      async read(id) { return { ...this.records.get(id) } },
+      async read(id) { return { ...this.records.get(id), version: this.records.get(id).version || 'v0' } },
       async save(input) {
         const id = input.id || ('a'.repeat(31) + this.next++)
-        const record = { ...input, id, schemaVersion: 1, updatedAt: Date.now(), charCount: input.text.length, checksum: 'x', diskVersion: null, diskSize: null, diskModifiedNs: null }
+        const record = { ...input, id, schemaVersion: 1, updatedAt: Date.now(), charCount: input.text.length, checksum: 'x', diskVersion: null, diskSize: null, diskModifiedNs: null, version: `v${this.version++}` }
         this.records.set(id, record)
-        return { record: { ...record, sizeBytes: record.text.length, diskExists: false, diskChanged: false }, warnings: [] }
+        return { record: { ...record, sizeBytes: record.text.length, diskExists: false, diskChanged: false }, warnings: [], version: record.version }
       },
       async remove(id) { this.records.delete(id) } }
     const controller = new window.RecoveryController(f.manager, { recent: async () => {} }, transport, () => {}, { debounceMs: 15 })

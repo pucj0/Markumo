@@ -7,6 +7,8 @@ import { sameFilePath } from '../files/pathKey'
 import { isMedia } from '../files/media'
 import type { EditorDocument, MarkdownMode } from '../../types'
 import type {
+  RecoveryClaim,
+  RecoveryClaimKind,
   RecoveryDiff,
   RecoveryGateway,
   RecoveryList,
@@ -26,6 +28,12 @@ type Pending = { text: Text; due: number }
  * Owns debounced, body-preserving snapshots. It observes immutable CM Text
  * identities; it never serializes on every keystroke and never writes the
  * original file. Recovery records are independent of last-session.json.
+ *
+ * A record is only associated with a document by an explicit act of this
+ * session: writing a snapshot for a dirty document (`active`) or restoring a
+ * record the user chose (`recovered`). A record loaded from disk stays
+ * `unclaimed` even when its path matches an open document, so an ordinary save
+ * can never delete a draft the user has not handled.
  */
 export class RecoveryController {
   readonly records = ref<RecoverySummary[]>([])
@@ -34,7 +42,9 @@ export class RecoveryController {
   readonly busy = ref(false)
   readonly lastError = ref<string | null>(null)
   readonly diff = ref<RecoveryDiff | null>(null)
-  private readonly ids = new Map<string, string>()
+  /** Canonical document id -> the one snapshot this session owns. Keying by
+   * document (not pane or path) gives every pane a single recovery identity. */
+  private readonly claims = new Map<string, RecoveryClaim>()
   private readonly generations = new Map<string, number>()
   private readonly pending = new Map<string, Pending>()
   private readonly failed = new Map<string, Text>()
@@ -91,18 +101,15 @@ export class RecoveryController {
     }
     this.warnings.value = result.warnings
     if (result.warnings.length) this.notify(result.warnings.join('\n'))
-    // Associate unclaimed records with session-restored documents so closing or
-    // saving that document can clean the right snapshot.
-    for (const record of result.records) {
-      if (!record.path) continue
-      const doc = this.manager.openedDocuments.find(candidate => candidate.path && sameFilePath(candidate.path, record.path!))
-      if (doc && !this.ids.has(doc.id)) this.ids.set(doc.id, record.id)
+    // A claim survives only while its document is still open. Nothing is
+    // inferred from a path here: an unclaimed draft that happens to share a
+    // path with an open document stays visible and untouched until the user
+    // restores or discards it.
+    for (const documentId of [...this.claims.keys()]) {
+      if (!this.manager.metadata(documentId)) this.claims.delete(documentId)
     }
-    this.records.value = result.records.filter(record => {
-      const owner = [...this.ids.entries()].find(([, id]) => id === record.id)?.[0]
-      const doc = owner ? this.manager.metadata(owner) : null
-      return !(doc?.dirty && owner)
-    })
+    const claimed = this.claimedRecordIds()
+    this.records.value = result.records.filter(record => !claimed.has(record.id))
   }
 
   /** Called only after the controller has been attached to the main window. */
@@ -130,7 +137,10 @@ export class RecoveryController {
   }
 
   /** A destructive reload must wait for this exact buffer to reach durable storage.
-   * The retained snapshot is deliberately detached from subsequent normal saves. */
+   * The retained snapshot is deliberately detached from subsequent normal saves:
+   * after a successful checkpoint it becomes an unclaimed recovery draft, so a
+   * later save of the reloaded document cannot delete the only copy of the
+   * discarded buffer. */
   async checkpointBeforeReload(id: string): Promise<boolean> {
     const doc = this.manager.metadata(id), text = this.manager.getState(id)?.doc
     if (!doc?.dirty) return true
@@ -140,7 +150,11 @@ export class RecoveryController {
     this.pending.set(id, { text, due: 0 })
     await this.flush()
     if (this.lastSaved.get(id) !== text || this.manager.getState(id)?.doc !== text) return false
-    this.ids.delete(id); this.lastSaved.delete(id); this.pending.delete(id)
+    // Detach only the association. The snapshot itself stays on disk and will
+    // be listed as unclaimed if the reload discards this buffer.
+    this.claims.delete(id)
+    this.lastSaved.delete(id)
+    this.pending.delete(id)
     return true
   }
 
@@ -149,6 +163,7 @@ export class RecoveryController {
     this.bumpGeneration(documentId)
     const doc = this.manager.metadata(documentId)
     if (doc?.dirty) {
+      // Edits arrived while the file was being written: keep protecting them.
       const text = this.manager.getState(documentId)?.doc
       if (text) this.pending.set(documentId, { text, due: Date.now() + this.debounceMs })
       this.schedule()
@@ -157,9 +172,9 @@ export class RecoveryController {
     this.pending.delete(documentId)
     this.failed.delete(documentId)
     this.lastSaved.delete(documentId)
-    const id = this.ids.get(documentId)
-    this.ids.delete(documentId)
-    if (id) await this.removeSnapshot(id)
+    // Only a snapshot this session explicitly associated with this document
+    // may be removed. Unclaimed same-path drafts are not touched.
+    await this.releaseClaim(documentId)
   }
 
   async discardDocument(documentId: string) {
@@ -168,9 +183,7 @@ export class RecoveryController {
     this.pending.delete(documentId)
     this.failed.delete(documentId)
     this.lastSaved.delete(documentId)
-    const id = this.ids.get(documentId)
-    this.ids.delete(documentId)
-    if (id) await this.removeSnapshot(id)
+    await this.releaseClaim(documentId)
   }
 
   async discardAll() {
@@ -178,22 +191,29 @@ export class RecoveryController {
     this.pending.clear()
     this.failed.clear()
     this.lastSaved.clear()
-    const ids = new Set(this.records.value.map(record => record.id))
-    for (const id of this.ids.values()) ids.add(id)
-    this.ids.clear()
-    for (const id of ids) await this.removeSnapshot(id)
-    this.records.value = []
+    // "Discard everything" refers to this session's dirty documents. Recovery
+    // drafts from earlier runs are still unclaimed user data and must survive.
+    for (const documentId of [...this.claims.keys()]) await this.releaseClaim(documentId)
+    this.records.value = this.records.value.filter(record => !this.claimedRecordIds().has(record.id))
     this.visible.value = false
     this.diff.value = null
   }
   async discard(record: RecoverySummary) {
     await this.flushing.catch(() => {})
+    // The record must still be unclaimed: a concurrent snapshot write may have
+    // adopted it for a document. Never delete an active recovery identity.
+    if (this.claimedRecordIds().has(record.id)) {
+      this.lastError.value = '该恢复稿已被当前文档使用，未删除；请先处理对应文档。'
+      this.notify(this.lastError.value)
+      return
+    }
     try {
       await this.gateway.remove(record.id)
       this.records.value = this.records.value.filter(item => item.id !== record.id)
-      for (const [documentId, id] of this.ids) if (id === record.id) this.ids.delete(documentId)
+      for (const [documentId, claim] of this.claims) if (claim.recordId === record.id) this.claims.delete(documentId)
       if (this.diff.value?.id === record.id) this.diff.value = null
     } catch (error) {
+      // Keep the record visible so the user can retry; deletion is not faked.
       this.lastError.value = `丢弃恢复快照失败：${String(error)}`
       this.notify(this.lastError.value)
     }
@@ -253,7 +273,10 @@ export class RecoveryController {
       if (!docId) throw Error('无法创建恢复文档')
       this.applyPlacements(docId, body.panes.length ? body.panes : [{ pane: 'main', mode: body.mode || undefined }])
       if (this.manager.metadata(docId)) {
-        this.ids.set(docId, body.id)
+        // Explicit recovery: only now does the record become this document's
+        // recovery identity. Never share a record between two live documents.
+        const owned = [...this.claims.entries()].some(([documentId, claim]) => documentId !== docId && claim.recordId === body.id)
+        if (!owned) this.claims.set(docId, { recordId: body.id, kind: 'recovered', version: body.version })
         const text = this.manager.getState(docId)?.doc
         if (text) this.pending.set(docId, { text, due: Date.now() })
         this.records.value = this.records.value.filter(item => item.id !== body.id)
@@ -288,6 +311,7 @@ export class RecoveryController {
     this.timer = undefined
     this.pending.clear()
     this.failed.clear()
+    this.claims.clear()
   }
 
   private eligible(doc: EditorDocument): boolean {
@@ -322,8 +346,9 @@ export class RecoveryController {
       const current = this.manager.getState(documentId)?.doc
       if (!current) { this.pending.delete(documentId); continue }
       const panes = this.panesFor(documentId)
+      const claim = this.claims.get(documentId)
       const input: RecoverySaveInput = {
-        id: this.ids.get(documentId) || null,
+        id: claim?.recordId || null,
         name: doc.name,
         path: doc.path || null,
         text: item.text.toString(),
@@ -333,6 +358,7 @@ export class RecoveryController {
         mode: (doc.mode || null) as RecoveryMode | null,
         panes,
         diskVersion: doc.lastDiskVersion,
+        expectedVersion: claim?.version ?? null,
       }
       if (new TextEncoder().encode(input.text).length > MAX_TEXT_BYTES) {
         this.failed.set(documentId, item.text)
@@ -349,7 +375,8 @@ export class RecoveryController {
           if (!this.manager.metadata(documentId)?.dirty) await this.removeSnapshot(result.record.id)
           continue
         }
-        this.ids.set(documentId, result.record.id)
+        const kind: RecoveryClaimKind = claim?.kind === 'recovered' ? 'recovered' : 'active'
+        this.claims.set(documentId, { recordId: result.record.id, kind, version: result.version })
         this.lastError.value = null
         if (result.warnings.length) this.notify(result.warnings.join('\n'))
         const latest = this.manager.getState(documentId)?.doc
@@ -414,13 +441,31 @@ export class RecoveryController {
     this.generations.set(documentId, this.generation(documentId) + 1)
   }
 
-  private async removeSnapshot(id: string) {
+  private claimedRecordIds() {
+    return new Set([...this.claims.values()].map(claim => claim.recordId))
+  }
+
+  /** Remove only the exact record this document owns, and only after the
+   * snapshot backend confirms deletion. A failure leaves the record on disk
+   * (not falsely reported as deleted); a later reload lists it again so the
+   * user can retry. */
+  private async releaseClaim(documentId: string): Promise<boolean> {
+    const claim = this.claims.get(documentId)
+    if (!claim) return true
+    const removed = await this.removeSnapshot(claim.recordId)
+    if (this.claims.get(documentId) === claim) this.claims.delete(documentId)
+    return removed
+  }
+
+  private async removeSnapshot(id: string): Promise<boolean> {
     try {
       await this.gateway.remove(id)
       this.records.value = this.records.value.filter(record => record.id !== id)
+      return true
     } catch (error) {
       this.lastError.value = `清理恢复快照失败：${String(error)}`
       this.notify(this.lastError.value)
+      return false
     }
   }
 }
