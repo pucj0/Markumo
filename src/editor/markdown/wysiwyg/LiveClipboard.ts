@@ -113,6 +113,15 @@ export class LiveClipboard {
       if (!this.alive() || !this.editable()) return
       if (this.view.state !== state) throw new Error('读取剪贴板期间文档或选区变化，已取消粘贴')
       if (!text) return
+      // Inside a code block the canonical representation is raw text. Parsing
+      // the clipboard as Markdown and replacing a ProseMirror selection would
+      // turn following lines into block nodes and lift them out of the fence.
+      // Both menu paste and the global Ctrl+V route arrive here, so keep one
+      // transaction and let the embedded CodeMirror NodeView mirror it.
+      if (this.inCodeBlock(state)) {
+        this.view.dispatch(state.tr.insertText(text).setMeta('isolated', true).scrollIntoView())
+        return
+      }
       if (operation === 'paste-plain') this.view.dispatch(state.tr.insertText(text).setMeta('isolated', true).scrollIntoView())
       else this.view.dispatch(state.tr.replaceSelection(Slice.maxOpen(parseMarkdown(text).doc.content)).setMeta('isolated', true).scrollIntoView())
       return
@@ -123,5 +132,10 @@ export class LiveClipboard {
     else if (operation === 'html') await textClipboard.writeText(content.html)
     else await writeRichClipboard(operation === 'simplified' ? content.plain : content.text, content.html)
     if (operation === 'cut' && this.alive() && this.editable() && this.view.state === state) this.remove(content.selection)
+  }
+
+  private inCodeBlock(state: EditorState) {
+    const { $from, $to } = state.selection
+    return $from.parent.type.name === 'code_block' && $from.sameParent($to)
   }
 }

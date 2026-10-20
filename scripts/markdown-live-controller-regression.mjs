@@ -370,6 +370,54 @@ try {
         await block.locator('.cm-content').click(); await page.keyboard.press('End'); await page.keyboard.insertText(' # edit')
       })
     })
+    await test('code block multiline paste stays raw, one undo, selection/empty/long/unicode/fence safe and mode/save stable', async () => {
+      const before = 'Intro\n\n```js\nstart\n```\n\nTail\n'
+      await reset(before)
+      const block = page.locator('.md-code-block')
+      await block.locator('.cm-content').click()
+      await page.keyboard.press('End')
+      const pasted = 'line1\n  line2\n\nline4\n\tconst x = "值 😀" # markdown `inline`\n\n```\nfenced-looking\n```'
+      const after = await historyRoundTrip(before, async () => { await page.evaluate(text => window.f.paste(text), pasted) })
+      assert(after.includes('```js\nstartline1\n  line2\n\nline4\n\tconst x = "值 😀" # markdown `inline`\n\n```\nfenced-looking\n```\n```'))
+      assert.equal(await page.evaluate(() => window.f.CMView.findFromDOM(document.querySelector('.md-code-block .cm-editor')).state.doc.toString()), 'start' + pasted)
+      assert.equal(await page.evaluate(() => window.f.manager.saveSnapshot(window.f.id).text), after)
+
+      // Replace a real multi-line selection inside the code block, not just an
+      // empty caret. The operation must remain one canonical transaction.
+      await page.evaluate(() => {
+        const f = window.f, cm = f.CMView.findFromDOM(document.querySelector('.md-code-block .cm-editor'))
+        cm.dispatch({ selection: { anchor: 5, head: 5 + 'line1\n  line2'.length } })
+        cm.focus()
+      })
+      const selectedBefore = await source()
+      const selectedAfter = await historyRoundTrip(selectedBefore, async () => { await page.evaluate(() => window.f.paste('A\n\nB')) })
+      assert(selectedAfter.includes('startA\n\nB\n\nline4'))
+
+      // Empty fence and long content.
+      await reset('Intro\n\n```\n```\n\nTail\n')
+      await page.locator('.md-code-block .cm-content').click()
+      const long = Array.from({ length: 120 }, (_, i) => `row ${i}\tvalue \`${i}\``).join('\n')
+      const emptyAfter = await historyRoundTrip('Intro\n\n```\n```\n\nTail\n', async () => { await page.evaluate(text => window.f.paste(text), long) })
+      assert(emptyAfter.includes('```\n' + long + '\n```'))
+      await page.evaluate(() => { const f = window.f; f.manager.setMarkdownMode(f.id, 'source', 'main') })
+      await page.locator('[data-pane="main"] > .cm-editor').waitFor()
+      assert.equal(await source(), emptyAfter)
+      await page.evaluate(() => { const f = window.f; f.manager.setMarkdownMode(f.id, 'live', 'main') }); await ready()
+      assert.equal(await source(), emptyAfter)
+    })
+    await test('code block paste keeps blank lines and unicode while ordinary Markdown paste keeps rich parsing', async () => {
+      const before = 'Intro\r\n\r\n```js\r\nstart\r\n```\r\n\r\nTail\r\n'
+      await reset(before)
+      await page.locator('.md-code-block .cm-content').click()
+      await page.keyboard.press('End')
+      const normalizedBefore = before.replace(/\r\n/g, '\n')
+      const after = await historyRoundTrip(normalizedBefore, async () => { await page.evaluate(() => window.f.paste('a\r\nb')) })
+      assert(after.includes('starta\nb'))
+      await reset('Intro\n\nTail\n')
+      await page.evaluate(() => window.f.caret('Intro'))
+      await page.evaluate(() => window.f.paste('**bold** 中文'))
+      assert((await source()).includes('Intro**bold** 中文'))
+    })
     await test('image paste and properties: relative source location and isolated attribute undo', async () => {
       await reset('Intro\n\nTail\n')
       const before = await source()
