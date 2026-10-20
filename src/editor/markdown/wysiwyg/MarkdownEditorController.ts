@@ -34,6 +34,7 @@ import { shortcutLabel } from '../../../features/shell/editorSettings'
 import { textClipboard } from '../../../features/shell/clipboard'
 import { cancelSmoothScroll, smoothScrollTo } from '../../core/smoothScroll'
 import { createSmoothCaretPlugin } from './plugins/SmoothCaret'
+import { trailingParagraphPlugin, withTrailingParagraph } from './TrailingParagraph'
 import type { BracketMode } from '../../core/brackets'
 import type { CaretAnimation } from '../../core/caretMotion'
 import type { MarkdownFormat } from '../formatCommands'
@@ -82,6 +83,22 @@ export class MarkdownEditorController implements LiveEditor {
   private inlineSource: InlineSourceView | null = null
   private pendingInline: { pos:number; kind:string } | null = null
   private dismissedInline: { from:number; to:number } | null = null
+  private onCanvasPointerDown = (event: PointerEvent) => {
+    if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || this.options.readOnly?.() || this.composing) return
+    const target = event.target
+    const last = this.view.state.doc.lastChild
+    if (last?.type !== s.nodes.paragraph || last.content.size) return
+    const node = this.view.nodeDOM(this.view.state.doc.content.size - last.nodeSize)
+    if (!(node instanceof HTMLElement)) return
+    const inside = target instanceof Element && node.contains(target)
+    const canvas = target === this.dom || target === this.view.dom || target === this.view.dom.parentElement
+    if (!inside && (!canvas || event.clientY < node.getBoundingClientRect().top)) return
+    // Synchronize before the next key event: the browser's selectionchange
+    // observer can otherwise leave Enter targeting the previous code block.
+    event.preventDefault()
+    this.view.dispatch(this.view.state.tr.setSelection(TextSelection.create(this.view.state.doc, this.view.state.doc.content.size - 1)))
+    this.view.focus()
+  }
 
   private onCompositionEnd = () => {
     this.compositionActive = false
@@ -161,9 +178,10 @@ export class MarkdownEditorController implements LiveEditor {
     this.view = new EditorView(mount, {
       state: EditorState.create({
         schema: s,
-        doc: this.bridge.doc,
+        doc: withTrailingParagraph(this.bridge.doc),
         plugins: [
           createSmoothCaretPlugin(this.dom, () => this.caretMode),
+          trailingParagraphPlugin(),
           new Plugin({
             appendTransaction: (_transactions, _before, state) => {
               const seen = new Set<string>()
@@ -453,6 +471,7 @@ export class MarkdownEditorController implements LiveEditor {
     // Listeners
     this.dom.addEventListener('compositionend', this.onCompositionEnd)
     this.dom.addEventListener('compositionstart', this.onCompositionStart, true)
+    this.dom.addEventListener('pointerdown', this.onCanvasPointerDown)
     this.dom.addEventListener('keydown', event => {
       if ((event.ctrlKey || event.metaKey) && !event.altKey) {
         if (event.key.toLowerCase() === 'f') {
@@ -643,13 +662,14 @@ export class MarkdownEditorController implements LiveEditor {
     const remote = update as LiveUpdate | undefined
     this.inlineSource?.mapSource(textPatch(this.bridge.source, source))
     if (remote && remote.transactions[0]?.before.eq(this.view.state.doc)) {
-      let state = this.view.state
+      const tr = this.view.state.tr.setMeta('trailingParagraphSync', true)
       for (const transaction of remote.transactions) {
-        const tr = state.tr
         for (const step of transaction.steps) tr.step(step)
-        this.inlineSource?.map(tr)
-        state = state.apply(tr)
       }
+      // Apply the complete change once. Running appendTransaction between
+      // remote steps would normalize an intermediate, incomplete document.
+      this.inlineSource?.map(tr)
+      const state = this.view.state.apply(tr)
       this.bridge = new MarkdownSourceBridge('')
       Object.assign(this.bridge, { source, doc: remote.bridge.doc, blocks: remote.bridge.blocks, tail: remote.bridge.tail, environment:remote.bridge.environment })
       this.view.updateState(state)
@@ -657,16 +677,17 @@ export class MarkdownEditorController implements LiveEditor {
       const sel = this.selection
       const bridge = new MarkdownSourceBridge(source, this.bridge)
       reuseSourceBlocks(bridge, this.bridge)
+      const doc = withTrailingParagraph(bridge.doc)
       const state = this.view.state
-      const start = state.doc.content.findDiffStart(bridge.doc.content)
-      const end = state.doc.content.findDiffEnd(bridge.doc.content)
+      const start = state.doc.content.findDiffStart(doc.content)
+      const end = state.doc.content.findDiffEnd(doc.content)
       let tr = state.tr
       if (start !== null && end) {
         const overlap = start - Math.min(end.a, end.b)
-        tr = tr.replace(start, end.a + Math.max(0, overlap), bridge.doc.slice(start, end.b + Math.max(0, overlap)))
+        tr = tr.replace(start, end.a + Math.max(0, overlap), doc.slice(start, end.b + Math.max(0, overlap)))
       }
       this.bridge = bridge
-      if (!tr.doc.eq(bridge.doc)) tr = state.tr.replaceWith(0, state.doc.content.size, bridge.doc.content)
+      if (!tr.doc.eq(doc)) tr = state.tr.replaceWith(0, state.doc.content.size, doc.content)
       const head = Math.min(tr.doc.content.size, bridge.documentPosition(sel.head))
       tr.setSelection(Selection.near(tr.doc.resolve(head)))
       this.inlineSource?.map(tr)
@@ -1757,6 +1778,7 @@ export class MarkdownEditorController implements LiveEditor {
     this.inlineSource = null
     this.dom.removeEventListener('compositionend', this.onCompositionEnd)
     this.dom.removeEventListener('compositionstart', this.onCompositionStart, true)
+    this.dom.removeEventListener('pointerdown', this.onCanvasPointerDown)
     this.searchController.destroy()
     this.view.destroy()
     this.dom.remove()

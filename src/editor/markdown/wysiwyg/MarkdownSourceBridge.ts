@@ -1,6 +1,7 @@
 import { Fragment, type Node } from 'prosemirror-model'
 import { parseMarkdown, type SourceBlock } from './MarkdownParser'
 import { patchTable, serializeBlock } from './MarkdownSerializer'
+import { isTrailingParagraph, withoutTrailingParagraph } from './TrailingParagraph'
 export interface SourcePatch { from:number;to:number;insert:string;blockId?:string;htmlOrdinal?:number }
 export function textPatch(before:string,after:string):SourcePatch|null {
   if(before===after)return null
@@ -21,6 +22,7 @@ export class MarkdownSourceBridge {
     const byId=new Map(this.blocks.map(b=>[b.id,b])),used=new Set<string>(),blocks:SourceBlock[]=[]
     let source='',definitionsChanged=false,inlineApplied=false
     doc.forEach(node=>{
+      if(isTrailingParagraph(node) && !node.content.size)return
       const id=node.attrs.sourceId as string,old=id&&!used.has(id)?byId.get(id):undefined
       if(id)used.add(id)
       let inlineRaw:string|undefined
@@ -62,7 +64,7 @@ export class MarkdownSourceBridge {
     source+=this.tail
     const patch=textPatch(this.source,source)
     if(this.blocks.some(block=>!used.has(block.id)&&/^\s*\[[^\]]+\]:/m.test(block.raw)))definitionsChanged=true
-    return {source,patch,commit:()=>{this.source=source;this.doc=doc;this.blocks=blocks;if(definitionsChanged)this.environment=parseMarkdown(source).environment}}
+    return {source,patch,commit:()=>{this.source=source;this.doc=withoutTrailingParagraph(doc);this.blocks=blocks;if(definitionsChanged)this.environment=parseMarkdown(source).environment}}
   }
   sourcePosition(pos:number){
     let offset=0

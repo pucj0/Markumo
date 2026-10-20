@@ -84,6 +84,92 @@ try {
   await page.waitForFunction(() => window.f)
 
   if (!profile) {
+    await test('terminal components expose one clickable paragraph without changing clean source; typing, undo/redo and mode switches stay canonical', async () => {
+      for (const text of ['```js\nlast code line\n```', '```mermaid\ngraph TD\nA-->B\n```',
+        '| A | B |\n| --- | --- |\n| one | two |', '$$\nx^2\n$$', '---', '![pixel](./assets/pixel.png)', '<div>HTML block</div>']) {
+        await page.evaluate(text => window.f.reset(text, true), text); await ready()
+        for (let i = 0; i < 2; i++) {
+          await page.evaluate(() => { const f = window.f; f.manager.setMarkdownMode(f.id, 'source', 'main') })
+          await page.locator('[data-pane="main"] > .cm-editor').waitFor()
+          await page.evaluate(() => { const f = window.f; f.manager.setMarkdownMode(f.id, 'live', 'main') }); await ready()
+        }
+        const before = await page.evaluate(() => {
+          const f = window.f, doc = f.live().view.state.doc
+          return { source: f.source(), dirty: f.manager.metadata(f.id).dirty, history: f.history().undo,
+            placeholders: doc.content.content.filter(node => node.attrs.editorTrailing).length,
+            lastType: doc.lastChild.type.name, lastSize: doc.lastChild.content.size }
+        })
+        assert.deepEqual(before, { source: text, dirty: false, history: 0, placeholders: 1, lastType: 'paragraph', lastSize: 0 })
+        await page.locator('.md-prose > p:last-child').click({ position: { x: 8, y: 8 } })
+        assert.equal(await source(), text, 'clicking the empty line must not modify source')
+        await page.keyboard.insertText('After block')
+        const after = text + '\n\nAfter block'
+        await page.waitForFunction(expected => window.f.source() === expected, after)
+        assert.equal(await page.evaluate(() => window.f.history().undo), 1)
+        await page.evaluate(() => window.f.undo()); await ready()
+        assert.equal(await source(), text)
+        assert.equal(await page.evaluate(() => window.f.manager.metadata(window.f.id).dirty), false)
+        await page.evaluate(() => window.f.redo()); await ready()
+        assert.equal(await source(), after)
+      }
+    })
+    await test('new code/table/formula/rule/image/diagram components get one trailing line, ordinary inline content gets none', async () => {
+      for (const command of ['code-block', 'table', 'table-picker', 'math', 'rule', 'image', 'diagram']) {
+        await reset('')
+        await page.evaluate(async command => {
+          const f = window.f, editor = f.live()
+          if (command === 'table-picker') editor.insertTable(3, 4)
+          else if (command === 'math') editor.insertToolbar('math')
+          else if (command === 'diagram') await f.paste('```mermaid\ngraph TD\nA-->B\n```')
+          else editor.format(command)
+        }, command)
+        const last = await page.evaluate(() => {
+          const doc = window.f.live().view.state.doc
+          return { type: doc.lastChild.type.name, size: doc.lastChild.content.size,
+            emptyParagraphs: doc.content.content.filter(node => node.type.name === 'paragraph' && !node.content.size).length }
+        })
+        assert.deepEqual(last, { type: 'paragraph', size: 0, emptyParagraphs: 1 }, command)
+      }
+      for (const text of ['Plain text', 'Text with $x^2$ inline.', 'Text with `code`.', '[link](https://example.com)', 'Before ![pixel](./assets/pixel.png) after']) {
+        await reset(text)
+        assert.equal(await page.evaluate(() => window.f.live().view.state.doc.childCount), 1)
+        assert.equal(await source(), text)
+      }
+    })
+    await test('bottom canvas, ArrowDown, Enter and Ctrl+Enter escape terminal code; multi-pane insertion and history stay identical', async () => {
+      const text = '```js\nlast\n```'
+      await reset(text)
+      const canvas = await page.locator('.markdown-live').boundingBox()
+      await page.mouse.click(canvas.x + canvas.width / 2, canvas.y + canvas.height - 25)
+      await page.keyboard.insertText('Clicked below')
+      assert.equal(await source(), text + '\n\nClicked below')
+      await page.evaluate(() => window.f.undo()); await ready()
+      await page.locator('.md-code-block .cm-content').click()
+      await page.keyboard.press('Control+End'); await page.keyboard.press('ArrowDown')
+      await page.keyboard.insertText('Outside code')
+      assert.equal(await source(), text + '\n\nOutside code')
+      await page.evaluate(() => window.f.undo()); await ready()
+      await page.locator('.md-code-block .cm-content').click()
+      await page.keyboard.press('Control+Enter')
+      assert.equal(await page.evaluate(() => window.f.live().view.state.doc.childCount), 2, 'reuse the existing trailing paragraph')
+      await page.keyboard.insertText('Shortcut')
+      assert.equal(await source(), text + '\n\nShortcut')
+      await reset(text)
+      await page.evaluate(() => window.f.split()); await ready()
+      await page.locator('[data-pane="main"] .md-prose > p:last-child').click()
+      await page.keyboard.press('Enter'); await page.keyboard.press('Enter')
+      await page.keyboard.insertText('After empty lines'); await ready()
+      assert.equal(await source(), text + '\n\n\n\n\n\nAfter empty lines')
+      const docs = await page.evaluate(() => { const f = window.f; return f.panes.map(pane => f.live(pane).view.state.doc.toJSON()) })
+      assert.deepEqual(docs[0], docs[1])
+      await reset('')
+      await page.evaluate(() => window.f.split()); await ready()
+      await page.evaluate(() => window.f.live('main').format('code-block')); await ready()
+      const inserted = await page.evaluate(() => { const f = window.f; return f.panes.map(pane => f.live(pane).view.state.doc.toJSON()) })
+      assert.deepEqual(inserted[0], inserted[1])
+      await page.evaluate(() => window.f.undo()); await ready()
+      assert.equal(await source(), '')
+    })
     await test('source fidelity: untouched Live/source switches preserve all fixture syntax, blank lines and final newlines', async () => {
       await reset(rich)
       for (let i = 0; i < 3; i++) {

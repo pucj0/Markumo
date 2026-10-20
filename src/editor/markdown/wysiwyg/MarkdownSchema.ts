@@ -5,6 +5,7 @@ import { safeMarkdownURL } from '../links'
 
 const nodes: Record<string, NodeSpec> = {}
 commonmark.spec.nodes.forEach((name, spec) => { nodes[name] = name==='text'?spec:{ ...spec, attrs: { ...spec.attrs, sourceId: { default: null } } } })
+nodes.paragraph.attrs = { ...nodes.paragraph.attrs, editorTrailing: { default: false } }
 nodes.code_block.attrs = { ...nodes.code_block.attrs, fence: { default: '```' } }
 nodes.heading.content='inline*'
 nodes.bullet_list.attrs = { ...nodes.bullet_list.attrs, bullet: { default: '-' } }
