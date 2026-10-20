@@ -61,7 +61,7 @@ export interface ShellCommandsHost {
   // UI and business callbacks
   toast: (message: string) => void
   openFile: (encoding?: FileOpenEncoding) => Promise<void>
-  openRecent: (path: string) => Promise<void>
+  openRecent: (path: string, preview?: boolean) => Promise<void>
   saveActive: (saveAs?: boolean, encoding?: Encoding) => Promise<boolean>
   closeDocById: (id: string, pane?: string) => boolean | undefined
   quitApp: (source?: CloseSource) => Promise<void>
@@ -147,7 +147,7 @@ export function useShellCommands(host: ShellCommandsHost) {
 
   async function openRecentEntry(path: string, options?: PaletteExecuteOptions) {
     try {
-      await host.openRecent(path)
+      await host.openRecent(path, !options?.pinned)
       focusOpenedPath(path, options)
     } catch (error) {
       host.toast(fileError(error))

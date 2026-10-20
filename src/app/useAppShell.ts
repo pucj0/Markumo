@@ -462,7 +462,7 @@ export function useAppShell() {
     }
   }
 
-  async function openRecent(path: string) {
+  async function openRecent(path: string, preview = false) {
     if (startupLoading.value) return
     if (fileBusy.value || manager.isComposing) {
       composingHint()
@@ -470,7 +470,7 @@ export function useAppShell() {
     }
     fileBusy.value = true
     try {
-      await files.recent(path)
+      await files.recent(path, undefined, preview)
       await refreshRecent()
     } finally {
       fileBusy.value = false
