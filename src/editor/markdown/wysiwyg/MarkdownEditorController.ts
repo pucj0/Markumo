@@ -57,7 +57,6 @@ export class MarkdownEditorController implements LiveEditor {
   private tableToolbar: LiveTableToolbar
   private imagePreview: ImagePreview
   private properties = document.createElement('div')
-  private selectionBubble = document.createElement('div')
   private searchController: LiveSearchController
   private fenceAutocomplete: FenceAutocomplete
   private codeViews = new Set<CodeBlockView>()
@@ -124,15 +123,10 @@ export class MarkdownEditorController implements LiveEditor {
     this.properties.className = 'md-properties md-anchored-popover'
     this.properties.hidden = true
 
-    // Floating Selection Bubble menu
-    this.selectionBubble.className = 'md-selection-bubble'
-    this.selectionBubble.hidden = true
-    this.buildSelectionBubble()
-
     const mount = document.createElement('div')
     mount.className = 'md-document'
 
-    this.dom.append(this.properties, this.selectionBubble, mount)
+    this.dom.append(this.properties, mount)
     parent.append(this.dom)
     this.imagePreview = new ImagePreview(this.dom)
     this.fenceAutocomplete = new FenceAutocomplete(this.dom)
@@ -332,7 +326,6 @@ export class MarkdownEditorController implements LiveEditor {
                     view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(pos.pos))))
                   }
                   event.preventDefault()
-                  this.selectionBubble.hidden = true
                   this.properties.hidden = true
                   this.fenceAutocomplete.hide()
                   const caret = keyboard ? view.coordsAtPos(view.state.selection.from) : null
@@ -610,7 +603,6 @@ export class MarkdownEditorController implements LiveEditor {
       if (applied.state.doc.eq(this.view.state.doc) && !tr.getMeta('inlineSourcePatch')) {
         this.view.updateState(applied.state)
         this.updateTools()
-        this.updateSelectionBubble()
         const sel = this.selection
         this.options.selected(sel.anchor, sel.head)
         this.scheduleInlineEntry()
@@ -631,7 +623,6 @@ export class MarkdownEditorController implements LiveEditor {
       this.inlineSource?.mapSource(prepared.patch, tr.getMeta('inlineSourceEditor') === this.inlineSource)
       this.view.updateState(applied.state)
       this.updateTools()
-      this.updateSelectionBubble()
       const sel = this.selection
       this.options.selected(sel.anchor, sel.head)
       this.updateFenceAutocomplete()
@@ -681,7 +672,6 @@ export class MarkdownEditorController implements LiveEditor {
       this.view.updateState(state.apply(tr))
     }
     this.updateTools()
-    this.updateSelectionBubble()
   }
 
   focus() {
@@ -1116,43 +1106,6 @@ export class MarkdownEditorController implements LiveEditor {
     this.view.updateState(this.view.state)
     editor.focus(Math.max(0, Math.min(range.raw.length, this.bridge.sourcePosition(pos) - range.sourceFrom)))
     if (kind === 'image') this.options.selected(range.sourceTo, range.sourceTo)
-  }
-
-  private buildSelectionBubble() {
-    const actions: [string, () => void][] = [
-      ['B', () => this.format('bold')],
-      ['I', () => this.format('italic')],
-      ['S', () => this.format('strike')],
-      ['</>', () => this.format('inline-code')],
-      ['🔗', () => this.format('link')],
-    ]
-    for (const [label, act] of actions) {
-      const btn = document.createElement('button')
-      btn.type = 'button'
-      btn.textContent = label
-      btn.onmousedown = e => e.preventDefault()
-      btn.onclick = () => {
-        act()
-        this.view.focus()
-      }
-      this.selectionBubble.append(btn)
-    }
-  }
-
-  private updateSelectionBubble() {
-    const sel = this.view.state.selection
-    if (sel.empty || !(sel instanceof TextSelection)) {
-      this.selectionBubble.hidden = true
-      return
-    }
-    const coords = this.view.coordsAtPos(sel.from)
-    const containerRect = this.dom.getBoundingClientRect()
-    const top = coords.top - containerRect.top + this.dom.scrollTop - 36
-    const left = Math.max(16, Math.min(this.dom.clientWidth - 160, coords.left - containerRect.left + this.dom.scrollLeft))
-    this.selectionBubble.style.position = 'absolute'
-    this.selectionBubble.style.top = `${top}px`
-    this.selectionBubble.style.left = `${left}px`
-    this.selectionBubble.hidden = false
   }
 
   private field(label: string, value: string): HTMLInputElement {

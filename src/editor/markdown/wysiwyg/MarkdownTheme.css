@@ -656,7 +656,7 @@ body.light .file-icon-gray { color: #6c7c92; }
   box-shadow: 0 0 0 1px var(--accent);
 }
 
-.markdown-live :where(.md-table-floating-bar, .md-code-block, .md-diagram-toolbar, .md-anchored-popover, .md-selection-bubble) button {
+.markdown-live :where(.md-table-floating-bar, .md-code-block, .md-diagram-toolbar, .md-anchored-popover) button {
   cursor: pointer;
   border: 0;
   border-radius: 4px;
@@ -666,44 +666,13 @@ body.light .file-icon-gray { color: #6c7c92; }
   font: var(--ui-font-size)/var(--ui-line-height) var(--font-sans);
 }
 
-.markdown-live :where(.md-table-floating-bar, .md-code-block, .md-diagram-toolbar, .md-anchored-popover, .md-selection-bubble) button:hover {
+.markdown-live :where(.md-table-floating-bar, .md-code-block, .md-diagram-toolbar, .md-anchored-popover) button:hover {
   background: var(--hover);
   color: var(--bright);
 }
 
 .markdown-live [hidden] {
   display: none !important;
-}
-
-/* Floating Selection Bubble */
-.markdown-live .md-selection-bubble {
-  position: absolute;
-  z-index: 28;
-  background: var(--bar);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-  padding: 3px 4px;
-  display: flex;
-  gap: 2px;
-}
-
-.markdown-live .md-selection-bubble button {
-  min-width: var(--ui-control-height);
-  min-height: var(--ui-control-height);
-  background: transparent;
-  border: 0;
-  border-radius: 4px;
-  padding: 3px 7px;
-  color: var(--sub);
-  font-size: var(--ui-font-size);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.markdown-live .md-selection-bubble button:hover {
-  background: var(--hover);
-  color: var(--bright);
 }
 
 /* Image Display - Clean Typora presentation */
