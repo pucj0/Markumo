@@ -158,7 +158,7 @@
 .cm-line.cm-md-paragraph { padding-bottom: 0.6em; }
 
 .cm-line.cm-md-code-block,.cm-line.cm-md-table-source { background:var(--soft);font-family:var(--font-mono) }
-.cm-md-table-block { position:relative;padding:12px 18px;overflow-x:auto;max-width:100%;box-sizing:border-box;margin:0 }
+.cm-md-table-block { position:relative;padding:12px 18px;overflow-x:auto;max-width:100%;box-sizing:border-box;margin:0;user-select:text }
 .cm-md-table { border-collapse:collapse;min-width:160px;max-width:100%;font-family:var(--font-sans);font-size:inherit;line-height:var(--editor-line) }
 .cm-md-table td,.cm-md-table th { min-width:70px;border:1px solid var(--line);padding:4px 10px;cursor:text }
 .cm-md-table th { background:var(--soft);font-weight:600 }

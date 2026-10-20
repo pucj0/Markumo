@@ -44,13 +44,13 @@ window.f = {
   get manager() { return manager }, get id() { return id }, get panes() { return panes },
   get publications() { return publications },
   listenerCount(target, type) { return (listeners.get(target) || []).filter(entry => !type || entry.type === type).length },
-  reset(source, clean = false) {
+  reset(source, clean = false, readOnly = false) {
     manager?.dispose()
     root.replaceChildren()
     manager = new DocumentManager([], async () => [])
     manager.setCaretAnimation('off')
     id = clean ? manager.openFile({ token: 'live-fixture', path: 'C:/fixture/live.md', name: 'live.md', text: source,
-      version: 'fixture-v1', encoding: 'UTF-8', bom: false, eol: 'LF', readOnly: false }) : manager.createUntitled('md')
+      version: 'fixture-v1', encoding: 'UTF-8', bom: false, eol: 'LF', readOnly }) : manager.createUntitled('md')
     if (!clean) manager.dispatch(id, { changes: { from: 0, insert: source }, annotations: CMTransaction.addToHistory.of(false) })
     manager.getState(id).facet(markdownResources).loadLocal = async () => pixel
     publications = []

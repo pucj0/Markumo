@@ -36,6 +36,9 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   min-height: 240px;
+  /* Read-only ProseMirror has no contenteditable host; keep text selectable so
+     copying still works when editing is disabled. */
+  user-select: text;
 }
 
 /* Keep the DOM selection responsible for editing, IME and accessibility. */

@@ -228,12 +228,9 @@ try {
     assert.doesNotMatch(value.after, /admin/);assert.equal(value.undo,tableSource)
   })
   await reset(tableSource)
-  await test('mouse selection of header plus one row copies exactly the selected table', async () => {
-    const first=await page.locator('.md-prose th').first().boundingBox(),last=await page.locator('.md-prose tr').nth(1).locator('td').last().boundingBox();
-    await page.mouse.move(first.x+12,first.y+12);await page.mouse.down();
-    await page.mouse.move(last.x+last.width-12,last.y+12,{steps:12});await page.mouse.up();
-    await page.waitForFunction(()=>document.querySelectorAll('.selectedCell').length===6);
-    const copy=await page.evaluate(async()=>{const f=window.f;const native=f.native();await f.live().clipboard('copy');return {native,menu:f.copied(),source:f.source()};});
+  await test('explicit cell selection of header plus one row copies exactly the selected table', async () => {
+    const copy=await page.evaluate(async()=>{const f=window.f;f.cells(0,0,1,2);const native=f.native();await f.live().clipboard('copy');return {native,menu:f.copied(),source:f.source()};});
+    assert.equal(await page.locator('.selectedCell').count(),6);
     for(const value of [copy.native,copy.menu]){
       assert.match(value.text,/\| 角色 \| 测试账号 \| 测试密码 \|/);assert.match(value.text,/\| 系统管理员 \| admin \| 123456 \|/);
       assert.doesNotMatch(value.text,/zhangsan|普通用户/);assert.match(value.html,/<table>/);

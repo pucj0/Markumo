@@ -5,7 +5,8 @@ import { baseKeymap, chainCommands, exitCode, lift, liftEmptyBlock, setBlockType
 import { keymap } from 'prosemirror-keymap'
 import { inputRules, textblockTypeInputRule, wrappingInputRule, InputRule } from 'prosemirror-inputrules'
 import { wrapInList, splitListItem, sinkListItem, liftListItem } from 'prosemirror-schema-list'
-import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, goToNextCell, tableEditing, isInTable, selectedRect } from 'prosemirror-tables'
+import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, goToNextCell, isInTable, selectedRect } from 'prosemirror-tables'
+import { textFirstTableEditing } from './tableTextSelection'
 import { gapCursor } from 'prosemirror-gapcursor'
 import { LiveTableToolbar, type TableToolbarCommand } from './LiveTableToolbar'
 import { markdownSchema as s } from './MarkdownSchema'
@@ -383,7 +384,7 @@ export class MarkdownEditorController implements LiveEditor {
               },
             },
           }),
-          tableEditing(),
+          textFirstTableEditing(),
         ],
       }),
       nodeViews: {

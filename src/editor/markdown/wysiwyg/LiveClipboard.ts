@@ -6,6 +6,7 @@ import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { markdownSerializer } from './MarkdownSerializer'
 import { parseMarkdown } from './MarkdownParser'
+import { crossesTableCells } from './tableTextSelection'
 import type { MarkdownSourceBridge } from './MarkdownSourceBridge'
 import type { MarkdownClipboardSettings } from './contracts'
 import { textClipboard, writeRichClipboard } from '../../../features/shell/clipboard'
@@ -42,6 +43,11 @@ export class LiveClipboard {
     if (selection.empty) return null
     const slice = selection.content()
     const full = selection instanceof AllSelection || (selection.from <= 1 && selection.to >= state.doc.content.size - 1)
+    // A normal text drag that crosses cells must stay a text copy. The slice can
+    // contain a partial table wrapper, so do not treat it as a structural table
+    // selection or the plain-text fallback would add separators and unselected
+    // cells to what the user selected.
+    const acrossCells = selection instanceof TextSelection && crossesTableCells(selection)
     // A text selection inside one cell includes open table/row/cell wrappers in
     // its slice. Serialize the selected textblock alone, retaining inline marks
     // without inventing a table header and separators around a copied word.
@@ -52,7 +58,7 @@ export class LiveClipboard {
     if (selection instanceof CellSelection && selected.firstChild?.type.spec.tableRole === 'row') {
       selected = Fragment.from(state.schema.nodes.table.create(null, selected))
     }
-    const table = selected.childCount === 1 && selected.firstChild?.type.spec.tableRole === 'table' ? selected.firstChild : null
+    const table = !acrossCells && selected.childCount === 1 && selected.firstChild?.type.spec.tableRole === 'table' ? selected.firstChild : null
     let markdownContent = selected
     if (table && table.firstChild?.firstChild?.type.spec.tableRole !== 'header_cell') {
       // GFM requires a header. A data-only selection gets an empty header in the
@@ -62,15 +68,40 @@ export class LiveClipboard {
       const header = state.schema.nodes.table_row.create(null, headers)
       markdownContent = Fragment.from(table.copy(Fragment.from(header).append(table.content)))
     }
-    const markdown = full ? this.bridge().source : markdownSerializer.serialize(state.schema.nodes.doc.create(null, markdownContent))
-    const plain = slice.content.textBetween(0, slice.content.size, '\n', node => {
+    // `slice.content` can keep open cell/row wrappers, which would make a
+    // cross-cell text copy include unselected cells. Ask the document for the
+    // exact range instead; block boundaries become newlines. Structural cell
+    // selections keep their table-aware slice text.
+    const leafText = (node: Node) => {
       if (node.type.name === 'image') return node.attrs.alt || ''
       return node.attrs.latex || node.attrs.source || (/^(soft_break|hard_break)$/.test(node.type.name) ? '\n' : '')
-    })
+    }
+    const plain = selection instanceof TextSelection
+      ? state.doc.textBetween(selection.from, selection.to, '\n', leafText)
+      : slice.content.textBetween(0, slice.content.size, '\n', leafText)
+    // A partial cross-cell text selection has no exact Markdown table
+    // representation: serializing the open slice would add cells the user did
+    // not select. Use the selected plain range for every copy mode.
+    const markdown = acrossCells ? plain : full ? this.bridge().source : markdownSerializer.serialize(state.schema.nodes.doc.create(null, markdownContent))
     let rich = renderer.render(markdown)
     if (table) {
       const container = document.createElement('div')
       container.appendChild(DOMSerializer.fromSchema(state.schema).serializeFragment(selected))
+      rich = container.innerHTML
+    } else if (acrossCells) {
+      // A DOM Range preserves the exact partial cells of a text drag. The open
+      // ProseMirror slice would serialize the rest of those cells and rows.
+      const native = window.getSelection()
+      const container = document.createElement('div')
+      if (native && native.rangeCount > 0 && this.view.dom.contains(native.anchorNode)) {
+        container.appendChild(native.getRangeAt(0).cloneContents())
+      } else {
+        for (const line of plain.split('\n')) {
+          const paragraph = document.createElement('p')
+          paragraph.textContent = line
+          container.append(paragraph)
+        }
+      }
       rich = container.innerHTML
     }
     const html = DOMPurify.sanitize(rich, { USE_PROFILES: { html: true } })
@@ -78,7 +109,7 @@ export class LiveClipboard {
     // boundary, even though no character in that next block was selected.
     const crossesBlocks = selection instanceof TextSelection && !selection.$from.sameParent(selection.$to)
     const multipleLines = crossesBlocks || /[\r\n]/.test(plain)
-    const useMarkdown = table || multipleLines || this.settings().copyMarkdown
+    const useMarkdown = this.settings().copyMarkdown || (!acrossCells && (table || multipleLines))
     return { selection, markdown, plain, html, text: useMarkdown ? markdown : plain }
   }
 
