@@ -32,6 +32,7 @@ export class WorkspaceController {
   fileIndexLoading = false
   private fileIndexEpoch = 0
   private fileIndexRevision = -1
+  private fileIndexComplete = false
   private fileIndexPromise: Promise<void> | null = null
   private quickGeneration = 0
   private operationBusy = false
@@ -468,11 +469,16 @@ export class WorkspaceController {
     this.cancelExpand();this.revealSequence++
     if (!this.rootPath) return
     const revision = this.openRevision
+    const rebuildIndex = this.fileIndexRevision === revision || this.fileIndexLoading
+    // Retain useful cached files while rebuilding, but fence off any older scan.
+    this.invalidateFileIndex(false)
+    this.quickFiles = []
     try {
       if (!node) {
         for (const root of [...this.roots]) {
           const fresh = await this.gateway.readDirectory(root.rootPath)
           if (this.disposed || revision !== this.openRevision) return
+          this.reconcileIndexedDirectory(root.rootPath, fresh)
           root.entries = this.mergeDirectory(root.entries, fresh)
         }
         this.entries = this.roots[0]?.entries || []
@@ -481,6 +487,7 @@ export class WorkspaceController {
         this.emit()
         const fresh = await this.gateway.readDirectory(node.path)
         if (this.disposed || revision !== this.openRevision) return
+        this.reconcileIndexedDirectory(node.path, fresh)
         node.children = this.mergeDirectory(node.children || [], fresh)
         node.hasChildren = !!node.children.length
         node.isLoading = false
@@ -492,7 +499,26 @@ export class WorkspaceController {
     } finally {
       if (node) node.isLoading = false
       this.emit()
+      if (!this.disposed && revision === this.openRevision) {
+        // Quick Open may have started another scan while the directory read was
+        // pending. That snapshot also predates the completed refresh.
+        const rebuild = rebuildIndex || this.fileIndexLoading || this.fileIndexRevision === revision
+        this.invalidateFileIndex(false)
+        if (rebuild) await this.ensureFileIndex()
+      }
     }
+  }
+
+  private reconcileIndexedDirectory(path: string, fresh: WorkspaceNode[]) {
+    const prefix = displayPathKey(path) + '/'
+    const children = new Map(fresh.map(child => [displayPathKey(child.path), child]))
+    this.workspaceFiles = this.workspaceFiles.filter(file => {
+      const key = displayPathKey(file.path)
+      if (!key.startsWith(prefix)) return true
+      const slash = key.indexOf('/', prefix.length)
+      const child = children.get(slash < 0 ? key : key.slice(0, slash))
+      return !!child && !child.isSymlink && (slash < 0 ? !child.isDirectory : child.isDirectory)
+    })
   }
 
   async openFile(node: WorkspaceNode, preview = true) {
@@ -841,6 +867,9 @@ export class WorkspaceController {
 
   // 获取工作区所有已知的文件列表（供 Quick Open 快速打开）
   getAllKnownFiles(): { name: string; path: string; relativePath: string }[] {
+    // A refreshed index is authoritative; cached, collapsed tree descendants
+    // can still describe files deleted outside the app.
+    if (this.fileIndexComplete) return this.workspaceFiles
     const files: { name: string; path: string; relativePath: string }[] = [...this.workspaceFiles]
     const traverse = (nodes: WorkspaceNode[], prefix: string) => {
       for (const node of nodes) {
@@ -872,15 +901,27 @@ export class WorkspaceController {
     const revision = this.openRevision
     this.fileIndexLoading = true
     this.emit()
+    let timer: ReturnType<typeof setTimeout> | undefined
     const request = (async () => {
       try {
-        const files = await this.gateway.findFiles('', this.showIgnored, 50_000)
+        const files = await Promise.race([
+          this.gateway.findFiles('', this.showIgnored, 50_000),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('索引超过 12 秒限制')), 12_000)
+          }),
+        ])
         if (this.disposed || epoch !== this.fileIndexEpoch || revision !== this.openRevision) return
         this.workspaceFiles = files
+        this.fileIndexComplete = true
         this.fileIndexRevision = revision
       } catch (error) {
-        if (!this.disposed && epoch === this.fileIndexEpoch) this.notify(`工作区文件索引失败：${error}`)
+        if (!this.disposed && epoch === this.fileIndexEpoch && revision === this.openRevision) {
+          // Retry only after an explicit invalidation, not on every palette open.
+          this.fileIndexRevision = revision
+          this.notify(`工作区文件索引失败：${error}`)
+        }
       } finally {
+        clearTimeout(timer)
         if (!this.disposed && epoch === this.fileIndexEpoch) {
           this.fileIndexLoading = false
           this.fileIndexPromise = null
@@ -892,10 +933,11 @@ export class WorkspaceController {
     return request
   }
 
-  invalidateFileIndex() {
+  invalidateFileIndex(clear = true) {
     this.fileIndexEpoch++
     this.fileIndexRevision = -1
-    this.workspaceFiles = []
+    this.fileIndexComplete = false
+    if (clear) this.workspaceFiles = []
     this.fileIndexLoading = false
     this.fileIndexPromise = null
   }

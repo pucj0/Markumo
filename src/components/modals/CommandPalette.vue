@@ -123,14 +123,18 @@ let lastPointer = { x: -1, y: -1 }
 function open(initialCategory: 'action' | 'file' | 'all' = 'file') {
   baseMode.value = initialCategory
   query.value = ''
-  selectedIndex.value = 0
+  selectedIndex.value = ranked.value.findIndex(result => !result.item.disabled)
   composing.value = false
   lastPointer = { x: -1, y: -1 }
   openModal()
 }
 
-watch([query, baseMode], () => { selectedIndex.value = 0 })
-watch(ranked, items => { selectedIndex.value = Math.min(selectedIndex.value, Math.max(0, items.length - 1)) })
+watch([query, baseMode], () => { selectedIndex.value = ranked.value.findIndex(result => !result.item.disabled) })
+watch(ranked, items => {
+  if (!items[selectedIndex.value] || items[selectedIndex.value].item.disabled) {
+    selectedIndex.value = items.findIndex(result => !result.item.disabled)
+  }
+})
 watch(selectedIndex, () => nextTick(() => {
   dialogRef.value?.querySelector('.palrow.on')?.scrollIntoView({ block: 'nearest' })
 }))
@@ -139,15 +143,22 @@ onUnmounted(() => { composing.value = false })
 function selectNext(event: KeyboardEvent) {
   if (event.isComposing || composing.value) return
   event.preventDefault()
-  if (ranked.value.length === 0) return
-  selectedIndex.value = (selectedIndex.value + 1) % ranked.value.length
+  moveSelection(1)
 }
 
 function selectPrev(event: KeyboardEvent) {
   if (event.isComposing || composing.value) return
   event.preventDefault()
-  if (ranked.value.length === 0) return
-  selectedIndex.value = (selectedIndex.value - 1 + ranked.value.length) % ranked.value.length
+  moveSelection(-1)
+}
+
+function moveSelection(direction: 1 | -1) {
+  const items = ranked.value
+  for (let step = 1; step <= items.length; step++) {
+    const index = (selectedIndex.value + direction * step + items.length) % items.length
+    if (!items[index].item.disabled) { selectedIndex.value = index; return }
+  }
+  selectedIndex.value = -1
 }
 
 function executeCurrent(event: KeyboardEvent) {
@@ -176,6 +187,7 @@ function executeItem(item: PaletteAction, pinned: boolean) {
 }
 
 function hover(index: number, event: MouseEvent) {
+  if (ranked.value[index]?.item.disabled) return
   // A list scrolling under a stationary pointer must not steal the keyboard
   // selection. Only real pointer movement changes the active row.
   if ((!event.movementX && !event.movementY) || (event.clientX === lastPointer.x && event.clientY === lastPointer.y)) return

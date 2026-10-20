@@ -441,7 +441,7 @@ export class DocumentManager {
       const rec = this.records.get(docId)
       return !rec?.meta.dirty
     }
-    const replaced = group.open(id, preview, canReplace)
+    const replaced = group.open(id, preview && !record?.meta.dirty, canReplace)
     if (replaced) this.release(replaced)
     if (activatePane) this.activePane = targetPane
     if (previousId !== id) this.showActive(targetPane)

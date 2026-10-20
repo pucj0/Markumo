@@ -88,6 +88,10 @@ impl TraversalBudget {
             count: 0,
         }
     }
+
+    fn exhausted(&self) -> bool {
+        self.count > 100_000 || self.started.elapsed() > Duration::from_secs(10)
+    }
 }
 
 fn walk_files_budget(
@@ -118,7 +122,7 @@ fn walk_files_budget(
                 return Ok(());
             }
             budget.count += 1;
-            if budget.count > 100_000 || budget.started.elapsed() > Duration::from_secs(10) {
+            if budget.exhausted() {
                 return Err("检索达到 10 秒/10 万条目限制；请缩小工作区或启用忽略规则".into());
             }
             let path = entry.path();
@@ -169,7 +173,7 @@ pub fn find_files_roots(
     let mut files = Vec::new();
     for root in roots {
         let remaining = limit.saturating_sub(files.len());
-        if remaining == 0 {
+        if remaining == 0 || budget.exhausted() {
             break;
         }
         let prefix = if roots.len() > 1 {
@@ -208,7 +212,7 @@ fn find_files_budget(
     let root = canonical.as_path();
     let query = query.to_lowercase();
     let mut results = Vec::new();
-    walk_files_budget(
+    let walked = walk_files_budget(
         root,
         include_ignored,
         &AtomicBool::new(false),
@@ -233,7 +237,12 @@ fn find_files_budget(
             }
             results.len() < limit
         },
-    )?;
+    );
+    // A bounded Quick Open index is still useful. Full-text search continues to
+    // report budget errors, while indexing keeps the files already enumerated.
+    if !budget.exhausted() {
+        walked?;
+    }
     Ok(results)
 }
 
@@ -398,6 +407,62 @@ impl WorkspaceSearcher {
 mod tests {
     use super::*;
     use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    #[test]
+    fn quick_open_indexes_ten_and_fifty_thousand_disk_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut created = 0;
+        for count in [10_000, 50_000] {
+            for index in created..count {
+                std::fs::write(dir.path().join(format!("file{index}.ts")), "").unwrap();
+            }
+            created = count;
+            let started = Instant::now();
+            let files = find_files_roots(&[dir.path().to_path_buf()], "", false, 50_000).unwrap();
+            println!(
+                "Quick Open disk index: {count} files, {:?}",
+                started.elapsed()
+            );
+            assert_eq!(files.len(), count);
+        }
+    }
+
+    #[test]
+    fn quick_open_retains_partial_files_at_entry_budget_and_stops_at_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.ts", "b.ts", "c.ts"] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+        let mut budget = TraversalBudget::new();
+        budget.count = 99_999;
+        let files = find_files_budget(dir.path(), "", false, &mut budget, "", 50_000).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(budget.exhausted());
+        let mut timeout = TraversalBudget::new();
+        timeout.started -= Duration::from_secs(11);
+        assert!(
+            find_files_budget(dir.path(), "", false, &mut timeout, "", 50_000)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(timeout.exhausted());
+        // Full-text search still surfaces the traversal error.
+        assert!(walk_files_budget(
+            dir.path(),
+            false,
+            &AtomicBool::new(false),
+            &mut timeout,
+            |_| true
+        )
+        .is_err());
+        assert_eq!(
+            find_files_roots(&[dir.path().to_path_buf()], "", false, 2)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(find_files_roots(&[dir.path().join("missing")], "", false, 50_000).is_err());
+    }
 
     #[test]
     fn poisoned_cancellation_registry_keeps_cancel_and_cleanup_available() {

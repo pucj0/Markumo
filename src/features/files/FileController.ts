@@ -53,8 +53,8 @@ export class FileController {
     try { this.acceptBatch(await this.gateway.openDialog(encoding)) }
     catch (error) { this.notify(fileError(error)) }
   }
-  async recent(path: string, encoding?: FileOpenEncoding) {
-    try { this.accept(await this.gateway.openRecent(path, encoding)) }
+  async recent(path: string, encoding?: FileOpenEncoding, preview = false) {
+    try { this.accept(await this.gateway.openRecent(path, encoding), preview) }
     catch (error) { this.notify(fileError(error)) }
   }
   async save(id: string, saveAs = false, encoding?: Encoding, bom?: boolean) {
