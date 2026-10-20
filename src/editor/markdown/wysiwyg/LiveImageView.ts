@@ -92,7 +92,7 @@ export class LiveImageView implements NodeView {
       this.img = null
     }
 
-    if (!source) {
+    if (!source || (source === 'image.png' && alt === '图片描述')) {
       this.placeholder.textContent = '🖼️ (空图片路径)'
       this.placeholder.hidden = false
       return

@@ -17,7 +17,7 @@ export function markdownFormatTransaction(state: EditorState, format: MarkdownFo
   }
   const wrappers: Partial<Record<MarkdownFormat, [string, string, string]>> = {
     bold: ['**', '**', '文本'], italic: ['*', '*', '文本'], strike: ['~~', '~~', '文本'],
-    'inline-code': ['`', '`', '代码'], link: ['[', '](https://example.com)', '链接文字'], image: ['![', '](图片路径)', '图片描述'],
+    'inline-code': ['`', '`', '代码'], link: ['[', '](https://example.com)', '链接文字'], image: ['![', '](image.png)', '图片描述'],
     'code-block': ['```\n', '\n```', '代码'], rule: ['\n---\n', '', ''],
   }
   const wrapper = wrappers[format]

@@ -80,6 +80,7 @@ export class MarkdownEditorController implements LiveEditor {
   private currentAnchorEl: HTMLElement | null = null
   private propertyTargetToken: object | null = null
   private inlineSource: InlineSourceView | null = null
+  private pendingInline: { pos:number; kind:string } | null = null
   private dismissedInline: { from:number; to:number } | null = null
 
   private onCompositionEnd = () => {
@@ -865,16 +866,22 @@ export class MarkdownEditorController implements LiveEditor {
     }
     if (format === 'link') {
       const sel = this.view.state.selection
-      const mark = s.marks.link.create({ href: 'https://' })
+      const mark = s.marks.link.create({ href: 'https://example.com' })
       if (!sel.empty) {
         this.view.dispatch(this.view.state.tr.addMark(sel.from, sel.to, mark).setMeta('isolated', true))
+        this.queueInlineEdit(sel.from, 'link')
       } else {
-        this.view.dispatch(this.view.state.tr.replaceSelectionWith(s.text('链接', [mark])).setMeta('isolated', true))
+        // With inheritMarks enabled, an empty selection picks up the surrounding
+        // mark set and drops the link mark we just created, leaving plain text.
+        this.view.dispatch(this.view.state.tr.replaceSelectionWith(s.text('链接', [mark]), false).setMeta('isolated', true))
+        this.queueInlineEdit(sel.from, 'link')
       }
       return true
     }
     if (format === 'image') {
-      this.view.dispatch(this.view.state.tr.replaceSelectionWith(s.nodes.image.create({ src: '', alt: '' })).setMeta('isolated', true))
+      const at = this.view.state.selection.from
+      this.view.dispatch(this.view.state.tr.replaceSelectionWith(s.nodes.image.create({ src: 'image.png', alt: '图片描述' })).setMeta('isolated', true))
+      this.queueInlineEdit(at, 'image')
       return true
     }
     return false
@@ -1080,7 +1087,20 @@ export class MarkdownEditorController implements LiveEditor {
     })
   }
 
+  private queueInlineEdit(pos: number, kind: string) {
+    this.pendingInline = { pos, kind }
+    // The toolbar focuses the editor after running the command; wait for that
+    // focus so the inline source editor is not immediately blurred and closed.
+    queueMicrotask(() => {
+      const pending = this.pendingInline
+      if (!pending || this.disposed || !this.view.hasFocus()) return
+      this.pendingInline = null
+      this.openInlineAt(pending.pos, pending.kind)
+    })
+  }
+
   private openInlineAt(pos: number, kind: string) {
+    this.pendingInline = null
     if (this.options.readOnly?.() || this.composing) return
     if (this.inlineSource) { if (this.inlineSource.pending) return; this.closeInline() }
     const doc = this.view.state.doc, $pos = doc.resolve(pos)
