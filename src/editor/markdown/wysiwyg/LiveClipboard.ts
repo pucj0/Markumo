@@ -43,10 +43,10 @@ export class LiveClipboard {
     if (selection.empty) return null
     const slice = selection.content()
     const full = selection instanceof AllSelection || (selection.from <= 1 && selection.to >= state.doc.content.size - 1)
-    // A normal text drag that crosses cells must stay a text copy. The slice can
-    // contain a partial table wrapper, so do not treat it as a structural table
-    // selection or the plain-text fallback would add separators and unselected
-    // cells to what the user selected.
+    // Native mouse drags become CellSelection at the cell boundary. A cross-cell
+    // TextSelection can still be produced programmatically (or by an external
+    // selection API); keep that copy textual rather than inventing unselected
+    // cells from the open slice.
     const acrossCells = selection instanceof TextSelection && crossesTableCells(selection)
     // A text selection inside one cell includes open table/row/cell wrappers in
     // its slice. Serialize the selected textblock alone, retaining inline marks

@@ -1,6 +1,6 @@
-// Real mouse drags against the live ProseMirror table. The test never reads or
-// writes the system clipboard; it dispatches the same ClipboardEvent the editor
-// handles natively and inspects its DataTransfer payload.
+// Real mouse gestures against the live ProseMirror table and the source-mode
+// TableWidget. Clipboard assertions use the browser clipboard so Ctrl+C and a
+// subsequent paste into a plain textarea exercise the same path as the app.
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createServer } from 'vite'
@@ -45,13 +45,22 @@ const blankSource = [
   '| one |  | three |',
   '',
 ].join('\n')
+const richSource = [
+  '| 名称 | 内容 |',
+  '| --- | --- |',
+  '| **中文** | `code` \\| pipe |',
+  '| English *em* | 文本 |',
+  '',
+].join('\n')
 
 const server = await createServer({ server: { host: '127.0.0.1', port: 1461, strictPort: true, hmr: false, watch: null } })
 await server.listen()
 let browser
+let context
 const results = []
 const failures = []
 let page
+let liveVerticalMarkdown = ''
 
 const test = async (name, work) => {
   try {
@@ -68,6 +77,8 @@ const reset = async (source, clean = false, readOnly = false) => {
   await page.evaluate(({ source, clean, readOnly }) => window.f.reset(source, clean, readOnly), { source, clean, readOnly })
   await page.waitForFunction(() => window.f.ready())
   await page.locator('.md-prose').first().waitFor()
+  // Let ProseMirror commit its first measure before mouse coordinates are read.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 }
 
 const rectFor = async (cellText, part = cellText) => {
@@ -90,10 +101,11 @@ const rectFor = async (cellText, part = cellText) => {
   }, { cellText, part })
 }
 
-const drag = async (from, to, toEdge = 'start') => {
+const drag = async (from, to, toEdge = 'center') => {
   await page.mouse.move(from.left + 1, from.top + from.height / 2)
   await page.mouse.down()
-  await page.mouse.move(toEdge === 'end' ? to.right - 1 : to.left + 1, to.top + to.height / 2, { steps: 12 })
+  const x = toEdge === 'end' ? to.right - 1 : toEdge === 'start' ? to.left + 1 : to.left + to.width / 2
+  await page.mouse.move(x, to.top + to.height / 2, { steps: 12 })
   await page.mouse.up()
 }
 
@@ -104,51 +116,72 @@ const dragWithin = async rect => {
   await page.mouse.up()
 }
 
-const dragToCenter = async (from, to) => {
-  await page.mouse.move(from.left + 1, from.top + from.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(to.left + to.width / 2, to.top + to.height / 2, { steps: 12 })
-  await page.mouse.up()
-}
-
-const dragToEnd = async (from, to) => {
-  await page.mouse.move(from.left + 1, from.top + from.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(to.right - 2, to.top + to.height / 2, { steps: 12 })
-  await page.mouse.up()
-}
-
 const selectionInfo = () => page.evaluate(() => {
-  const selection = window.f.live().view.state.selection
-  return {
+  const f = window.f
+  const selection = f.live().view.state.selection
+  const result = {
     type: selection.toJSON().type,
     json: selection.toJSON(),
     empty: selection.empty,
-    selectedCells: document.querySelectorAll('.selectedCell').length,
+    selectedCells: document.querySelectorAll('.md-prose .selectedCell').length,
+    cells: [...document.querySelectorAll('.md-prose .selectedCell')].map(cell => cell.textContent?.trim() || ''),
     dom: window.getSelection()?.toString() || '',
+    active: document.activeElement?.className || document.activeElement?.tagName || '',
+    rect: null,
   }
+  if (selection instanceof f.CellSelection) {
+    const table = selection.$anchorCell.node(-1)
+    const map = f.TableMap.get(table)
+    const start = selection.$anchorCell.start(-1)
+    result.rect = map.rectBetween(selection.$anchorCell.pos - start, selection.$headCell.pos - start)
+    result.anchor = selection.$anchorCell.pos
+    result.head = selection.$headCell.pos
+  }
+  return result
 })
 
-const clipboard = (cut = false) => page.evaluate(cut => {
-  const f = window.f
-  const data = new DataTransfer()
-  f.live().view.dom.dispatchEvent(new ClipboardEvent(cut ? 'cut' : 'copy', { bubbles: true, cancelable: true, clipboardData: data }))
-  return { text: data.getData('text/plain'), html: data.getData('text/html'), source: f.source() }
-}, cut)
+const readClipboard = () => page.evaluate(async () => {
+  const result = { text: '', html: '' }
+  const items = await navigator.clipboard.read()
+  for (const item of items) {
+    if (item.types.includes('text/plain')) result.text = await (await item.getType('text/plain')).text()
+    if (item.types.includes('text/html')) result.html = await (await item.getType('text/html')).text()
+  }
+  return result
+})
+
+const copy = async (cut = false) => {
+  const before = await readClipboard()
+  await page.keyboard.press(cut ? 'Control+X' : 'Control+C')
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await page.waitForTimeout(40)
+    const next = await readClipboard()
+    if (next.text !== before.text || next.html !== before.html) return next
+  }
+  return readClipboard()
+}
+
+const expectTableCopy = (copied, expectedCells, forbidden = []) => {
+  assert.match(copied.text, /\|\s*:?-{3,}/, 'text/plain must contain a GFM table delimiter')
+  assert.match(copied.html, /<table>/i, 'text/html must contain an HTML table')
+  for (const cell of expectedCells) assert.match(copied.text, new RegExp(cell.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  for (const cell of forbidden) assert.doesNotMatch(copied.text, new RegExp(cell.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+}
 
 const source = () => page.evaluate(() => window.f.source())
 const activeBar = () => page.locator('.md-table-tools.is-active')
 
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.MARKUMO_CHROME, args: ['--no-sandbox'] })
-  page = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  context = await browser.newContext({ viewport: { width: 1280, height: 850 }, permissions: ['clipboard-read', 'clipboard-write'] })
+  page = await context.newPage()
   page.setDefaultTimeout(20000)
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   await page.goto(`http://127.0.0.1:1461/${output}/index.html`)
   await page.waitForFunction(() => window.f)
 
-  await test('A. selecting part of one cell copies only those characters', async () => {
+  await test('A. selecting part of one cell stays TextSelection and copies only those characters', async () => {
     await reset(tableSource)
     const min = await rectFor('admin', 'min')
     await dragWithin(min)
@@ -156,105 +189,122 @@ try {
     assert.equal(selection.type, 'text')
     assert.equal(selection.empty, false)
     assert.equal(selection.selectedCells, 0)
-    const copied = await clipboard()
-    assert.equal(copied.text, 'min', 'partial cell copy must not include the rest of the cell')
+    const copied = await copy()
+    assert.equal(copied.text, 'min')
     assert.doesNotMatch(copied.text, /\|/)
     assert.doesNotMatch(copied.text, /admin|123456/)
     assert.match(copied.html, /min/)
-    assert.doesNotMatch(copied.html, /123456/)
-  })
-
-  await test('B. dragging across cells stays a text selection, never CellSelection', async () => {
-    await reset(tableSource)
-    const min = await rectFor('admin', 'min')
-    const one = await rectFor('123456', '1')
-    await drag(min, one, 'end')
-    const selection = await selectionInfo()
-    assert.equal(selection.type, 'text')
-    assert.equal(selection.selectedCells, 0)
-    const copied = await clipboard()
-    assert.doesNotMatch(copied.text, /\|/, 'cross-cell text copy must not become a Markdown table')
-    assert.match(copied.text, /min/)
-    assert.match(copied.text, /1/)
-    assert.doesNotMatch(copied.text, /23456/)
-    assert.doesNotMatch(copied.text, /qingjie-01/)
     assert.doesNotMatch(copied.html, /<table>/)
-    assert.doesNotMatch(copied.html, /23456|qingjie-01/)
   })
 
-  await test('C. reverse cross-cell drag selects the same visible text', async () => {
+  await test('B. dragging from the first to the last character in one cell copies the cell text only', async () => {
     await reset(tableSource)
     const admin = await rectFor('admin', 'admin')
-    const one = await rectFor('123456', '1')
-    await drag(one, admin)
+    await drag(admin, admin, 'end')
     const selection = await selectionInfo()
     assert.equal(selection.type, 'text')
     assert.equal(selection.selectedCells, 0)
-    const copied = await clipboard()
-    assert.doesNotMatch(copied.text, /\|/)
-    assert.match(copied.text, /admin/)
-    assert.doesNotMatch(copied.text, /23456|qingjie-01/)
+    const copied = await copy()
+    assert.equal(copied.text, 'admin')
+    assert.doesNotMatch(copied.text, /\||123456|系统管理员/)
+    assert.doesNotMatch(copied.html, /<table>/)
   })
 
-  await test('D. dragging from an empty cell does not select the whole cell', async () => {
+  await test('C. dragging down into another cell creates a rectangular CellSelection and copies only those cells', async () => {
+    await reset(tableSource)
+    const admin = await rectFor('admin', 'admin')
+    const qingjie = await rectFor('qingjie-01', 'qingjie-01')
+    await drag(admin, qingjie)
+    const selection = await selectionInfo()
+    assert.equal(selection.type, 'cell')
+    assert.equal(selection.selectedCells, 2)
+    assert.deepEqual(selection.cells, ['admin', 'qingjie-01'])
+    assert.deepEqual(selection.rect, { left: 1, right: 2, top: 1, bottom: 3 })
+    const copied = await copy()
+    expectTableCopy(copied, ['admin', 'qingjie-01'], ['123456', '654321', '系统管理员', '服务人员'])
+    assert.equal(copied.text.trim().split('\n').length, 4, JSON.stringify(copied.text))
+    liveVerticalMarkdown = copied.text.trim()
+  })
+
+  await test('D. selecting two cells in one row creates a CellSelection and a legal Markdown table', async () => {
+    await reset(tableSource)
+    const admin = await rectFor('admin', 'admin')
+    const password = await rectFor('123456', '123456')
+    await drag(admin, password)
+    const selection = await selectionInfo()
+    assert.equal(selection.type, 'cell')
+    assert.deepEqual(selection.cells, ['admin', '123456'])
+    assert.deepEqual(selection.rect, { left: 1, right: 3, top: 1, bottom: 2 })
+    const copied = await copy()
+    expectTableCopy(copied, ['admin', '123456'], ['qingjie-01', '654321', '系统管理员'])
+    assert.equal(copied.text.trim().split('\n').length, 3)
+  })
+
+  await test('E. diagonal multi-row, multi-column drag copies exactly the rectangle', async () => {
+    await reset(tableSource)
+    const admin = await rectFor('admin', 'admin')
+    const password = await rectFor('654321', '654321')
+    await drag(admin, password)
+    const selection = await selectionInfo()
+    assert.equal(selection.type, 'cell')
+    assert.deepEqual(selection.cells, ['admin', '123456', 'qingjie-01', '654321'])
+    assert.deepEqual(selection.rect, { left: 1, right: 3, top: 1, bottom: 3 })
+    const copied = await copy()
+    expectTableCopy(copied, ['admin', '123456', 'qingjie-01', '654321'], ['系统管理员', '服务人员', 'zhangsan', '000000'])
+  })
+
+  await test('F. reverse cross-cell drag produces the same CellSelection', async () => {
+    await reset(tableSource)
+    const admin = await rectFor('admin', 'admin')
+    const password = await rectFor('654321', '654321')
+    await drag(password, admin)
+    const selection = await selectionInfo()
+    assert.equal(selection.type, 'cell')
+    assert.deepEqual(selection.rect, { left: 1, right: 3, top: 1, bottom: 3 })
+    assert.deepEqual(selection.cells.sort(), ['123456', '654321', 'admin', 'qingjie-01'].sort())
+    const copied = await copy()
+    expectTableCopy(copied, ['admin', '123456', 'qingjie-01', '654321'])
+  })
+
+  await test('G. dragging from an empty cell into a non-empty cell creates a CellSelection', async () => {
     await reset(blankSource)
     const empty = await page.evaluate(() => {
-      const cell = [...document.querySelectorAll('.md-prose td, .md-prose th')].find(candidate => candidate.textContent.trim() === '')
+      const cell = [...document.querySelectorAll('.md-prose td, .md-prose th')].find(candidate => candidate.textContent?.trim() === '')
       const rect = cell.getBoundingClientRect()
-      return { left: rect.left + rect.width / 2, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height }
+      return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height }
     })
     const admin = await rectFor('admin', 'admin')
-    await drag(empty, admin, 'end')
+    await drag(empty, admin)
     const selection = await selectionInfo()
-    assert.equal(selection.type, 'text')
-    assert.equal(selection.selectedCells, 0)
-    const copied = await clipboard()
-    assert.doesNotMatch(copied.text, /\|/)
-    assert.match(copied.text, /admin/)
-    assert.doesNotMatch(copied.text, /123456/)
+    assert.equal(selection.type, 'cell')
+    assert.deepEqual(selection.rect, { left: 0, right: 2, top: 1, bottom: 2 })
+    const copied = await copy()
+    expectTableCopy(copied, ['admin'], ['123456', 'one', 'three'])
   })
 
-  await test('E. copy, cut and undo keep the same text selection semantics', async () => {
-    await reset(tableSource)
-    const min = await rectFor('admin', 'min')
-    await dragWithin(min)
-    const copied = await clipboard()
-    assert.equal(copied.text, 'min')
-    const cut = await clipboard(true)
-    assert.equal(cut.text, 'min')
-    assert.doesNotMatch(cut.source, /admin/, 'cut must remove the selected characters from the source')
-    assert.match(cut.source, /\| 系统管理员 \| ad \| 123456 \|/)
-    await page.evaluate(() => window.f.undo())
-    await page.waitForFunction(() => window.f.ready())
-    assert.equal(await source(), tableSource)
-    assert.equal((await selectionInfo()).selectedCells, 0)
-  })
-
-  await test('F. click, double click, triple click and shift click behave like a text editor', async () => {
+  await test('H. click, double click, triple click and Shift+Click preserve text and structural behavior', async () => {
+    // Shift+click first so browser click-count history from the triple click
+    // below cannot affect the modifier gesture.
     await reset(tableSource)
     let admin = await rectFor('admin', 'admin')
-    const one = await rectFor('123456', '123456')
-    await page.mouse.click(admin.left + admin.width / 2, admin.top + admin.height / 2)
+    let password = await rectFor('123456', '123456')
+    await page.locator('.md-prose td', { hasText: 'admin' }).click()
+    await page.waitForFunction(() => window.f.live().view.state.selection.$anchor.pos > 10)
+    await page.keyboard.down('Shift')
+    await page.mouse.click(password.left + password.width / 2, password.top + password.height / 2)
+    await page.keyboard.up('Shift')
     let selection = await selectionInfo()
+    assert.equal(selection.type, 'cell')
+    assert.deepEqual(selection.rect, { left: 1, right: 3, top: 1, bottom: 2 })
+
+    await reset(tableSource)
+    admin = await rectFor('admin', 'admin')
+    await page.mouse.click(admin.left + admin.width / 2, admin.top + admin.height / 2)
+    selection = await selectionInfo()
     assert.equal(selection.type, 'text')
     assert.equal(selection.empty, true)
     await activeBar().waitFor({ state: 'visible' })
 
-    // Shift-click first: it must extend a normal text selection across cells.
-    await page.mouse.click(admin.left + 1, admin.top + admin.height / 2)
-    await page.keyboard.down('Shift')
-    await page.mouse.click(one.left + one.width / 2, one.top + one.height / 2)
-    await page.keyboard.up('Shift')
-    await page.waitForFunction(() => !window.f.live().view.state.selection.empty)
-    selection = await selectionInfo()
-    const shifted = await clipboard()
-    assert.equal(selection.type, 'text')
-    assert.equal(selection.selectedCells, 0)
-    assert.match(shifted.text, /123/, JSON.stringify({ selection, text: shifted.text }))
-    assert.match(shifted.text, /min|admin/)
-
-    // A fresh document keeps browser click-count history and the previous
-    // selection from affecting the double/triple click checks.
     await reset(tableSource)
     admin = await rectFor('admin', 'admin')
     await page.mouse.dblclick(admin.left + admin.width / 2, admin.top + admin.height / 2)
@@ -270,11 +320,12 @@ try {
     admin = await rectFor('admin', 'admin')
     await page.mouse.click(admin.left + admin.width / 2, admin.top + admin.height / 2, { clickCount: 3 })
     selection = await selectionInfo()
-    assert.equal(selection.type, 'text')
-    assert.equal(selection.selectedCells, 0)
+    assert.equal(selection.type, 'cell')
+    assert.equal(selection.selectedCells, 1)
+    assert.deepEqual(selection.cells, ['admin'])
   })
 
-  await test('G. Tab navigation and the table toolbar still work', async () => {
+  await test('I. Tab, Shift+Tab and table toolbar operations still work', async () => {
     await reset(tableSource)
     await page.locator('.md-prose td', { hasText: 'admin' }).click()
     await activeBar().waitFor({ state: 'visible' })
@@ -289,86 +340,89 @@ try {
     assert.equal((await selectionInfo()).type, 'text')
     await activeBar().getByRole('button', { name: '表格行列操作', exact: true }).click()
     await activeBar().getByRole('button', { name: '后插行', exact: true }).click()
-    const rows = await page.locator('.md-prose table tr').count()
-    assert.equal(rows, 5)
+    assert.equal(await page.locator('.md-prose table tr').count(), 5)
     await page.evaluate(() => window.f.undo())
     await page.waitForFunction(() => window.f.ready())
     assert.equal(await source(), tableSource)
   })
 
-  await test('H. switching live/source and back preserves the exact Markdown and text selection', async () => {
-    await reset(tableSource)
-    const min = await rectFor('admin', 'min')
-    await dragWithin(min)
-    assert.equal((await selectionInfo()).type, 'text')
-    await page.evaluate(() => window.f.manager.setMarkdownMode(window.f.id, 'source', 'main'))
-    assert.equal(await source(), tableSource)
-    await page.evaluate(() => window.f.manager.setMarkdownMode(window.f.id, 'live', 'main'))
-    await page.waitForFunction(() => window.f.ready())
-    assert.equal(await source(), tableSource)
-    assert.equal(await page.locator('.md-prose table').count(), 1)
-  })
-
-  await test('I. read-only mode selects and copies text but never mutates it', async () => {
+  await test('J. read-only mode allows text and structural selection and copy without mutation', async () => {
     await reset(tableSource, true, true)
     const min = await rectFor('admin', 'min')
     await dragWithin(min)
+    assert.equal((await selectionInfo()).type, 'text')
+    assert.equal((await copy()).text, 'min')
+    const admin = await rectFor('admin', 'admin')
+    const qingjie = await rectFor('qingjie-01', 'qingjie-01')
+    await drag(admin, qingjie)
     const selection = await selectionInfo()
-    const copied = await clipboard()
-    assert.equal(selection.type, 'text')
-    assert.equal(selection.selectedCells, 0)
-    assert.equal(copied.text, 'min')
-    // Cut is a mutation and is disabled in read-only mode; the source stays put.
-    const cut = await clipboard(true)
-    assert.equal(cut.text, '')
-    assert.equal(cut.source, tableSource)
-    await page.keyboard.type('X')
+    assert.equal(selection.type, 'cell')
+    const copied = await copy()
+    expectTableCopy(copied, ['admin', 'qingjie-01'])
     assert.equal(await source(), tableSource)
   })
 
-  await test('J. repeated drags, multiple tables, panes and mode switches leak no listeners', async () => {
+  await test('K. copied CellSelection pastes as Markdown source into a plain textarea', async () => {
+    await reset(tableSource)
+    const admin = await rectFor('admin', 'admin')
+    const qingjie = await rectFor('qingjie-01', 'qingjie-01')
+    await drag(admin, qingjie)
+    const copied = await copy()
+    expectTableCopy(copied, ['admin', 'qingjie-01'])
+    await page.evaluate(() => {
+      const area = document.createElement('textarea')
+      area.id = 'plain-paste-target'
+      document.body.append(area)
+      area.focus()
+    })
+    await page.keyboard.press('Control+V')
+    await page.waitForFunction(() => (document.querySelector('#plain-paste-target')?.value || '').includes('admin'))
+    const pasted = await page.locator('#plain-paste-target').inputValue()
+    assert.equal(pasted.trim(), copied.text.trim())
+    await page.evaluate(() => document.querySelector('#plain-paste-target')?.remove())
+  })
+
+  await test('L. Chinese, English, emphasis, code and escaped pipes survive cell copy', async () => {
+    await reset(richSource)
+    const chinese = await rectFor('中文', '中文')
+    const text = await rectFor('文本', '文本')
+    // Start from the plain-text cell; starting inside an inline formatted cell
+    // can focus its inline source input before the cell selection begins.
+    await drag(text, chinese)
+    const selection = await selectionInfo()
+    assert.equal(selection.type, 'cell')
+    const copied = await copy()
+    assert.match(copied.text, /\*\*中文\*\*/, JSON.stringify({ selection, text: copied.text, html: copied.html }))
+    assert.match(copied.text, /`code`/)
+    assert.match(copied.text, /\\\|/)
+    assert.match(copied.text, /English \*em\*/)
+    assert.match(copied.html, /<strong>中文<\/strong>/)
+    assert.match(copied.html, /<code>code<\/code>/)
+    assert.match(copied.html, /<table>/)
+  })
+
+  await test('M. the existing append/selection behavior does not leak listeners across repeated drags', async () => {
     await reset(tableSource + '\n' + tableSource.replaceAll('admin', 'other'))
     const before = await page.evaluate(() => window.f.snapshot().globalListeners)
     const initialSource = await source()
     for (let index = 0; index < 4; index++) {
       const min = await rectFor('admin', 'min')
       const one = await rectFor('123456', '1')
-      await drag(min, one, 'end')
-      assert.equal(await source(), initialSource, 'a text drag must not edit the table source')
-      assert.equal((await selectionInfo()).selectedCells, 0)
-      await clipboard()
+      await drag(min, one)
+      assert.equal(await source(), initialSource, 'a selection gesture must not edit the table source')
+      assert.equal((await selectionInfo()).type, 'cell')
+      await copy()
     }
     const afterDrags = await page.evaluate(() => window.f.snapshot().globalListeners)
     assert.ok(afterDrags <= before + 1, `global listeners grew from ${before} to ${afterDrags}`)
-    const secondary = await page.evaluate(() => window.f.split())
-    await page.evaluate(pane => {
-      const f = window.f
-      f.manager.setMarkdownMode(f.id, 'live', 'main')
-      f.manager.setMarkdownMode(f.id, 'live', pane)
-    }, secondary)
-    await page.waitForFunction(() => window.f.ready())
-    const beforeSwitch = await page.evaluate(() => window.f.snapshot().globalListeners)
-    for (let index = 0; index < 3; index++) {
-      await page.evaluate(() => {
-        const f = window.f
-        f.manager.setMarkdownMode(f.id, 'source', 'main')
-        f.manager.setMarkdownMode(f.id, 'live', 'main')
-      })
-      await page.waitForFunction(() => window.f.ready())
-    }
-    const afterSwitch = await page.evaluate(() => window.f.snapshot().globalListeners)
-    assert.ok(afterSwitch <= beforeSwitch + 1, `global listeners grew after mode switches from ${beforeSwitch} to ${afterSwitch}`)
-    assert.equal(await page.locator('.md-prose table').count(), 4)
-    await page.evaluate(pane => window.f.manager.closePane(pane), secondary)
     const disposed = await page.evaluate(() => window.f.dispose())
     assert.equal(disposed.pmDestroyed, true)
     assert.equal(disposed.cmDestroyed, true)
     assert.equal(disposed.rootsRemoved, true)
     assert.equal(disposed.remaining, 0)
-    assert.ok(disposed.globalListeners <= before, `global listeners remained after dispose: ${disposed.globalListeners} > ${before}`)
   })
 
-  const widgetPage = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  const widgetPage = await context.newPage()
   try {
     await widgetPage.goto(`http://127.0.0.1:1461/${output}/widget.html`)
     await widgetPage.waitForFunction(() => window.f?.view && document.querySelector('.cm-md-table'))
@@ -385,51 +439,86 @@ try {
       const rect = range.getBoundingClientRect()
       return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height }
     }, { cellText, part })
+    const copyWidget = async () => {
+      const before = await readClipboardFrom(widgetPage)
+      await widgetPage.keyboard.press('Control+C')
+      for (let attempt = 0; attempt < 12; attempt++) {
+        await widgetPage.waitForTimeout(40)
+        const next = await readClipboardFrom(widgetPage)
+        if (next.text !== before.text || next.html !== before.html) return next
+      }
+      return readClipboardFrom(widgetPage)
+    }
+
     const min = await widgetRect('admin', 'min')
-    const one = await widgetRect('123456', '1')
     await widgetPage.mouse.move(min.left + 1, min.top + min.height / 2)
     await widgetPage.mouse.down()
     await widgetPage.mouse.move(min.right - 1, min.top + min.height / 2, { steps: 8 })
     await widgetPage.mouse.up()
-    const within = await widgetPage.evaluate(() => window.getSelection()?.toString() || '')
-    assert.match(within, /min/, 'source table drag must select the rendered text')
-    await widgetPage.mouse.move(min.left + 1, min.top + min.height / 2)
+    assert.match(await widgetPage.evaluate(() => window.getSelection()?.toString() || ''), /min/)
+    const withinCopied = await copyWidget()
+    assert.equal(withinCopied.text.trim(), 'min')
+    assert.doesNotMatch(withinCopied.text, /\|/)
+    assert.doesNotMatch(withinCopied.html, /<table>/)
+
+    await widgetPage.reload()
+    await widgetPage.waitForFunction(() => window.f?.view && document.querySelector('.cm-md-table'))
+    const admin = await widgetRect('admin', 'min')
+    const password = await widgetRect('123456', '1')
+    await widgetPage.mouse.move(admin.left + 1, admin.top + admin.height / 2)
     await widgetPage.mouse.down()
-    await widgetPage.mouse.move(one.right - 1, one.top + one.height / 2, { steps: 10 })
+    await widgetPage.mouse.move(password.left + password.width / 2, password.top + password.height / 2, { steps: 12 })
     await widgetPage.mouse.up()
-    const cross = await widgetPage.evaluate(() => window.getSelection()?.toString() || '')
-    assert.match(cross, /min/)
-    assert.match(cross, /1/)
-    assert.doesNotMatch(cross, /\|/)
-    assert.equal(await widgetPage.evaluate(() => window.f.source()), widgetSource, 'source widget drag must not edit the Markdown')
-    const copied = await widgetPage.evaluate(() => {
-      const data = new DataTransfer()
-      document.querySelector('.cm-md-table').dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data }))
-      return data.getData('text/plain')
-    })
-    assert.equal(copied.trim(), cross.trim(), 'widget copy must use the native selected text')
+    assert.ok(await widgetPage.locator('.cm-md-table .selectedCell').count() >= 2)
+    assert.equal(await widgetPage.evaluate(() => window.f.source()), widgetSource)
+    const crossCopied = await copyWidget()
+    expectTableCopy(crossCopied, ['admin', '123456'], ['654321', 'qingjie-01'])
+    assert.equal(crossCopied.text.trim(), '|  |  |\n| --- | --- |\n| admin | 123456 |')
+
+    await widgetPage.reload()
+    await widgetPage.waitForFunction(() => window.f?.view && document.querySelector('.cm-md-table'))
+    const verticalAdmin = await widgetRect('admin', 'min')
+    const verticalQingjie = await widgetRect('qingjie-01', 'qingjie-01')
+    await widgetPage.mouse.move(verticalAdmin.left + 1, verticalAdmin.top + verticalAdmin.height / 2)
+    await widgetPage.mouse.down()
+    await widgetPage.mouse.move(verticalQingjie.left + verticalQingjie.width / 2, verticalQingjie.top + verticalQingjie.height / 2, { steps: 12 })
+    await widgetPage.mouse.up()
+    const verticalCopied = await copyWidget()
+    assert.equal(verticalCopied.text.trim(), liveVerticalMarkdown, `live=${JSON.stringify(liveVerticalMarkdown)} source=${JSON.stringify(verticalCopied.text.trim())}`)
+
     const cell = widgetPage.locator('.cm-md-table td', { hasText: 'admin' }).first()
     const from = Number(await cell.getAttribute('data-source-from'))
     const box = await cell.boundingBox()
     await widgetPage.mouse.click(box.x + 10, box.y + box.height / 2)
     await widgetPage.waitForFunction(() => !document.querySelector('.cm-md-table'))
     assert.equal(await widgetPage.evaluate(() => window.f.view.state.selection.main.head), from)
-    results.push('K. source-mode table widget keeps click editing and drag text selection')
-    console.log('PASS K. source-mode table widget keeps click editing and drag text selection')
+    results.push('N. source-mode TableWidget keeps click editing, same-cell text copy and structural cross-cell copy')
+    console.log('PASS N. source-mode TableWidget keeps click editing, same-cell text copy and structural cross-cell copy')
   } catch (error) {
-    failures.push({ name: 'K. source-mode table widget keeps click editing and drag text selection', error: String(error), stack: error.stack })
-    console.error('FAIL K. source-mode table widget keeps click editing and drag text selection\n' + (error.stack || error))
+    failures.push({ name: 'N. source-mode TableWidget keeps click editing, same-cell text copy and structural cross-cell copy', error: String(error), stack: error.stack })
+    console.error('FAIL N. source-mode TableWidget keeps click editing, same-cell text copy and structural cross-cell copy\n' + (error.stack || error))
   } finally {
     await widgetPage.close()
   }
 
   assert.deepEqual(errors, [])
   assert.equal(failures.length, 0, JSON.stringify(failures, null, 2))
-  console.log(`PASS ${results.length} table text-selection groups`)
+  console.log(`PASS ${results.length} table selection groups`)
 } finally {
   await page?.evaluate(() => window.f.dispose()).catch(() => {})
+  await context?.close()
   await browser?.close()
   await server.close()
 }
 
-
+async function readClipboardFrom(target) {
+  return target.evaluate(async () => {
+    const result = { text: '', html: '' }
+    const items = await navigator.clipboard.read()
+    for (const item of items) {
+      if (item.types.includes('text/plain')) result.text = await (await item.getType('text/plain')).text()
+      if (item.types.includes('text/html')) result.html = await (await item.getType('text/html')).text()
+    }
+    return result
+  })
+}

@@ -3,6 +3,7 @@ import { EditorView as CMView } from '@codemirror/view'
 import { Transaction as CMTransaction, EditorSelection } from '@codemirror/state'
 import { undoDepth, redoDepth } from '@codemirror/commands'
 import { TextSelection, NodeSelection } from 'prosemirror-state'
+import { CellSelection, TableMap } from 'prosemirror-tables'
 import { markdownResources } from '/src/editor/markdown/images.ts'
 import { textClipboard } from '/src/features/shell/clipboard.ts'
 import '/src/styles/reset.css'
@@ -115,5 +116,5 @@ window.f = {
     return { pmDestroyed: editors.every(editor => editor.view.isDestroyed), cmDestroyed: cms.every(view => view.destroyed), rootsRemoved: editors.every(editor => !editor.dom.isConnected),
       globalListeners: count(document) + count(window), remaining: root.querySelectorAll('.markdown-live,.cm-editor,.md-table-tools').length }
   },
-  CMView, CMTransaction, EditorSelection, TextSelection, NodeSelection,
+  CMView, CMTransaction, EditorSelection, TextSelection, NodeSelection, CellSelection, TableMap,
 }

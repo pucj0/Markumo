@@ -162,6 +162,8 @@
 .cm-md-table { border-collapse:collapse;min-width:160px;max-width:100%;font-family:var(--font-sans);font-size:inherit;line-height:var(--editor-line) }
 .cm-md-table td,.cm-md-table th { min-width:70px;border:1px solid var(--line);padding:4px 10px;cursor:text }
 .cm-md-table th { background:var(--soft);font-weight:600 }
+.cm-md-table .selectedCell { background:color-mix(in srgb,var(--accent) 18%,transparent) }
+.cm-md-table th.selectedCell { background:color-mix(in srgb,var(--accent) 24%,var(--soft)) }
 .cm-md-table code { font-family:var(--font-mono);background:var(--soft);border-radius:3px;padding:1px 3px }
 .cm-md-table a { color:var(--blue);text-decoration:underline }
 .cm-md-table-tools { position:absolute;top:0;right:18px;display:flex;gap:2px;background:var(--paper);border:1px solid var(--line);border-radius:4px;opacity:0;pointer-events:none;z-index:2 }

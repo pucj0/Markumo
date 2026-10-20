@@ -64,6 +64,28 @@ export function tableModel(state: EditorState, node: MarkdownNode): TableBlockMo
 }
 
 export type TableOperation = 'row-add' | 'row-delete' | 'column-add' | 'column-delete'
+export function tableMarkdownFromMatrix(rows: string[][], align: ('left' | 'center' | 'right')[]): string {
+  const line = (cells: string[]) => `| ${cells.join(' | ')} |`
+  const delimiter = align.map(value => value === 'center' ? ':---:' : value === 'right' ? '---:' : '---')
+  return [line(rows[0] || []), line(delimiter), ...rows.slice(1).map(line)].join('\n')
+}
+
+export function tableMarkdownFragment(model: TableBlockModel, top: number, left: number, bottom: number, right: number): string {
+  const topRow = Math.max(0, Math.min(model.rows.length - 1, top))
+  const bottomRow = Math.max(topRow, Math.min(model.rows.length - 1, bottom))
+  const leftColumn = Math.max(0, Math.min(model.align.length - 1, left))
+  const rightColumn = Math.max(leftColumn + 1, Math.min(model.align.length, right))
+  const columns = rightColumn - leftColumn
+  const align = model.align.slice(leftColumn, rightColumn)
+  const headerSelected = topRow === 0
+  const header = headerSelected
+    ? model.rows[0].cells.slice(leftColumn, rightColumn).map(cell => cell.text)
+    : Array.from({ length: columns }, () => '')
+  const data = (headerSelected ? model.rows.slice(1, bottomRow + 1) : model.rows.slice(topRow, bottomRow + 1))
+    .map(row => row.cells.slice(leftColumn, rightColumn).map(cell => cell.text))
+  return tableMarkdownFromMatrix([header, ...data], align)
+}
+
 export function editTable(model: TableBlockModel, operation: TableOperation, row: number, column: number): TransactionSpec | null {
   if (row < 0 || row >= model.rows.length || column < 0 || column >= model.align.length) return null
   const rows = model.rows.map(row => row.cells.map(cell => cell.text)), align = [...model.align]
@@ -71,9 +93,7 @@ export function editTable(model: TableBlockModel, operation: TableOperation, row
   if (operation === 'row-delete') { if (!row) return null; rows.splice(row, 1) }
   if (operation === 'column-add') { rows.forEach(cells => cells.splice(column + 1, 0, '')); align.splice(column + 1, 0, 'left') }
   if (operation === 'column-delete') { if (align.length <= 1) return null; rows.forEach(cells => cells.splice(column, 1)); align.splice(column, 1) }
-  const line = (cells: string[]) => `| ${cells.join(' | ')} |`
-  const delimiter = align.map(value => value === 'center' ? ':---:' : value === 'right' ? '---:' : ':---')
-  const insert = [line(rows[0]), line(delimiter), ...rows.slice(1).map(line)].join('\n')
+  const insert = tableMarkdownFromMatrix(rows, align)
   return { changes: { from: model.from, to: model.to, insert }, selection: { anchor: model.from }, annotations: isolateHistory.of('full'), userEvent: 'input.table' }
 }
 export function editTableCell(model: TableBlockModel, row: number, column: number, text: string): TransactionSpec | null {
