@@ -56,6 +56,8 @@ export function useShellPreferences(host: ShellPreferencesHost) {
 
   const autoCheckUpdates = ref(true)
   const autoDownloadUpdates = ref(false)
+  const externalFileMonitoring = ref(true)
+  const autoReloadExternal = ref(true)
   const autoSave = ref(false)
   const autoSaveDelay = ref(1500)
 
@@ -205,6 +207,8 @@ export function useShellPreferences(host: ShellPreferencesHost) {
       fontFamily: fontFamily.value,
       wordWrap: wordWrap.value,
       showOutline: showOutline.value,
+      externalFileMonitoring: externalFileMonitoring.value,
+      autoReloadExternal: autoReloadExternal.value,
       autoSave: autoSave.value,
       autoSaveDelay: autoSaveDelay.value,
       treeClickMode: treeClickMode.value,
@@ -267,6 +271,8 @@ export function useShellPreferences(host: ShellPreferencesHost) {
       useTabs,
       shortcuts,
       fileModes,
+      externalFileMonitoring,
+      autoReloadExternal,
       autoSave,
       autoSaveDelay,
       treeClickMode,
@@ -343,6 +349,8 @@ export function useShellPreferences(host: ShellPreferencesHost) {
       fontSize.value = settings.fontSize
       fontFamily.value = settings.fontFamily
       wordWrap.value = settings.wordWrap
+      externalFileMonitoring.value = settings.externalFileMonitoring
+      autoReloadExternal.value = settings.autoReloadExternal
       autoSave.value = settings.autoSave
       autoSaveDelay.value = settings.autoSaveDelay
       autoCheckUpdates.value = settings.autoCheckUpdates
@@ -420,6 +428,8 @@ export function useShellPreferences(host: ShellPreferencesHost) {
     useTabs,
     autoCheckUpdates,
     autoDownloadUpdates,
+    externalFileMonitoring,
+    autoReloadExternal,
     autoSave,
     autoSaveDelay,
     treeClickMode,

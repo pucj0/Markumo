@@ -129,6 +129,21 @@ export class RecoveryController {
     await this.flush()
   }
 
+  /** A destructive reload must wait for this exact buffer to reach durable storage.
+   * The retained snapshot is deliberately detached from subsequent normal saves. */
+  async checkpointBeforeReload(id: string): Promise<boolean> {
+    const doc = this.manager.metadata(id), text = this.manager.getState(id)?.doc
+    if (!doc?.dirty) return true
+    if (!this.started || this.disposed || !text || !this.eligible(doc) || this.manager.isComposing) return false
+    await this.flushing.catch(() => {})
+    this.failed.delete(id)
+    this.pending.set(id, { text, due: 0 })
+    await this.flush()
+    if (this.lastSaved.get(id) !== text || this.manager.getState(id)?.doc !== text) return false
+    this.ids.delete(id); this.lastSaved.delete(id); this.pending.delete(id)
+    return true
+  }
+
   async onSaved(documentId: string) {
     if (this.disposed) return
     this.bumpGeneration(documentId)

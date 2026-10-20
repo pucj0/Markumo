@@ -2,6 +2,7 @@ import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { Encoding, FileOpenEncoding, FileGateway, OpenBatch, OpenFile } from './contracts'
 import { sameFilePath } from './pathKey'
 import { isMedia } from './media'
+import { ExternalFileChangeController } from './ExternalFileChangeController'
 
 export function fileError(error: unknown) {
   if (typeof error === 'string') return error
@@ -13,12 +14,14 @@ export function fileError(error: unknown) {
 // A single save per document. Snapshot completion uses its original CM Text,
 // allowing edits during IPC without incorrectly clearing the dirty flag.
 export class FileController {
+  readonly external: ExternalFileChangeController
   readonly saving = new Set<string>()
   workspaceBusy = false
   private disposed = false
   private readonly stopRelease: () => void
   constructor(readonly manager: DocumentManager, readonly gateway: FileGateway, private readonly notify: (message: string) => void, private saved?: (id: string) => void | Promise<void>) {
     this.stopRelease = manager.onFileRelease(token => { void gateway.release(token).catch(error => notify(fileError(error))) })
+    this.external = new ExternalFileChangeController(manager, this, notify)
   }
   setSavedHandler(handler: (id: string) => void | Promise<void>) { this.saved = handler }
 
@@ -38,7 +41,7 @@ export class FileController {
       }
     }
     if (existing && existing.fileToken !== file.token) void this.gateway.release(file.token).catch(error => this.notify(fileError(error)))
-    if (existing && existing.lastDiskVersion !== file.version) this.notify('检测到磁盘版本变化。保留当前编辑内容；请先另存为，再关闭并重开原文件。')
+    if (existing && existing.lastDiskVersion !== file.version) void this.external.check(existing.id)
     else if (file.warning) this.notify(file.warning)
     return true
   }
@@ -63,6 +66,10 @@ export class FileController {
     return this.performSave(id, false, undefined, undefined, true)
   }
   private async performSave(id: string, saveAs: boolean, encoding: Encoding | undefined, bom: boolean | undefined, automatic: boolean): Promise<'saved' | 'changed' | 'failed' | 'skipped'> {
+    if (this.external.resolving(id) || (!saveAs && this.external.blocked(id))) {
+      if (!automatic) { this.external.keep(id, false); this.notify('磁盘版本正在检查或已变化，请先比较差异、另存为或加载磁盘。') }
+      return 'skipped'
+    }
     if (isMedia(this.manager.metadata(id))) return 'skipped'
     if (this.manager.metadata(id)?.kind === 'javaClass') { if (!automatic) this.notify('ClassFile 仅供只读查看，不能作为文本保存或另存为。'); return 'skipped' }
     if (this.manager.metadata(id)?.encoding === 'Hex' && encoding && encoding !== 'Hex') {
@@ -83,20 +90,28 @@ export class FileController {
         if (!target) return 'skipped'
         targetToken = target.token
         if (this.disposed) return 'skipped'
+        if (source.fileToken && sameFilePath(target.path, source.path)) {
+          this.notify('另存为不能覆盖原文件，请选择其他文件名；原文件仍受版本保护。')
+          return 'skipped'
+        }
         token = target.token
         version = target.version
       }
       const targetEncoding = encoding || source.encoding as Encoding
       const targetBom = bom !== undefined ? bom : (encoding ? false : source.bom)
+      if (this.disposed || !this.manager.metadata(id) || this.manager.metadata(id)?.fileToken !== source.fileToken) return 'skipped'
+      if (!saveAs && this.external.blocked(id)) return 'skipped'
       const result = await this.gateway.save(token!, snapshot.text, version, targetEncoding, targetBom)
       targetToken = undefined
       const accepted = snapshot.complete(result)
       if (accepted && source.fileToken && source.fileToken !== result.token) await this.gateway.release(source.fileToken).catch(() => {})
       if (!accepted) await this.gateway.release(result.token).catch(() => {})
       if (accepted) await this.saved?.(id)
+      if (accepted) this.external.saved(id)
       if (accepted && result.warning) this.notify(result.warning)
       return !accepted ? 'skipped' : this.manager.metadata(id)?.dirty ? 'changed' : 'saved'
     } catch (error) {
+      if (!saveAs) this.external.saveFailed(id, error)
       this.notify(`${automatic ? '自动保存已暂停：' : ''}${fileError(error)}\n内容仍保留；可使用另存为保存到其他文件。`)
       return 'failed'
     } finally {
@@ -109,6 +124,7 @@ export class FileController {
     if (isMedia(doc)) return
     if (doc?.kind === 'javaClass' && encoding !== 'Hex') { this.notify('请使用“编辑文件字节”切回可编辑内容。'); return }
     if (!doc?.fileToken) { this.notify('请先打开真实文件。'); return }
+    if (this.external.blocked(doc.id)) { this.notify('请先处理外部变化，再切换文件编码。'); return }
     if (!force && (doc.dirty || this.manager.isComposing || this.saving.has(doc.id))) {
       this.notify('请先保存修改并完成输入，再用其他编码重开。'); return
     }
@@ -124,6 +140,7 @@ export class FileController {
     } catch (error) { this.notify(fileError(error)) }
   }
   close(id: string, discard = false, pane: string = this.manager.activePane) {
+    if (this.external.resolving(id)) { this.notify('文件处理进行中，请稍后关闭。'); return 'saving' as const }
     if (this.saving.has(id)) { this.notify('保存进行中，请稍后关闭。'); return 'saving' as const }
     const result = this.manager.close(id, discard, pane)
     return result
@@ -136,6 +153,7 @@ export class FileController {
   dispose() {
     if (this.disposed) return
     this.disposed = true
+    this.external.dispose()
     this.stopRelease()
     // HMR can dispose the frontend while the Rust process keeps running.
     for (const token of new Set(this.manager.openedDocuments.map(doc => doc.fileToken).filter((token): token is string => !!token))) {

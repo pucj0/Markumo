@@ -63,9 +63,10 @@ export function useAppShell() {
   const files = markRaw(new FileController(manager, tauriFiles, toast))
   const recovery = markRaw(new RecoveryController(manager, files, tauriRecovery, toast))
   files.setSavedHandler(id => recovery.onSaved(id))
+  files.external.setRecoveryCheckpoint(id => recovery.checkpointBeforeReload(id))
   const exportController = new ExportController(manager, msg => toast(msg))
   const importController = new ImportController(manager, msg => toast(msg))
-  const workspace = reactive(new WorkspaceController(tauriWorkspace, manager, files, toast, false)) as WorkspaceController
+  const workspace = reactive(new WorkspaceController(tauriWorkspace, manager, files, toast, false)) as unknown as WorkspaceController
   workspace.connect()
 
   const recentFiles = ref<Preferences['recent']>([])
@@ -124,6 +125,10 @@ export function useAppShell() {
     revision,
     getActiveDoc: () => activeDoc.value,
   })
+
+  watch([preferences.externalFileMonitoring, preferences.autoReloadExternal, preferences.settingsReady], () => {
+    files.external.configure(desktop && preferences.settingsReady.value && preferences.externalFileMonitoring.value, preferences.autoReloadExternal.value)
+  }, { immediate: true })
 
   // --- Image Import Controller ---
   const imageImporter = new ImageImporter(
@@ -1096,6 +1101,7 @@ export function useAppShell() {
   })
 
   onMounted(async () => {
+    if (desktop) await files.external.start()
     window.addEventListener('editor-notice', editorNotice)
     window.addEventListener('markdown-open-relative', openRelativeLink)
     window.addEventListener('paste', imagePaste, true)
@@ -1225,6 +1231,8 @@ export function useAppShell() {
     showOutline: preferences.showOutline,
     defaultMdMode: preferences.defaultMdMode,
     liveToolbar: preferences.liveToolbar,
+    externalFileMonitoring: preferences.externalFileMonitoring,
+    autoReloadExternal: preferences.autoReloadExternal,
     autoSave: preferences.autoSave,
     autoSaveDelay: preferences.autoSaveDelay,
     treeClickMode: preferences.treeClickMode,

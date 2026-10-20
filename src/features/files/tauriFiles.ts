@@ -1,8 +1,13 @@
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import type { FileGateway, FileMetadata, OpenBatch, OpenFile, Preferences, SaveTarget, HexPage } from './contracts'
 
 // No path-based arbitrary read/write API: native selection creates backend tokens.
 export const tauriFiles: FileGateway = {
+  checkExternal: token => invoke<string>('check_external_file', { token }),
+  readExternal: (token, expectedVersion, encoding) => invoke<OpenFile>('read_external_file', { token, expectedVersion, encoding }),
+  watchExternal: (tokens, generation) => invoke('watch_external_files', { tokens, generation }),
+  listenExternal: handler => listen<import('./contracts').ExternalFileHint>('external-file-change', event => handler(event.payload)),
   openDialog: encoding => invoke<OpenBatch>('open_dialog', { encoding: encoding ?? null }),
   openRecent: (path, encoding) => invoke<OpenFile>('open_recent', { path, encoding: encoding ?? null }),
   drainPending: () => invoke<OpenBatch>('drain_pending'),

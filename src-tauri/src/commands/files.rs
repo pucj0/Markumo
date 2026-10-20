@@ -358,6 +358,19 @@ pub async fn release_file(
     })
     .await
 }
+
+#[tauri::command]
+pub async fn check_external_file(window: Window, store: State<'_, FileStore>, token: String) -> Result<String> {
+    operate(store.inner().clone(), window.label().into(), move |s| s.check_external(&token)).await
+}
+#[tauri::command]
+pub async fn read_external_file(window: Window, store: State<'_, FileStore>, token: String, expected_version: String, encoding: String) -> Result<OpenFile> {
+    operate(store.inner().clone(), window.label().into(), move |s| s.read_external(&token, &expected_version, &encoding)).await
+}
+#[tauri::command]
+pub async fn watch_external_files(window: Window, store: State<'_, FileStore>, tokens: Vec<String>, generation: u64) -> Result<crate::files::external::WatchStatus> {
+    operate(store.inner().clone(), window.label().into(), move |s| s.watch_external(tokens, generation)).await
+}
 #[tauri::command]
 pub async fn read_class_hex(
     window: Window,

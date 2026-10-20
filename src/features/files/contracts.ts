@@ -31,7 +31,13 @@ export interface Preferences {
   layout: { mode: 'single' | 'workspace'; sidebarVisible: boolean; sidebarWidth: number }
   warning?: string
 }
+export interface ExternalFileHint { generation: number; tokens: string[]; error?: string | null }
+export interface WatchStatus { watcherCount: number; directoryCount: number; fileCount: number }
 export interface FileGateway {
+  checkExternal?(token: string): Promise<string>
+  readExternal?(token: string, expectedVersion: string, encoding: string): Promise<OpenFile>
+  watchExternal?(tokens: string[], generation: number): Promise<WatchStatus>
+  listenExternal?(handler: (hint: ExternalFileHint) => void): Promise<() => void>
   openDialog(encoding?: FileOpenEncoding): Promise<OpenBatch>
   openRecent(path: string, encoding?: FileOpenEncoding): Promise<OpenFile>
   drainPending(): Promise<OpenBatch>
