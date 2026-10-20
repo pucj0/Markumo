@@ -1,5 +1,24 @@
 import { EditorSelection, type EditorState, type TransactionSpec } from '@codemirror/state'
 import { isolateHistory } from '@codemirror/commands'
+import { ensureSyntaxTree } from '@codemirror/language'
+
+// Use the Markdown block tree, including nested/unterminated fences. A range
+// ending at a fence does not select it; a caret on the fence itself does.
+export function markdownSelectionInCodeBlock(state: EditorState): boolean {
+  const tree = ensureSyntaxTree(state, Math.max(...state.selection.ranges.map(range => state.doc.lineAt(range.to).to)), 50)
+  if (!tree) return true // Parsing has not caught up: do not mutate an unknown block.
+  return state.selection.ranges.some(range => {
+    let inside = false
+    tree.iterate({ from: state.doc.lineAt(range.from).from, to: state.doc.lineAt(range.to).to, enter(node) {
+      if (node.name !== 'FencedCode' && node.name !== 'CodeBlock') return
+      const from = state.doc.lineAt(node.from).from, to = state.doc.lineAt(node.to).to
+      if (range.empty ? from <= range.from && range.from <= to
+        : from < range.to && to > range.from) inside = true
+      return false
+    } })
+    return inside
+  })
+}
 
 export const markdownFormats = [
   ['heading-0', '普通段落'], ['heading-1', '一级标题'], ['heading-2', '二级标题'], ['heading-3', '三级标题'], ['heading-4', '四级标题'], ['heading-5', '五级标题'], ['heading-6', '六级标题'],

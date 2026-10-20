@@ -56,6 +56,7 @@ export interface LiveOptions {
   source:string; anchor:number; head:number; resources:MarkdownResources; typography:MarkdownTypography; clipboard?:MarkdownClipboardSettings
   publish(expected:string,patch:{from:number;to:number;insert:string},update:unknown,isolated:boolean):boolean
   selected(anchor:number,head:number):void
+  compositionChanged?():void
   history(forward:boolean):void
   focus():void
   openRelative?(href:string):void

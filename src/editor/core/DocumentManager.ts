@@ -17,7 +17,7 @@ import { lineEndings, type LineEndingSnapshot } from './lineEndings'
 import type { FileMetadata, OpenFile, ClassInfo, MediaMetadata } from '../../features/files/contracts'
 import { classSummary } from '../../features/files/classSummary'
 import { defaultMarkdownTypography, defaultMarkdownClipboard, type MarkdownClipboardSettings, type MarkdownTypography, type LiveEditor, type MarkdownToolbarState, type MarkdownToolbarCommand } from '../markdown/wysiwyg/contracts'
-import { markdownFormatTransaction, type MarkdownFormat } from '../markdown/formatCommands'
+import { markdownFormatTransaction, markdownSelectionInCodeBlock, type MarkdownFormat } from '../markdown/formatCommands'
 import { captureLineBaseline, savedLineBaseline } from './changeGutter'
 import { createMarkdownResources, markdownResources, refreshMarkdownResources } from '../markdown/images'
 import { imageImportBookmarks } from '../markdown/imageImport'
@@ -190,7 +190,10 @@ export class DocumentManager {
           { key: 'Mod-u', run: () => { this.historyCommand(false, true); return true } },
           { key: 'Alt-u', mac: 'Mod-Shift-u', run: () => { this.historyCommand(true, true); return true } },
         ])),
-        Prec.highest(EditorView.domEventHandlers({ compositioncancel: (_event, view) => {
+        Prec.highest(EditorView.domEventHandlers({
+          compositionstart: () => { queueMicrotask(() => { if (!this.disposed) this.notify() }); return false },
+          compositionend: () => { queueMicrotask(() => { if (!this.disposed) this.notify() }); return false },
+          compositioncancel: (_event, view) => {
           // Some hosts expose cancellation separately. End it through CM's public
           // event route, including Chromium EditContext, without touching internals.
           if (view.compositionStarted) {
@@ -609,6 +612,7 @@ export class DocumentManager {
           },
           selected:(anchor,head)=>{const selection=EditorSelection.single(Math.min(anchor,record.state.doc.length),Math.min(head,record.state.doc.length));record.panes[resolved].selection=selection;if(this.activePane===resolved)record.state=record.state.update({selection,annotations:Transaction.addToHistory.of(false)}).state;this.notify()},
           history:forward=>{this.focusPane(resolved,false);this.historyCommand(forward)},focus:()=>this.focusPane(resolved,false),
+          compositionChanged:()=>{if(!this.disposed)this.notify()},
           openRelative:href=>window.dispatchEvent(new CustomEvent('markdown-open-relative',{detail:{id:record.meta.id,href}})),
           readOnly:()=>record.state.readOnly||record.meta.readOnly,
         },sibling instanceof MarkdownEditorController?sibling.bridge:undefined)
@@ -908,8 +912,8 @@ export class DocumentManager {
     if (resolved !== this.activePane) this.focusPane(resolved, false)
     const live=this.liveViews.get(resolved)
     if(live?.id===id)return live.editor.format(format)
-    const state = view?.state || record.state
-    if (state.readOnly) return false
+    const state = this.sourcePaneState(record, resolved)
+    if (state.readOnly || markdownSelectionInCodeBlock(state)) return false
     this.dispatch(id, markdownFormatTransaction(state, format))
     view?.focus()
     return true
@@ -927,7 +931,7 @@ export class DocumentManager {
     const record = id && this.records.get(id)
     if (!record || record.meta.encoding === 'Hex' || record.meta.kind === 'javaClass' || !/\.(md|markdown)$/i.test(record.meta.name)) return null
     const live = this.liveViews.get(resolved)
-    const state = live?.id === id ? live.editor.toolbarState() : this.sourceToolbarState(record)
+    const state = live?.id === id ? live.editor.toolbarState() : this.sourceToolbarState(record, resolved)
     return {
       ...state,
       composing: state.composing || this.isComposing,
@@ -937,8 +941,10 @@ export class DocumentManager {
     }
   }
 
-  private sourceToolbarState(record: CachedDocument): Omit<MarkdownToolbarState, 'canUndo' | 'canRedo'> {
-    const line = record.state.doc.lineAt(record.state.selection.main.head).text
+  private sourceToolbarState(record: CachedDocument, pane: Pane): Omit<MarkdownToolbarState, 'canUndo' | 'canRedo'> {
+    const source = this.sourcePaneState(record, pane)
+    const inCodeBlock = markdownSelectionInCodeBlock(source)
+    const line = inCodeBlock ? '' : source.doc.lineAt(source.selection.main.head).text
     const heading = /^\s{0,3}(#{1,6})\s/.exec(line)
     const task = /^\s*[-+*]\s+\[[ xX]\]\s+/.test(line)
     const bullet = /^\s*[-+*]\s+/.test(line) && !task
@@ -954,13 +960,20 @@ export class DocumentManager {
       bullet,
       ordered,
       task,
-      codeBlock: false,
-      inCodeBlock: false,
+      codeBlock: inCodeBlock,
+      inCodeBlock,
       hasYaml: record.state.doc.line(1).text.trim() === '---',
       live: false,
       readOnly: record.state.readOnly || record.meta.readOnly,
       composing: this.isComposing,
     }
+  }
+
+  private sourcePaneState(record: CachedDocument, pane: Pane): EditorState {
+    const view = this.views.get(pane)
+    if (view) return view.state
+    const selection = record.panes[pane]?.selection || record.state.selection
+    return record.state.update({ selection, annotations: Transaction.addToHistory.of(false) }).state
   }
 
   markdownFind(pane: Pane = this.activePane) {
@@ -987,7 +1000,8 @@ export class DocumentManager {
       return ok
     }
     const view = this.views.get(resolved)
-    const source = view?.state || record.state
+    const source = this.sourcePaneState(record, resolved)
+    if (markdownSelectionInCodeBlock(source)) return false
     const at = source.doc.lineAt(source.selection.main.to).to
     const prefix = at > 0 ? (source.doc.lineAt(at).text ? '\n\n' : '\n') : ''
     const header = `| ${Array.from({ length: columns }, (_, index) => `列 ${index + 1}`).join(' | ')} |`

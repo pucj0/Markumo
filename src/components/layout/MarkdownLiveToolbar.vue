@@ -12,8 +12,12 @@
       <MarkdownToolbarIcon name="chevron-down" :size="14" />
     </button>
 
-    <div v-else class="md-live-toolbar" role="toolbar" aria-label="Markdown 格式工具栏" @keydown.esc="escape">
-      <div class="md-toolbar-group md-toolbar-heading-group">
+    <div v-else ref="toolbar" class="md-live-toolbar" :class="{
+      'compact-lists': overflowLevel >= 1, 'compact-insert': overflowLevel >= 2,
+      'compact-utilities': overflowLevel >= 3, 'compact-heading': overflowLevel >= 4,
+      'compact-format': overflowLevel >= 5,
+    }" role="toolbar" aria-label="Markdown 格式工具栏" @keydown="toolbarKeydown">
+      <div class="md-toolbar-group md-toolbar-heading-group" data-priority="4">
         <div class="md-toolbar-anchor">
           <button
             ref="headingButton"
@@ -31,7 +35,8 @@
             <span>{{ headingLabel }}</span>
             <MarkdownToolbarIcon name="chevron-down" :size="12" />
           </button>
-          <div v-if="headingOpen" ref="headingMenu" class="md-toolbar-popover md-heading-menu" role="menu" aria-label="段落样式">
+          <Teleport to="body">
+          <div v-if="headingOpen" ref="headingMenu" :style="popoverStyle" class="md-toolbar-popover md-heading-menu" role="menu" aria-label="段落样式" @keydown="popoverKeydown">
             <button
               v-for="option in headingOptions"
               :key="option.value"
@@ -46,12 +51,13 @@
               <MarkdownToolbarIcon v-if="state.heading === option.value" name="check" :size="14" />
             </button>
           </div>
+          </Teleport>
         </div>
       </div>
 
-      <span class="md-toolbar-divider" aria-hidden="true"></span>
+      <span class="md-toolbar-divider md-toolbar-heading-divider" data-priority="4" aria-hidden="true"></span>
 
-      <div class="md-toolbar-group md-toolbar-format">
+      <div class="md-toolbar-group md-toolbar-format" data-priority="5">
         <button
           v-for="item in textActions"
           :key="item.format"
@@ -67,8 +73,8 @@
         ><MarkdownToolbarIcon :name="item.icon" /></button>
       </div>
 
-      <span class="md-toolbar-divider md-toolbar-lists-divider" aria-hidden="true"></span>
-      <div class="md-toolbar-group md-toolbar-lists">
+      <span class="md-toolbar-divider md-toolbar-lists-divider" data-priority="1" aria-hidden="true"></span>
+      <div class="md-toolbar-group md-toolbar-lists" data-priority="1">
         <button
           v-for="item in listActions"
           :key="item.format"
@@ -84,8 +90,8 @@
         ><MarkdownToolbarIcon :name="item.icon" /></button>
       </div>
 
-      <span class="md-toolbar-divider md-toolbar-insert-divider" aria-hidden="true"></span>
-      <div class="md-toolbar-group md-toolbar-insert">
+      <span class="md-toolbar-divider md-toolbar-insert-divider" data-priority="2" aria-hidden="true"></span>
+      <div class="md-toolbar-group md-toolbar-insert" data-priority="2">
         <button
           type="button"
           class="md-toolbar-btn"
@@ -121,7 +127,8 @@
             @mousedown.prevent
             @click="toggleTable"
           ><MarkdownToolbarIcon name="table" /></button>
-          <div v-if="tableOpen" ref="tableMenu" class="md-toolbar-popover md-table-picker" role="dialog" aria-label="选择表格尺寸">
+          <Teleport to="body">
+          <div v-if="tableOpen" ref="tableMenu" :style="popoverStyle" class="md-toolbar-popover md-table-picker" role="dialog" aria-label="选择表格尺寸" @keydown="popoverKeydown">
             <div class="md-table-picker-head"><span>表格</span><strong>{{ previewRows }} × {{ previewColumns }}</strong></div>
             <div class="md-table-picker-grid">
               <button
@@ -137,6 +144,7 @@
               ></button>
             </div>
           </div>
+          </Teleport>
         </div>
 
         <button
@@ -165,11 +173,13 @@
             @mousedown.prevent
             @click="toggleMath"
           ><MarkdownToolbarIcon name="sigma" /></button>
-          <div v-if="mathOpen" ref="mathMenu" class="md-toolbar-popover md-math-menu" role="menu" aria-label="插入数学公式">
+          <Teleport to="body">
+          <div v-if="mathOpen" ref="mathMenu" :style="popoverStyle" class="md-toolbar-popover md-math-menu" role="menu" aria-label="插入数学公式" @keydown="popoverKeydown">
             <button type="button" role="menuitem" @mousedown.prevent @click="insertMath">
               <span>公式块</span><small>$$…$$</small>
             </button>
           </div>
+          </Teleport>
         </div>
       </div>
 
@@ -187,7 +197,8 @@
             @mousedown.prevent
             @click="toggleMore"
           ><MarkdownToolbarIcon name="more" /></button>
-          <div v-if="moreOpen" ref="moreMenu" class="md-toolbar-popover md-more-menu" role="menu" aria-label="更多 Markdown 操作">
+          <Teleport to="body">
+          <div v-if="moreOpen" ref="moreMenu" :style="popoverStyle" class="md-toolbar-popover md-more-menu" role="menu" aria-label="更多 Markdown 操作" @keydown="popoverKeydown">
             <div class="md-menu-section-label">段落</div>
             <div class="md-more-heading-grid">
               <button
@@ -244,16 +255,17 @@
               <button v-for="preset in widthPresets" :key="preset" type="button" :class="{ active: markdownWidth === preset }" :disabled="state.composing" @mousedown.prevent @click="setWidthPreset(preset)">{{ preset }}</button>
             </div>
           </div>
+          </Teleport>
         </div>
       </div>
 
       <span class="md-toolbar-spacer" aria-hidden="true"></span>
 
       <div class="md-toolbar-utilities">
-        <button type="button" class="md-toolbar-btn md-toolbar-search" :disabled="state.composing" aria-label="搜索与替换" title="搜索与替换 (Mod+F)" @mousedown.prevent @click="openSearch">
+        <button type="button" class="md-toolbar-btn md-toolbar-search" data-priority="3" :disabled="state.composing" aria-label="搜索与替换" title="搜索与替换 (Mod+F)" @mousedown.prevent @click="openSearch">
           <MarkdownToolbarIcon name="search" :size="18" />
         </button>
-        <div class="md-toolbar-anchor md-toolbar-width">
+        <div class="md-toolbar-anchor md-toolbar-width" data-priority="3">
           <button
             ref="widthButton"
             type="button"
@@ -269,16 +281,18 @@
           >
             <MarkdownToolbarIcon name="width" :size="16" /><span>{{ markdownWidth }}</span>
           </button>
-          <div v-if="widthOpen" class="md-toolbar-popover md-width-popover" role="dialog" aria-label="内容宽度">
+          <Teleport to="body">
+          <div v-if="widthOpen" ref="widthMenu" :style="popoverStyle" class="md-toolbar-popover md-width-popover" role="dialog" aria-label="内容宽度" @keydown="popoverKeydown">
             <div class="md-width-head"><strong>内容宽度</strong><span>{{ markdownWidth }}px</span></div>
-            <input ref="widthInput" type="range" min="480" max="1400" step="20" :value="markdownWidth" aria-label="内容宽度" @input="onWidthInput" />
+            <input ref="widthInput" type="range" min="480" max="1400" step="20" :value="markdownWidth" :disabled="state.composing" aria-label="内容宽度" @input="onWidthInput" @change="flushWidth" @blur="flushWidth" />
             <div class="md-width-presets">
               <button v-for="preset in widthPresets" :key="`width-${preset}`" type="button" :class="{ active: markdownWidth === preset }" @mousedown.prevent @click="setWidthPreset(preset)">{{ preset }}</button>
             </div>
           </div>
+          </Teleport>
         </div>
         <MarkdownModeSwitcher class="md-toolbar-mode" :mode="mode" :disabled="state.composing" @change="changeMode" />
-        <button type="button" class="md-toolbar-btn md-toolbar-outline" :class="{ active: outlineVisible }" :disabled="state.composing" :aria-label="outlineVisible ? '隐藏大纲' : '显示大纲'" :aria-pressed="outlineVisible" :title="outlineVisible ? '隐藏大纲' : '显示大纲'" @mousedown.prevent @click="toggleOutline">
+        <button type="button" class="md-toolbar-btn md-toolbar-outline" data-priority="3" :class="{ active: outlineVisible }" :disabled="state.composing" :aria-label="outlineVisible ? '隐藏大纲' : '显示大纲'" :aria-pressed="outlineVisible" :title="outlineVisible ? '隐藏大纲' : '显示大纲'" @mousedown.prevent @click="toggleOutline">
           <MarkdownToolbarIcon name="outline" :size="18" />
         </button>
         <button type="button" class="md-toolbar-btn md-toolbar-collapse" aria-label="折叠 Markdown 工具栏" title="折叠 Markdown 工具栏" @mousedown.prevent @click="collapseToolbar">
@@ -290,7 +304,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from 'vue'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { MarkdownFormat } from '../../editor/markdown/formatCommands'
 import type { MarkdownToolbarCommand } from '../../editor/markdown/wysiwyg/contracts'
@@ -316,7 +330,8 @@ const emit = defineEmits<{
 const state = computed(() => { props.revision; return props.manager.markdownToolbarState(props.pane) })
 const formattingDisabled = computed(() => !state.value || state.value.readOnly || state.value.composing || state.value.inCodeBlock)
 const moreInsertDisabled = computed(() => formattingDisabled.value || !state.value?.live)
-const markdownWidth = computed(() => props.markdownWidth ?? 860)
+const markdownWidth = ref(props.markdownWidth ?? 860)
+watch(() => props.markdownWidth, value => { if (pendingWidth === null) markdownWidth.value = value ?? 860 })
 const outlineVisible = computed(() => props.outlineVisible === true)
 
 const headingOptions = [
@@ -366,6 +381,7 @@ const widthOpen = ref(false)
 const collapsed = ref(false)
 const previewRows = ref(3), previewColumns = ref(3)
 const root = ref<HTMLElement | null>(null)
+const toolbar = ref<HTMLElement | null>(null)
 const headingButton = ref<HTMLButtonElement | null>(null)
 const tableButton = ref<HTMLButtonElement | null>(null)
 const mathButton = ref<HTMLButtonElement | null>(null)
@@ -374,8 +390,16 @@ const widthButton = ref<HTMLButtonElement | null>(null)
 const headingMenu = ref<HTMLElement | null>(null)
 const moreMenu = ref<HTMLElement | null>(null)
 const mathMenu = ref<HTMLElement | null>(null)
+const tableMenu = ref<HTMLElement | null>(null)
+const widthMenu = ref<HTMLElement | null>(null)
 const widthInput = ref<HTMLInputElement | null>(null)
 let lastTrigger: HTMLElement | null = null
+const popoverStyle = ref<CSSProperties>({ visibility: 'hidden' })
+const overflowLevel = ref(0)
+let pendingWidth: number | null = null
+let widthFrame = 0
+let resizeObserver: ResizeObserver | undefined
+const measuredWidths = new WeakMap<Element, number>()
 
 function isActive(format: MarkdownFormat) {
   const current = state.value
@@ -398,7 +422,9 @@ function tooltip(label: string, shortcut?: string) {
 }
 
 function closePopovers(focusTrigger = false) {
+  flushWidth()
   headingOpen.value = tableOpen.value = mathOpen.value = moreOpen.value = widthOpen.value = false
+  popoverStyle.value = { visibility: 'hidden' }
   if (focusTrigger) void nextTick(() => lastTrigger?.focus())
 }
 
@@ -465,37 +491,51 @@ function changeMode(mode: MarkdownMode) {
 
 function onWidthInput(event: Event) {
   const value = Number((event.target as HTMLInputElement).value)
-  if (Number.isFinite(value)) props.manager.setMarkdownTypography({ ...props.manager.getMarkdownTypography(), width: Math.max(480, Math.min(1400, value)) })
-  emit('update:markdown-width', Math.max(480, Math.min(1400, value)))
+  if (!Number.isFinite(value) || state.value?.composing) return
+  pendingWidth = markdownWidth.value = Math.max(480, Math.min(1400, value))
+  if (!widthFrame) widthFrame = requestAnimationFrame(flushWidth)
+}
+
+function flushWidth() {
+  if (widthFrame) cancelAnimationFrame(widthFrame)
+  widthFrame = 0
+  if (pendingWidth === null) return
+  const width = pendingWidth
+  pendingWidth = null
+  // App preferences own the single manager update and serialized persistence.
+  if (width !== props.markdownWidth) emit('update:markdown-width', width)
 }
 
 function setWidthPreset(value: number) {
+  if (state.value?.composing) return
+  pendingWidth = markdownWidth.value = value
   closePopovers()
-  props.manager.setMarkdownTypography({ ...props.manager.getMarkdownTypography(), width: value })
-  emit('update:markdown-width', value)
   focusEditor()
 }
 
-function openAt(trigger: HTMLElement | null, open: () => void, menu?: HTMLElement | null) {
+function openAt(trigger: HTMLElement | null, open: () => void) {
   lastTrigger = trigger
   closePopovers()
   open()
-  if (menu) void nextTick(() => menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
+  void nextTick(async () => {
+    positionPopover()
+    const menu = currentPopover()
+    await nextTick() // Apply visible fixed coordinates before moving keyboard focus.
+    if (!menu || currentPopover() !== menu) return
+    if (widthOpen.value) widthInput.value?.focus({ preventScroll: true })
+    else focusPopoverItem(menu.querySelector<HTMLButtonElement>('button:not(:disabled)'))
+  })
 }
 
 function toggleHeading() {
   if (headingOpen.value) return closePopovers(true)
-  openAt(headingButton.value, () => { headingOpen.value = true }, headingMenu.value)
-  void nextTick(() => headingMenu.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
+  openAt(headingButton.value, () => { headingOpen.value = true })
 }
 
 function toggleTable() {
   if (tableOpen.value) return closePopovers(true)
   previewRows.value = 3; previewColumns.value = 3
-  lastTrigger = tableButton.value
-  closePopovers()
-  tableOpen.value = true
-  void nextTick(() => tableButton.value?.focus())
+  openAt(tableButton.value, () => { tableOpen.value = true })
 }
 
 function insertTable(rows: number, columns: number) {
@@ -507,20 +547,17 @@ function insertTable(rows: number, columns: number) {
 
 function toggleMath() {
   if (mathOpen.value) return closePopovers(true)
-  openAt(mathButton.value, () => { mathOpen.value = true }, mathMenu.value)
-  void nextTick(() => mathMenu.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
+  openAt(mathButton.value, () => { mathOpen.value = true })
 }
 
 function toggleMore() {
   if (moreOpen.value) return closePopovers(true)
-  openAt(moreButton.value, () => { moreOpen.value = true }, moreMenu.value)
-  void nextTick(() => moreMenu.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
+  openAt(moreButton.value, () => { moreOpen.value = true })
 }
 
 function toggleWidth() {
   if (widthOpen.value) return closePopovers(true)
-  openAt(widthButton.value, () => { widthOpen.value = true }, null)
-  void nextTick(() => widthInput.value?.focus())
+  openAt(widthButton.value, () => { widthOpen.value = true })
 }
 
 function collapseToolbar() {
@@ -530,6 +567,7 @@ function collapseToolbar() {
 }
 
 function expandToolbar() {
+  overflowLevel.value = 0
   collapsed.value = false
   focusEditor()
 }
@@ -541,20 +579,128 @@ function escape(event: KeyboardEvent) {
 }
 
 function outside(event: PointerEvent) {
-  if (root.value && !root.value.contains(event.target as Node)) closePopovers(false)
+  if (root.value && !root.value.contains(event.target as Node) && !currentPopover()?.contains(event.target as Node)) closePopovers(false)
 }
 
 function onWindowChange() { closePopovers(false) }
+
+function currentPopover() {
+  return headingOpen.value ? headingMenu.value : tableOpen.value ? tableMenu.value
+    : mathOpen.value ? mathMenu.value : moreOpen.value ? moreMenu.value : widthOpen.value ? widthMenu.value : null
+}
+
+function positionPopover() {
+  const menu = currentPopover(), trigger = lastTrigger
+  if (!menu || !trigger) return
+  const rect = trigger.getBoundingClientRect()
+  const width = menu.getBoundingClientRect().width, height = menu.getBoundingClientRect().height
+  const left = Math.max(8, Math.min(widthOpen.value ? rect.right - width : rect.left, window.innerWidth - width - 8))
+  const top = Math.max(8, Math.min(rect.bottom + 7, window.innerHeight - height - 8))
+  popoverStyle.value = { left: `${left}px`, top: `${top}px`, visibility: 'visible' }
+}
+
+function toolbarKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') return escape(event)
+  const trigger = event.target as HTMLButtonElement
+  if (!['ArrowDown', 'ArrowUp'].includes(event.key) || !trigger.matches('button[aria-haspopup]') || trigger.disabled) return
+  event.preventDefault()
+  if (trigger.getAttribute('aria-expanded') !== 'true') trigger.click()
+  void nextTick(async () => {
+    await nextTick()
+    const items = currentPopover()?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')
+    if (items?.length) focusPopoverItem(items[event.key === 'ArrowUp' ? items.length - 1 : 0])
+  })
+}
+
+function focusPopoverItem(item: HTMLElement | null) {
+  const menu = currentPopover()
+  if (!item || !menu) return
+  item.focus({ preventScroll: true })
+  const rect = item.getBoundingClientRect(), bounds = menu.getBoundingClientRect()
+  // Reveal keyboard focus inside the menu without scrolling the editor/page.
+  if (rect.top < bounds.top + 6) menu.scrollTop += rect.top - bounds.top - 6
+  else if (rect.bottom > bounds.bottom - 6) menu.scrollTop += rect.bottom - bounds.bottom + 6
+}
+
+function popoverKeydown(event: KeyboardEvent) {
+  if (event.isComposing) return
+  if (event.key === 'Escape') { event.stopPropagation(); return escape(event) }
+  if (event.key === 'Tab') {
+    event.preventDefault()
+    const buttons = [...(toolbar.value?.querySelectorAll<HTMLElement>('button:not(:disabled)') || [])].filter(button => button.getClientRects().length)
+    const at = buttons.indexOf(lastTrigger!) + (event.shiftKey ? -1 : 1)
+    closePopovers()
+    void nextTick(() => (buttons[at] || lastTrigger)?.focus({ preventScroll: true }))
+    return
+  }
+  if ((event.target as HTMLElement).matches('input')) return // Native range keyboard behavior.
+  const keys = ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End']
+  if (!keys.includes(event.key)) return
+  const items = [...(currentPopover()?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || [])]
+  if (!items.length) return
+  event.preventDefault()
+  const step = tableOpen.value && ['ArrowDown', 'ArrowUp'].includes(event.key) ? 6 : 1
+  const delta = ['ArrowUp', 'ArrowLeft'].includes(event.key) ? -step : step
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+    : (items.indexOf(document.activeElement as HTMLButtonElement) + delta + items.length) % items.length
+  focusPopoverItem(items[index])
+}
+
+// Measure the actual flex items (including fonts, labels and utility widths).
+// Cache hidden items' intrinsic widths; hiding never changes the measuring box.
+function measureToolbar() {
+  const row = toolbar.value
+  if (!row) return
+  const widthOf = (item: HTMLElement) => {
+    const style = getComputedStyle(item)
+    if (style.display !== 'none') measuredWidths.set(item, item.classList.contains('md-toolbar-spacer') ? 8
+      : item.getBoundingClientRect().width + parseFloat(style.marginLeft) + parseFloat(style.marginRight))
+    return measuredWidths.get(item) || 0
+  }
+  const items = [...row.children] as HTMLElement[]
+  const utilities = [...row.querySelector('.md-toolbar-utilities')!.children] as HTMLElement[]
+  items.forEach(widthOf); utilities.forEach(widthOf)
+  const visible = (item: HTMLElement, level: number) => !item.dataset.priority || Number(item.dataset.priority) > level
+  const style = getComputedStyle(row), gap = parseFloat(style.columnGap)
+  const required = (level: number) => {
+    const shown = items.filter(item => visible(item, level))
+    const tools = utilities.filter(item => visible(item, level))
+    return parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + gap * (shown.length - 1)
+      + shown.reduce((total, item) => total + (item.classList.contains('md-toolbar-utilities')
+        ? tools.reduce((sum, tool) => sum + widthOf(tool), 0) + gap * (tools.length - 1) : widthOf(item)), 0)
+  }
+  let level = 0
+  while (level < 5 && required(level) > row.clientWidth) level++
+  // Small hysteresis avoids repeated collapse/expand near a rounding boundary.
+  if (level < overflowLevel.value && required(level) + 12 > row.clientWidth) return
+  if (level !== overflowLevel.value) { closePopovers(); overflowLevel.value = level }
+}
+
+watch([collapsed, () => props.markdownWidth, headingLabel], () => void nextTick(measureToolbar))
+function onScroll(event: Event) {
+  if (!(event.target instanceof Node) || !currentPopover()?.contains(event.target)) closePopovers()
+}
 
 onMounted(() => {
   document.addEventListener('pointerdown', outside, true)
   window.addEventListener('blur', onWindowChange)
   window.addEventListener('resize', onWindowChange)
+  window.addEventListener('scroll', onScroll, true)
+  let lastWidth = root.value?.clientWidth
+  resizeObserver = new ResizeObserver(() => {
+    if (lastWidth !== root.value?.clientWidth) { closePopovers(); lastWidth = root.value?.clientWidth }
+    measureToolbar()
+  })
+  if (root.value) resizeObserver.observe(root.value)
+  measureToolbar()
 })
 onBeforeUnmount(() => {
+  flushWidth()
+  resizeObserver?.disconnect()
   document.removeEventListener('pointerdown', outside, true)
   window.removeEventListener('blur', onWindowChange)
   window.removeEventListener('resize', onWindowChange)
+  window.removeEventListener('scroll', onScroll, true)
 })
 </script>
 
@@ -564,7 +710,6 @@ onBeforeUnmount(() => {
   flex: none;
   min-width: 0;
   height: 44px;
-  container-type: inline-size;
 }
 .md-live-toolbar-shell.collapsed { height: 0; }
 .md-live-toolbar {
@@ -663,12 +808,12 @@ onBeforeUnmount(() => {
 .md-toolbar-reveal:focus-visible { background: var(--hover); color: var(--ink); outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .md-toolbar-popover {
-  position: absolute;
-  top: calc(100% + 7px);
-  z-index: 60;
+  position: fixed;
+  z-index: 200;
   min-width: 150px;
-  max-width: min(320px, calc(100vw - 24px));
-  max-height: min(520px, calc(100vh - 170px));
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: min(680px, calc(100vh - 16px));
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 5px;
@@ -677,18 +822,18 @@ onBeforeUnmount(() => {
   border-radius: 7px;
   background: var(--paper);
   box-shadow: var(--shadow);
-  color: var(--text);
+  color: var(--ink);
   font: var(--ui-small-font-size)/var(--ui-line-height) var(--font-sans);
   animation: md-toolbar-pop 120ms ease-out;
 }
 @keyframes md-toolbar-pop { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
-.md-heading-menu { left: 0; min-width: 148px; }
-.md-math-menu { left: 0; min-width: 168px; }
-.md-more-menu { left: 0; right: auto; min-width: 260px; max-width: min(320px, calc(100cqw - 24px)); max-height: min(680px, calc(100vh - 170px)); }
+.md-heading-menu { min-width: 148px; }
+.md-math-menu { min-width: 168px; }
+.md-more-menu { width: 300px; min-width: min(260px, calc(100vw - 16px)); }
 .md-more-menu::-webkit-scrollbar { width: 8px; }
 .md-more-menu::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
 .md-more-menu { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-.md-width-popover { right: 0; width: 224px; min-width: 224px; padding: 10px; }
+.md-width-popover { width: 224px; min-width: min(224px, calc(100vw - 16px)); padding: 10px; }
 .md-more-menu button,
 .md-heading-menu button,
 .md-math-menu button {
@@ -701,7 +846,7 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--text);
+  color: var(--ink);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -743,7 +888,7 @@ onBeforeUnmount(() => {
 .md-width-presets button { flex: 1; min-width: 0; min-height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--editor); color: var(--sub); font: 10px var(--font-mono); cursor: pointer; }
 .md-width-presets button:hover { background: var(--hover); color: var(--ink); }
 .md-width-presets button.active { border-color: var(--accent); background: var(--accentbg); color: var(--accent); }
-.md-table-picker { left: 0; width: max-content; min-width: 0; padding: 10px; }
+.md-table-picker { width: max-content; min-width: 0; padding: 10px; }
 .md-table-picker-head { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 8px; color: var(--muted); font-size: var(--ui-small-font-size); font-weight: 700; }
 .md-table-picker-head strong { color: var(--accent); font: 600 12px var(--font-mono); }
 .md-table-picker-grid { display: grid; grid-template-columns: repeat(6, 30px); gap: 4px; }
@@ -754,25 +899,11 @@ onBeforeUnmount(() => {
 .md-table-picker-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .md-toolbar-icon { display: block; flex: none; }
 
-@container (max-width: 720px) {
-  .md-toolbar-heading-btn { min-width: 66px; max-width: 72px; }
-}
-@container (max-width: 1040px) {
-  .md-toolbar-lists, .md-toolbar-lists-divider { display: none; }
-}
-@container (max-width: 860px) {
-  .md-toolbar-insert, .md-toolbar-insert-divider { display: none; }
-}
-@container (max-width: 580px) {
-  .md-toolbar-search, .md-toolbar-width, .md-toolbar-outline { display: none; }
-}
-@container (max-width: 440px) {
-  .md-toolbar-heading-group, .md-toolbar-heading-group + .md-toolbar-divider { display: none; }
-  .md-live-toolbar { padding-inline: 10px; }
-}
-@container (max-width: 360px) {
-  .md-toolbar-format { display: none; }
-}
+.compact-lists .md-toolbar-lists, .compact-lists .md-toolbar-lists-divider,
+.compact-insert .md-toolbar-insert, .compact-insert .md-toolbar-insert-divider,
+.compact-utilities .md-toolbar-search, .compact-utilities .md-toolbar-width, .compact-utilities .md-toolbar-outline,
+.compact-heading .md-toolbar-heading-group, .compact-heading .md-toolbar-heading-divider,
+.compact-format .md-toolbar-format { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .md-toolbar-btn, .md-toolbar-popover { transition: none; animation: none; }
 }
