@@ -17,6 +17,8 @@
           :desktop="desktop"
           :root-path="rootPath"
           :live-toolbar="liveToolbar"
+          :outline-visible="showOutline"
+          :markdown-width="markdownWidth"
           @new-doc="$emit('new-doc')"
           @open-file="$emit('open-file')"
           @open-workspace="$emit('open-workspace')"
@@ -24,6 +26,8 @@
           @close-tab="handleCloseTab"
           @open-workspace-file="handleOpenWorkspaceFile"
           @reveal-in-explorer="$emit('reveal-in-explorer', $event)"
+          @toggle-outline="$emit('toggle-outline')"
+          @update:markdown-width="$emit('update:markdown-width', $event)"
         />
       </div>
     </div>
@@ -67,7 +71,7 @@ import type { FileController } from '../../features/files/FileController'
 import type { DropZone } from './DropZoneOverlay.vue'
 import type { SplitDirection } from '../../editor/layout/types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   doc: EditorDocument | null
   manager: DocumentManager
   showOutline: boolean
@@ -79,7 +83,8 @@ const props = defineProps<{
   startupLoading?: boolean
   rootPath?: string | null
   liveToolbar?: boolean
-}>()
+  markdownWidth?: number
+}>(), { liveToolbar: true })
 
 const emit = defineEmits<{
   (e: 'new-doc'): void
@@ -93,6 +98,8 @@ const emit = defineEmits<{
   (e: 'close-tab', payload: { id: string; pane: string }): void
   (e: 'open-path', path: string): void
   (e: 'reveal-in-explorer', token: string): void
+  (e: 'toggle-outline'): void
+  (e: 'update:markdown-width', width: number): void
 }>()
 
 const revision = ref(0)

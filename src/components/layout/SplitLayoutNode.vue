@@ -13,6 +13,8 @@
       :desktop="desktop"
       :root-path="rootPath"
       :live-toolbar="liveToolbar"
+      :outline-visible="outlineVisible"
+      :markdown-width="markdownWidth"
       @new-doc="$emit('new-doc')"
       @open-file="$emit('open-file')"
       @open-workspace="$emit('open-workspace')"
@@ -20,6 +22,8 @@
       @close-tab="$emit('close-tab', $event)"
       @open-workspace-file="$emit('open-workspace-file', $event)"
       @reveal-in-explorer="$emit('reveal-in-explorer', $event)"
+      @toggle-outline="$emit('toggle-outline')"
+      @update:markdown-width="$emit('update:markdown-width', $event)"
     />
   </template>
 
@@ -36,6 +40,8 @@
     :desktop="desktop"
     :root-path="rootPath"
       :live-toolbar="liveToolbar"
+      :outline-visible="outlineVisible"
+      :markdown-width="markdownWidth"
     @new-doc="$emit('new-doc')"
     @open-file="$emit('open-file')"
     @open-workspace="$emit('open-workspace')"
@@ -43,6 +49,8 @@
     @close-tab="$emit('close-tab', $event)"
     @open-workspace-file="$emit('open-workspace-file', $event)"
     @reveal-in-explorer="$emit('reveal-in-explorer', $event)"
+    @toggle-outline="$emit('toggle-outline')"
+    @update:markdown-width="$emit('update:markdown-width', $event)"
   />
 
   <!-- Split Node: Render split container with divider -->
@@ -70,6 +78,8 @@
         :desktop="desktop"
         :root-path="rootPath"
       :live-toolbar="liveToolbar"
+      :outline-visible="outlineVisible"
+      :markdown-width="markdownWidth"
         @new-doc="$emit('new-doc')"
         @open-file="$emit('open-file')"
         @open-workspace="$emit('open-workspace')"
@@ -77,6 +87,8 @@
         @close-tab="$emit('close-tab', $event)"
         @open-workspace-file="$emit('open-workspace-file', $event)"
         @reveal-in-explorer="$emit('reveal-in-explorer', $event)"
+      @toggle-outline="$emit('toggle-outline')"
+      @update:markdown-width="$emit('update:markdown-width', $event)"
       />
     </div>
 
@@ -106,6 +118,8 @@
         :desktop="desktop"
         :root-path="rootPath"
       :live-toolbar="liveToolbar"
+      :outline-visible="outlineVisible"
+      :markdown-width="markdownWidth"
         @new-doc="$emit('new-doc')"
         @open-file="$emit('open-file')"
         @open-workspace="$emit('open-workspace')"
@@ -113,6 +127,8 @@
         @close-tab="$emit('close-tab', $event)"
         @open-workspace-file="$emit('open-workspace-file', $event)"
         @reveal-in-explorer="$emit('reveal-in-explorer', $event)"
+      @toggle-outline="$emit('toggle-outline')"
+      @update:markdown-width="$emit('update:markdown-width', $event)"
       />
     </div>
   </div>
@@ -128,7 +144,7 @@ import type { DropZone } from './DropZoneOverlay.vue'
 
 defineOptions({ name: 'SplitLayoutNode' })
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   node: LayoutNode
   manager: DocumentManager
   /** The manager is not reactive: this counter invalidates the pane subtree. */
@@ -139,7 +155,9 @@ const props = defineProps<{
   desktop: boolean
   rootPath?: string | null
   liveToolbar?: boolean
-}>()
+  outlineVisible?: boolean
+  markdownWidth?: number
+}>(), { liveToolbar: true })
 
 defineEmits<{
   (e: 'new-doc'): void
@@ -149,6 +167,8 @@ defineEmits<{
   (e: 'close-tab', payload: { id: string; pane: string }): void
   (e: 'open-workspace-file', payload: { path: string; name: string; paneId: string; zone: DropZone }): void
   (e: 'reveal-in-explorer', token: string): void
+  (e: 'toggle-outline'): void
+  (e: 'update:markdown-width', width: number): void
 }>()
 
 const splitContainer = ref<HTMLElement | null>(null)

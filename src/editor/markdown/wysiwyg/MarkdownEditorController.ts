@@ -820,6 +820,17 @@ export class MarkdownEditorController implements LiveEditor {
     return false
   }
 
+  insertTable(rows: number, columns: number): boolean {
+    if (this.options.readOnly?.() || this.composing) return false
+    if (!Number.isInteger(rows) || !Number.isInteger(columns) || rows < 1 || rows > 8 || columns < 1 || columns > 8) return false
+    const cell = (header: boolean) => (header ? s.nodes.table_header : s.nodes.table_cell).createAndFill()!
+    const header = s.nodes.table_row.create(null, Array.from({ length: columns }, () => cell(true)))
+    const body = Array.from({ length: rows - 1 }, () => s.nodes.table_row.create(null, Array.from({ length: columns }, () => cell(false))))
+    const table = s.nodes.table.create(null, [header, ...body])
+    this.view.dispatch(this.view.state.tr.replaceSelectionWith(table).setMeta('isolated', true).scrollIntoView())
+    return true
+  }
+
   format(format: MarkdownFormat): boolean {
     if (this.options.readOnly?.() || this.composing) return false
     const marks = { bold: 'strong', italic: 'em', strike: 'strike', 'inline-code': 'code' } as const
@@ -1615,6 +1626,7 @@ export class MarkdownEditorController implements LiveEditor {
       codeBlock: heading.type === s.nodes.code_block,
       inCodeBlock: ancestors.some(node => node.type === s.nodes.code_block),
       hasYaml,
+      live: true,
     }
   }
 

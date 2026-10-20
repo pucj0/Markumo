@@ -906,9 +906,9 @@ export class DocumentManager {
     const resolved = this.resolvePaneId(pane)
     const id = this.paneGroup(resolved).activeId
     const record = id && this.records.get(id)
+    if (!record || record.meta.encoding === 'Hex' || record.meta.kind === 'javaClass' || !/\.(md|markdown)$/i.test(record.meta.name)) return null
     const live = this.liveViews.get(resolved)
-    if (!record || record.meta.encoding === 'Hex' || record.meta.kind === 'javaClass' || !/\.(md|markdown)$/i.test(record.meta.name) || !live || live.id !== id) return null
-    const state = live.editor.toolbarState()
+    const state = live?.id === id ? live.editor.toolbarState() : this.sourceToolbarState(record)
     return {
       ...state,
       composing: state.composing || this.isComposing,
@@ -916,6 +916,68 @@ export class DocumentManager {
       canUndo: undoDepth(record.state) > 0,
       canRedo: redoDepth(record.state) > 0,
     }
+  }
+
+  private sourceToolbarState(record: CachedDocument): Omit<MarkdownToolbarState, 'canUndo' | 'canRedo'> {
+    const line = record.state.doc.lineAt(record.state.selection.main.head).text
+    const heading = /^\s{0,3}(#{1,6})\s/.exec(line)
+    const task = /^\s*[-+*]\s+\[[ xX]\]\s+/.test(line)
+    const bullet = /^\s*[-+*]\s+/.test(line) && !task
+    const ordered = /^\s*\d+\.\s+/.test(line)
+    return {
+      heading: heading ? heading[1].length : 0,
+      bold: false,
+      italic: false,
+      strike: false,
+      inlineCode: false,
+      link: false,
+      quote: /^\s*>\s?/.test(line),
+      bullet,
+      ordered,
+      task,
+      codeBlock: false,
+      inCodeBlock: false,
+      hasYaml: record.state.doc.line(1).text.trim() === '---',
+      live: false,
+      readOnly: record.state.readOnly || record.meta.readOnly,
+      composing: this.isComposing,
+    }
+  }
+
+  markdownFind(pane: Pane = this.activePane) {
+    const resolved = this.resolvePaneId(pane)
+    const id = this.paneGroup(resolved).activeId
+    const record = id && this.records.get(id)
+    if (!record || this.isComposing || !/\.(md|markdown)$/i.test(record.meta.name)) return false
+    this.focusPane(resolved, false)
+    this.command('find')
+    return true
+  }
+
+  insertMarkdownTable(rows: number, columns: number, pane: Pane = this.activePane) {
+    const resolved = this.resolvePaneId(pane)
+    const id = this.paneGroup(resolved).activeId
+    const record = id && this.records.get(id)
+    if (!record || !/\.(md|markdown)$/i.test(record.meta.name) || this.isComposing || record.meta.readOnly || record.state.readOnly) return false
+    if (!Number.isInteger(rows) || !Number.isInteger(columns) || rows < 1 || rows > 8 || columns < 1 || columns > 8) return false
+    this.focusPane(resolved, false)
+    const live = this.liveViews.get(resolved)
+    if (live?.id === id) {
+      const ok = live.editor.insertTable(rows, columns)
+      this.focusPane(resolved, true)
+      return ok
+    }
+    const view = this.views.get(resolved)
+    const source = view?.state || record.state
+    const at = source.doc.lineAt(source.selection.main.to).to
+    const prefix = at > 0 ? (source.doc.lineAt(at).text ? '\n\n' : '\n') : ''
+    const header = `| ${Array.from({ length: columns }, (_, index) => `列 ${index + 1}`).join(' | ')} |`
+    const separator = `| ${Array.from({ length: columns }, () => '---').join(' | ')} |`
+    const body = Array.from({ length: rows - 1 }, () => `| ${Array.from({ length: columns }, () => '内容').join(' | ')} |`)
+    const insert = `${prefix}${[header, separator, ...body].join('\n')}\n\n`
+    this.dispatch(id, { changes: { from: at, insert }, selection: { anchor: at + prefix.length + 2 }, annotations: isolateHistory.of('full'), userEvent: 'input.format.table' })
+    view?.focus()
+    return true
   }
 
   markdownHistory(forward: boolean, pane: Pane = this.activePane) {

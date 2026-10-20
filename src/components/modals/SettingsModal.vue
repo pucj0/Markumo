@@ -80,7 +80,7 @@
               <div class="settingrow"><label for="settings-md-wrap">代码块自动换行</label><input id="settings-md-wrap" type="checkbox" :checked="markdownTypography?.codeWrap ?? false" @change="updateMd('codeWrap', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><label for="settings-md-image-border">显示图片边框</label><input id="settings-md-image-border" type="checkbox" :checked="markdownTypography?.imageBorder ?? true" @change="updateMd('imageBorder', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><span class="setting-label">Markdown 默认模式</span><SegmentedControl id="settings-md-mode" label="Markdown 默认模式" :model-value="defaultMdMode" :options="[{value:'live',label:'即时排版'},{value:'source',label:'源码'},{value:'split',label:'双栏'}]" @update:model-value="emit('update:defaultMdMode', $event as MarkdownMode)" /></div>
-              <div class="settingrow"><label for="settings-md-toolbar">显示 Live 格式工具栏</label><input id="settings-md-toolbar" type="checkbox" :checked="liveToolbar !== false" @change="emit('update:liveToolbar', ($event.target as HTMLInputElement).checked)" /></div>
+              <div class="settingrow"><label for="settings-md-toolbar">显示 Markdown 格式工具栏</label><input id="settings-md-toolbar" type="checkbox" :checked="liveToolbar !== false" @change="emit('update:liveToolbar', ($event.target as HTMLInputElement).checked)" /></div>
               <ImageSettings :global-rules="imageRules" :document-rules="documentImageRules" :document-path="markdownPath" :document-name="markdownName" @global="emit('update:imageRules', $event)" @document="emit('update:documentImageRules', $event)" />
             </section>
 

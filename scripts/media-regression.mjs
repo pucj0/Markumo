@@ -314,8 +314,8 @@ try{
   await page.screenshot({path:'.markumo-media-test/markdown-image-split.png'})
   await page.evaluate(()=>{const m=window.mediaTest.manager;m.focusPane('main',false);m.setMarkdownMode(m.activeId,'live')})
   await page.waitForFunction(()=>document.querySelector('[data-pane-id="main"] .markdown-live'))
-  assert.equal(await page.locator('[data-pane-id="main"] .pane-mode-control').count(),1)
-  assert.equal(await page.locator('.image-viewer .cm-editor,.image-viewer .pane-mode-control').count(),0)
+  assert.equal(await page.locator('[data-pane-id="main"] .md-live-toolbar .md-mode-switcher').count(),1)
+  assert.equal(await page.locator('.image-viewer .cm-editor,.image-viewer .md-live-toolbar').count(),0)
 
   // 15. Verify multi-pane independent navigation state between two PDF panes
   const { leftPane, rightPane } = await page.evaluate(async()=>{

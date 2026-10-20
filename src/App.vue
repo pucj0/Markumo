@@ -74,6 +74,7 @@
           :startup-loading="startupLoading"
           :root-path="workspace.rootPath"
           :live-toolbar="liveToolbar"
+          :markdown-width="markdownTypography.width"
           @open-file="openFile()"
           @open-workspace="workspace.openWorkspaceDialog()"
           @new-doc="createNewDoc"
@@ -82,6 +83,8 @@
           @close-tab="closeDocById($event.id, $event.pane)"
           @open-path="openRecent($event)"
           @reveal-in-explorer="revealInExplorerToken($event)"
+          @toggle-outline="toggleOutline"
+          @update:markdown-width="updateMarkdownWidth"
         />
       </section>
     </div>
@@ -208,6 +211,10 @@ const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,update
   recoveryRecords, recoveryVisible, recoveryBusy, recoveryError, recoveryDiff, openRecovery, closeRecovery,
   restoreRecovery, discardRecovery, restoreAllRecovery, showRecoveryDiff, clearRecoveryDiff } = useAppShell()
 defineExpose({ settingsReady })
+function toggleOutline() { showOutline.value = !showOutline.value }
+function updateMarkdownWidth(width: number) {
+  markdownTypography.value = { ...markdownTypography.value, width: Math.max(480, Math.min(1400, Math.round(width))) }
+}
 // These refs are bound by name from the template only; TypeScript cannot see
 // string template refs, so reference them explicitly.
 void [updateConfirmRef, paletteRef, discardRef, toastRef, gotoLineRef]

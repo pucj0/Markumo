@@ -21,6 +21,7 @@ export interface LiveToolbarState {
   codeBlock: boolean
   inCodeBlock: boolean
   hasYaml: boolean
+  live: boolean
   readOnly: boolean
   composing: boolean
 }
@@ -34,6 +35,7 @@ export interface LiveEditor {
   format(format:MarkdownFormat):boolean
   toolbarState():LiveToolbarState
   insertToolbar(command:MarkdownToolbarCommand):boolean
+  insertTable(rows:number,columns:number):boolean
   typography(settings:MarkdownTypography):void
   caretAnimation(mode:CaretAnimation):void
   bracketMode(mode:BracketMode):void

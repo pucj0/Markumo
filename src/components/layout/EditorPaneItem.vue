@@ -49,7 +49,18 @@
     />
 
     <div v-else class="pane-document-shell">
-      <MarkdownLiveToolbar v-if="showLiveToolbar" :manager="manager" :pane="paneId" :revision="revision" />
+      <MarkdownLiveToolbar
+        v-if="showMarkdownToolbar"
+        :manager="manager"
+        :pane="paneId"
+        :revision="revision"
+        :mode="markdownMode || 'live'"
+        :outline-visible="outlineVisible"
+        :markdown-width="markdownWidth"
+        @change-mode="changeMarkdownMode"
+        @toggle-outline="$emit('toggle-outline')"
+        @update:markdown-width="updateMarkdownWidth"
+      />
       <div class="pane-document">
         <EditorPane
           :manager="manager"
@@ -58,9 +69,6 @@
           :files="files"
           @quick-open="$emit('open-palette', 'file')"
         />
-        <div v-if="markdownMode" class="pane-mode-control">
-          <MarkdownModeSwitcher :mode="markdownMode" @change="changeMarkdownMode" />
-        </div>
       </div>
     </div>
 
@@ -74,7 +82,6 @@ import TabBar from './TabBar.vue'
 import Breadcrumb from './Breadcrumb.vue'
 import EditorPane from './EditorPane.vue'
 import WelcomePage from './WelcomePage.vue'
-import MarkdownModeSwitcher from './MarkdownModeSwitcher.vue'
 import MarkdownLiveToolbar from './MarkdownLiveToolbar.vue'
 import DropZoneOverlay, { type DropZone } from './DropZoneOverlay.vue'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
@@ -83,7 +90,7 @@ import type { SplitDirection } from '../../editor/layout/types'
 import { tabDragService, resolvePaneDropZone } from '../../editor/layout/TabDragService'
 import type { MarkdownMode } from '../../types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   paneId: string
   manager: DocumentManager
   revision: number
@@ -93,7 +100,9 @@ const props = defineProps<{
   desktop: boolean
   rootPath?: string | null
   liveToolbar?: boolean
-}>()
+  outlineVisible?: boolean
+  markdownWidth?: number
+}>(), { liveToolbar: true })
 
 const emit = defineEmits<{
   (e: 'new-doc'): void
@@ -103,6 +112,8 @@ const emit = defineEmits<{
   (e: 'close-tab', payload: { id: string; pane: string }): void
   (e: 'open-workspace-file', payload: { path: string; name: string; paneId: string; zone: DropZone }): void
   (e: 'reveal-in-explorer', token: string): void
+  (e: 'toggle-outline'): void
+  (e: 'update:markdown-width', width: number): void
 }>()
 
 const paneContainer = ref<HTMLElement | null>(null)
@@ -142,13 +153,21 @@ const markdownMode = computed(() => {
   props.revision
   return props.manager.getMarkdownMode(paneActiveId.value, props.paneId)
 })
-const showLiveToolbar = computed(() => {
+const showMarkdownToolbar = computed(() => {
   props.revision
-  return props.liveToolbar !== false && markdownMode.value === 'live' && props.manager.liveReady(props.paneId)
+  return props.liveToolbar !== false && !!markdownMode.value
 })
 
 function changeMarkdownMode(mode: MarkdownMode) {
-  if (paneActiveId.value) props.manager.setMarkdownMode(paneActiveId.value, mode, props.paneId)
+  if (paneActiveId.value) {
+    props.manager.setMarkdownMode(paneActiveId.value, mode, props.paneId)
+    props.manager.focusPane(props.paneId, true)
+  }
+}
+
+function updateMarkdownWidth(width: number) {
+  props.manager.setMarkdownTypography({ ...props.manager.getMarkdownTypography(), width })
+  emit('update:markdown-width', width)
 }
 
 function newDocument() {
@@ -302,10 +321,4 @@ function handleDrop(event: DragEvent) {
   position: relative;
 }
 
-.pane-mode-control {
-  position: absolute;
-  right: 22px;
-  top: 8px;
-  z-index: 6;
-}
 </style>
