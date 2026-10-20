@@ -37,7 +37,7 @@ import { createSmoothCaretPlugin } from './plugins/SmoothCaret'
 import type { BracketMode } from '../../core/brackets'
 import type { CaretAnimation } from '../../core/caretMotion'
 import type { MarkdownFormat } from '../formatCommands'
-import type { LiveEditor, LiveOptions, MarkdownTypography } from './contracts'
+import type { LiveEditor, LiveOptions, LiveToolbarState, MarkdownToolbarCommand, MarkdownTypography } from './contracts'
 import 'prosemirror-view/style/prosemirror.css'
 import 'prosemirror-tables/style/tables.css'
 import 'prosemirror-gapcursor/style/gapcursor.css'
@@ -800,6 +800,24 @@ export class MarkdownEditorController implements LiveEditor {
     )
     this.view.focus()
     return result
+  }
+
+  toolbarState(): LiveToolbarState {
+    return { ...this.formatState(), readOnly: !!this.options.readOnly?.(), composing: this.composing }
+  }
+
+  insertToolbar(command: MarkdownToolbarCommand): boolean {
+    if (this.options.readOnly?.() || this.composing) return false
+    if (command === 'footnote') { this.insertReference(true); return true }
+    if (command === 'link-reference') { this.insertReference(false); return true }
+    if (command === 'math') { this.insertBlock('$$\nx^2\n$$'); return true }
+    if (command === 'toc') { this.insertBlock('[TOC]'); return true }
+    if (command === 'yaml') {
+      if (this.bridge.blocks[0]?.node.attrs.label === 'YAML Front Matter') return false
+      this.insertBlock('---\ntitle: ""\n---', 'start')
+      return true
+    }
+    return false
   }
 
   format(format: MarkdownFormat): boolean {
@@ -1579,6 +1597,27 @@ export class MarkdownEditorController implements LiveEditor {
     this.view.dispatch(tr.setMeta('isolated', true).scrollIntoView())
   }
 
+  private formatState() {
+    const { $from, $to } = this.view.state.selection
+    const ancestors = Array.from({ length: $from.depth }, (_, index) => $from.node(index + 1))
+    const marked = (name: string) => this.view.state.selection.empty
+      ? !!s.marks[name].isInSet(this.view.state.storedMarks || $from.marks())
+      : this.view.state.doc.rangeHasMark($from.pos, $to.pos, s.marks[name])
+    const heading = $from.parent
+    const hasYaml = this.bridge.blocks[0]?.node.attrs.label === 'YAML Front Matter'
+    return {
+      heading: heading.type === s.nodes.heading ? heading.attrs.level as number : 0,
+      bold: marked('strong'), italic: marked('em'), strike: marked('strike'), inlineCode: marked('code'), link: marked('link'),
+      quote: ancestors.some(node => node.type === s.nodes.blockquote),
+      ordered: ancestors.some(node => node.type === s.nodes.ordered_list),
+      bullet: ancestors.some(node => node.type === s.nodes.bullet_list) && !ancestors.some(node => node.type === s.nodes.list_item && node.attrs.checked !== null),
+      task: ancestors.some(node => node.type === s.nodes.list_item && node.attrs.checked !== null),
+      codeBlock: heading.type === s.nodes.code_block,
+      inCodeBlock: ancestors.some(node => node.type === s.nodes.code_block),
+      hasYaml,
+    }
+  }
+
   private contextEntries(target: Element): LiveMenuEntry[] {
     const editable = !this.options.readOnly?.() && !this.composing
     const selected = !this.view.state.selection.empty
@@ -1588,22 +1627,14 @@ export class MarkdownEditorController implements LiveEditor {
       label: name, icon, shortcut: key && label(key), disabled: operation === 'paste' || operation === 'paste-plain' ? !editable : !canCopy || operation === 'cut' && !editable,
       run: () => this.clipboard(operation),
     })
-    const { $from, $to } = this.view.state.selection
-    const ancestors = Array.from({ length: $from.depth }, (_, index) => $from.node(index + 1))
-    const marked = (name: string) => this.view.state.selection.empty
-      ? !!s.marks[name].isInSet(this.view.state.storedMarks || $from.marks())
-      : this.view.state.doc.rangeHasMark($from.pos, $to.pos, s.marks[name])
+    const formats = this.formatState()
     const active: Partial<Record<MarkdownFormat, boolean>> = {
-      bold: marked('strong'), italic: marked('em'), 'inline-code': marked('code'), link: marked('link'),
-      quote: ancestors.some(node => node.type === s.nodes.blockquote),
-      ordered: ancestors.some(node => node.type === s.nodes.ordered_list),
-      bullet: ancestors.some(node => node.type === s.nodes.bullet_list) && !ancestors.some(node => node.type === s.nodes.list_item && node.attrs.checked !== null),
-      task: ancestors.some(node => node.type === s.nodes.list_item && node.attrs.checked !== null),
+      bold: formats.bold, italic: formats.italic, strike: formats.strike, 'inline-code': formats.inlineCode, link: formats.link,
+      quote: formats.quote, ordered: formats.ordered, bullet: formats.bullet, task: formats.task,
     }
     const format = (name: string, command: MarkdownFormat, icon?: string, key?: string): LiveMenuItem => ({ label: name, icon, pressed: icon ? active[command] : undefined, shortcut: key && label(key,command), disabled: !editable, run: () => { this.contextFormat(command, !!active[command]) } })
     const insert = (name: string, source: string, where: 'selection' | 'start' | 'end' = 'selection', key?: string): LiveMenuItem => ({ label: name, shortcut: key && label(key), disabled: !editable, run: () => this.insertBlock(source, where) })
-    const heading = this.view.state.selection.$from.parent
-    const level = heading.type === s.nodes.heading ? heading.attrs.level as number : 0
+    const level = formats.heading
     const headingNames = ['段落', '一级标题', '二级标题', '三级标题', '四级标题', '五级标题', '六级标题']
     const entries: LiveMenuEntry[] = [
       { label: '使用 Google 搜索', disabled: !selected, run: () => {

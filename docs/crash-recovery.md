@@ -152,7 +152,7 @@ cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D w
 cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
 ```
 
-本机结果：typecheck PASS、build PASS、Smoke **16/16**、完整 Regression **27/27**、Rust **118 passed / 1 ignored**、clippy/fmt PASS。原生恢复探针 PASS（4 次真实启动）。
+本机结果：typecheck PASS、build PASS、Smoke **17/17**、完整 Regression **28/28**（包含 recovery 与 Markdown Live toolbar 用例）、Rust **118 passed / 1 ignored**、clippy/fmt PASS。原生恢复探针 PASS（4 次真实启动）。
 
 ## 9. 变更文件
 

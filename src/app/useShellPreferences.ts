@@ -49,6 +49,7 @@ export function useShellPreferences(host: ShellPreferencesHost) {
   const wordWrap = ref(false)
   const showOutline = ref(false)
   const defaultMdMode = ref<MarkdownMode>('live')
+  const liveToolbar = ref(true)
   const fontFamily = ref<EditorSettings['fontFamily']>('system')
   const indentSize = ref(4)
   const useTabs = ref(false)
@@ -214,6 +215,7 @@ export function useShellPreferences(host: ShellPreferencesHost) {
       bracketMode: bracketMode.value,
       keymapPreset: keymapPreset.value,
       defaultMdMode: defaultMdMode.value,
+      liveToolbar: liveToolbar.value,
       indentSize: indentSize.value,
       useTabs: useTabs.value,
       imageRules: { ...imageRules.value },
@@ -353,6 +355,7 @@ export function useShellPreferences(host: ShellPreferencesHost) {
       documentImageRules.value = settings.documentImageRules
       showOutline.value = settings.showOutline
       defaultMdMode.value = settings.defaultMdMode
+      liveToolbar.value = settings.liveToolbar
       indentSize.value = settings.indentSize
       useTabs.value = settings.useTabs
       treeClickMode.value = settings.treeClickMode
@@ -412,6 +415,7 @@ export function useShellPreferences(host: ShellPreferencesHost) {
     wordWrap,
     showOutline,
     defaultMdMode,
+    liveToolbar,
     indentSize,
     useTabs,
     autoCheckUpdates,

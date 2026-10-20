@@ -16,6 +16,7 @@
           :startup-loading="startupLoading"
           :desktop="desktop"
           :root-path="rootPath"
+          :live-toolbar="liveToolbar"
           @new-doc="$emit('new-doc')"
           @open-file="$emit('open-file')"
           @open-workspace="$emit('open-workspace')"
@@ -77,6 +78,7 @@ const props = defineProps<{
   welcome?: boolean
   startupLoading?: boolean
   rootPath?: string | null
+  liveToolbar?: boolean
 }>()
 
 const emit = defineEmits<{

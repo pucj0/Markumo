@@ -33,6 +33,7 @@ export interface EditorSettings extends UpdatePreferences {
   markdownTypography:MarkdownTypography
   theme: ThemePreference; uiFontSize: number; fontSize: number; fontFamily: 'system' | 'consolas' | 'cascadia'
   wordWrap: boolean; showOutline: boolean; indentSize: number; useTabs: boolean; defaultMdMode: MarkdownMode
+  liveToolbar: boolean
   autoSave: boolean; autoSaveDelay: number
   treeClickMode: 'double' | 'single'
   autoFollowActiveFile: boolean
@@ -51,7 +52,7 @@ export interface EditorSettings extends UpdatePreferences {
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
 export function defaultSettings(): EditorSettings {
   const markdownClipboard = defaultMarkdownClipboard(), outlineWidth = 240
-  return { bracketMode: 'matching', syntaxStyle: 'soft', ...defaultUpdatePreferences(), caretAnimation: 'smooth', outlineWidth, markdownClipboard, markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 4, useTabs: false, defaultMdMode: 'live', autoSave: false, autoSaveDelay: 1500, treeClickMode: 'single', autoFollowActiveFile: false, smartExpand: true, compactFolders: false, keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: currentShortcutVersion, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
+  return { bracketMode: 'matching', syntaxStyle: 'soft', ...defaultUpdatePreferences(), caretAnimation: 'smooth', outlineWidth, markdownClipboard, markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 4, useTabs: false, defaultMdMode: 'live', liveToolbar: true, autoSave: false, autoSaveDelay: 1500, treeClickMode: 'single', autoFollowActiveFile: false, smartExpand: true, compactFolders: false, keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: currentShortcutVersion, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
 }
 /** Drop the transient migration notice before writing preferences to disk. */
 export function persistedSettings(settings: EditorSettings) {
@@ -120,6 +121,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
   if (Number.isInteger(s.autoSaveDelay) && s.autoSaveDelay! >= 500 && s.autoSaveDelay! <= 10000) defaults.autoSaveDelay = s.autoSaveDelay!
   if (Number.isInteger(s.indentSize) && s.indentSize! >= 1 && s.indentSize! <= 8) defaults.indentSize = s.indentSize!
   if (['live','source','split'].includes(s.defaultMdMode || '')) defaults.defaultMdMode = s.defaultMdMode!
+  if (typeof s.liveToolbar === 'boolean') defaults.liveToolbar = s.liveToolbar
   if (s.treeClickMode === 'single' || s.treeClickMode === 'double') defaults.treeClickMode = s.treeClickMode
   const preset = String(s.keymapPreset || '')
   if (preset === 'lightedit') defaults.keymapPreset = 'markumo'

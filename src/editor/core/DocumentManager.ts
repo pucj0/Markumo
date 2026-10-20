@@ -1,6 +1,6 @@
 import { Annotation, Compartment, EditorState, EditorSelection, Prec, Transaction, Text, type Extension, type StateEffect, type TransactionSpec } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
-import { undo, redo, undoSelection, redoSelection, isolateHistory, deleteLine, copyLineDown, moveLineUp, moveLineDown, toggleComment } from '@codemirror/commands'
+import { undo, redo, undoSelection, redoSelection, undoDepth, redoDepth, isolateHistory, deleteLine, copyLineDown, moveLineUp, moveLineDown, toggleComment } from '@codemirror/commands'
 import { findNext, findPrevious } from '@codemirror/search'
 import { showEditorSearch } from './searchPanel'
 import { createSearchQuery, expandReplacement } from './searchQuery'
@@ -16,7 +16,7 @@ import type { EditorDocument, Theme, MarkdownMode } from '../../types'
 import { lineEndings, type LineEndingSnapshot } from './lineEndings'
 import type { FileMetadata, OpenFile, ClassInfo, MediaMetadata } from '../../features/files/contracts'
 import { classSummary } from '../../features/files/classSummary'
-import { defaultMarkdownTypography, defaultMarkdownClipboard, type MarkdownClipboardSettings, type MarkdownTypography, type LiveEditor } from '../markdown/wysiwyg/contracts'
+import { defaultMarkdownTypography, defaultMarkdownClipboard, type MarkdownClipboardSettings, type MarkdownTypography, type LiveEditor, type MarkdownToolbarState, type MarkdownToolbarCommand } from '../markdown/wysiwyg/contracts'
 import { markdownFormatTransaction, type MarkdownFormat } from '../markdown/formatCommands'
 import { captureLineBaseline, savedLineBaseline } from './changeGutter'
 import { createMarkdownResources, markdownResources, refreshMarkdownResources } from '../markdown/images'
@@ -591,7 +591,7 @@ export class DocumentManager {
           selected:(anchor,head)=>{const selection=EditorSelection.single(Math.min(anchor,record.state.doc.length),Math.min(head,record.state.doc.length));record.panes[resolved].selection=selection;if(this.activePane===resolved)record.state=record.state.update({selection,annotations:Transaction.addToHistory.of(false)}).state;this.notify()},
           history:forward=>{this.focusPane(resolved,false);this.historyCommand(forward)},focus:()=>this.focusPane(resolved,false),
           openRelative:href=>window.dispatchEvent(new CustomEvent('markdown-open-relative',{detail:{id:record.meta.id,href}})),
-          readOnly:()=>record.state.readOnly,
+          readOnly:()=>record.state.readOnly||record.meta.readOnly,
         },sibling instanceof MarkdownEditorController?sibling.bridge:undefined)
         this.liveViews.set(resolved,{id:record.meta.id,editor})
         this.liveLoads.delete(resolved)
@@ -883,16 +883,63 @@ export class DocumentManager {
     if (id && changes.length) this.dispatch(id, { changes, annotations: isolateHistory.of('full'), userEvent: 'input.case' })
   }
 
-  formatMarkdown(format: MarkdownFormat) {
-    const id = this.activeId, record = id && this.records.get(id), view = this.paneView(this.activePane)
-    if (!id || !record || record.meta.encoding === 'Hex' || this.isComposing || !/\.(md|markdown)$/i.test(record.meta.name)) return false
-    const live=this.liveViews.get(this.activePane)
+  formatMarkdown(format: MarkdownFormat, pane: Pane = this.activePane) {
+    const resolved = this.resolvePaneId(pane), id = this.paneGroup(resolved).activeId, record = id && this.records.get(id), view = this.views.get(resolved)
+    if (!id || !record || record.meta.readOnly || record.state.readOnly || record.meta.encoding === 'Hex' || this.isComposing || !/\.(md|markdown)$/i.test(record.meta.name)) return false
+    if (resolved !== this.activePane) this.focusPane(resolved, false)
+    const live=this.liveViews.get(resolved)
     if(live?.id===id)return live.editor.format(format)
     const state = view?.state || record.state
     if (state.readOnly) return false
     this.dispatch(id, markdownFormatTransaction(state, format))
     view?.focus()
     return true
+  }
+
+  liveReady(pane: Pane = this.activePane) {
+    const resolved = this.resolvePaneId(pane)
+    const id = this.paneGroup(resolved).activeId
+    return !!id && this.liveViews.get(resolved)?.id === id
+  }
+
+  markdownToolbarState(pane: Pane = this.activePane): MarkdownToolbarState | null {
+    const resolved = this.resolvePaneId(pane)
+    const id = this.paneGroup(resolved).activeId
+    const record = id && this.records.get(id)
+    const live = this.liveViews.get(resolved)
+    if (!record || record.meta.encoding === 'Hex' || record.meta.kind === 'javaClass' || !/\.(md|markdown)$/i.test(record.meta.name) || !live || live.id !== id) return null
+    const state = live.editor.toolbarState()
+    return {
+      ...state,
+      composing: state.composing || this.isComposing,
+      readOnly: state.readOnly || record.state.readOnly || record.meta.readOnly,
+      canUndo: undoDepth(record.state) > 0,
+      canRedo: redoDepth(record.state) > 0,
+    }
+  }
+
+  markdownHistory(forward: boolean, pane: Pane = this.activePane) {
+    const resolved = this.resolvePaneId(pane)
+    const id = this.paneGroup(resolved).activeId
+    const record = id && this.records.get(id)
+    if (!record || !/\.(md|markdown)$/i.test(record.meta.name) || this.isComposing || record.meta.readOnly || record.state.readOnly) return false
+    this.focusPane(resolved, false)
+    const command = forward ? redo : undo
+    command({ state: record.state, dispatch: tr => this.dispatch(id, tr) })
+    this.focusPane(resolved, true)
+    return true
+  }
+
+  insertMarkdown(command: MarkdownToolbarCommand, pane: Pane = this.activePane) {
+    const resolved = this.resolvePaneId(pane)
+    const id = this.paneGroup(resolved).activeId
+    const record = id && this.records.get(id)
+    const live = this.liveViews.get(resolved)
+    if (!record || !live || live.id !== id || this.isComposing || record.meta.readOnly || record.state.readOnly || !/\.(md|markdown)$/i.test(record.meta.name)) return false
+    this.focusPane(resolved, false)
+    const ok = live.editor.insertToolbar(command)
+    this.focusPane(resolved, true)
+    return ok
   }
 
   switchPane() {

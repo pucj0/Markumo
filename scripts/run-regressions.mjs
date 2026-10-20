@@ -12,6 +12,7 @@ const LOG_DIR = path.resolve(ROOT_DIR, 'test-results/regression-logs')
 const SMOKE_TESTS = [
   'scripts/markdown-empty-regression.mjs',
   'scripts/markdown-live-controller-regression.mjs',
+  'scripts/markdown-live-toolbar-regression.mjs',
   'scripts/markdown-undo-regression.mjs',
   'scripts/diagram-security-regression.mjs',
   'scripts/settings-keybindings-regression.mjs',
@@ -32,6 +33,7 @@ const SMOKE_TESTS = [
 const FULL_REGRESSION_TESTS = [
   'scripts/markdown-empty-regression.mjs',
   'scripts/markdown-live-controller-full-regression.mjs',
+  'scripts/markdown-live-toolbar-regression.mjs',
   'scripts/markdown-undo-regression.mjs',
   'scripts/diagram-security-regression.mjs',
   'scripts/settings-keybindings-regression.mjs',

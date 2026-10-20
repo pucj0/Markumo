@@ -48,16 +48,19 @@
       @open-workspace="$emit('open-workspace')"
     />
 
-    <div v-else class="pane-document">
-      <EditorPane
-        :manager="manager"
-        :pane="paneId"
-        :doc="activeDoc"
-        :files="files"
-        @quick-open="$emit('open-palette', 'file')"
-      />
-      <div v-if="markdownMode" class="pane-mode-control">
-        <MarkdownModeSwitcher :mode="markdownMode" @change="changeMarkdownMode" />
+    <div v-else class="pane-document-shell">
+      <MarkdownLiveToolbar v-if="showLiveToolbar" :manager="manager" :pane="paneId" :revision="revision" />
+      <div class="pane-document">
+        <EditorPane
+          :manager="manager"
+          :pane="paneId"
+          :doc="activeDoc"
+          :files="files"
+          @quick-open="$emit('open-palette', 'file')"
+        />
+        <div v-if="markdownMode" class="pane-mode-control">
+          <MarkdownModeSwitcher :mode="markdownMode" @change="changeMarkdownMode" />
+        </div>
       </div>
     </div>
 
@@ -72,6 +75,7 @@ import Breadcrumb from './Breadcrumb.vue'
 import EditorPane from './EditorPane.vue'
 import WelcomePage from './WelcomePage.vue'
 import MarkdownModeSwitcher from './MarkdownModeSwitcher.vue'
+import MarkdownLiveToolbar from './MarkdownLiveToolbar.vue'
 import DropZoneOverlay, { type DropZone } from './DropZoneOverlay.vue'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { FileController } from '../../features/files/FileController'
@@ -88,6 +92,7 @@ const props = defineProps<{
   startupLoading?: boolean
   desktop: boolean
   rootPath?: string | null
+  liveToolbar?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -136,6 +141,10 @@ const isActivePane = computed(() => { props.revision; return props.manager.layou
 const markdownMode = computed(() => {
   props.revision
   return props.manager.getMarkdownMode(paneActiveId.value, props.paneId)
+})
+const showLiveToolbar = computed(() => {
+  props.revision
+  return props.liveToolbar !== false && markdownMode.value === 'live' && props.manager.liveReady(props.paneId)
 })
 
 function changeMarkdownMode(mode: MarkdownMode) {
@@ -274,6 +283,14 @@ function handleDrop(event: DragEvent) {
   min-width: 0;
   display: flex;
   position: relative;
+  flex-direction: column;
+}
+
+.pane-document-shell {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
   flex-direction: column;
 }
 

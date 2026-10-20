@@ -12,6 +12,7 @@
       :startup-loading="startupLoading"
       :desktop="desktop"
       :root-path="rootPath"
+      :live-toolbar="liveToolbar"
       @new-doc="$emit('new-doc')"
       @open-file="$emit('open-file')"
       @open-workspace="$emit('open-workspace')"
@@ -34,6 +35,7 @@
     :startup-loading="startupLoading"
     :desktop="desktop"
     :root-path="rootPath"
+      :live-toolbar="liveToolbar"
     @new-doc="$emit('new-doc')"
     @open-file="$emit('open-file')"
     @open-workspace="$emit('open-workspace')"
@@ -67,6 +69,7 @@
         :startup-loading="startupLoading"
         :desktop="desktop"
         :root-path="rootPath"
+      :live-toolbar="liveToolbar"
         @new-doc="$emit('new-doc')"
         @open-file="$emit('open-file')"
         @open-workspace="$emit('open-workspace')"
@@ -102,6 +105,7 @@
         :startup-loading="startupLoading"
         :desktop="desktop"
         :root-path="rootPath"
+      :live-toolbar="liveToolbar"
         @new-doc="$emit('new-doc')"
         @open-file="$emit('open-file')"
         @open-workspace="$emit('open-workspace')"
@@ -134,6 +138,7 @@ const props = defineProps<{
   startupLoading?: boolean
   desktop: boolean
   rootPath?: string | null
+  liveToolbar?: boolean
 }>()
 
 defineEmits<{

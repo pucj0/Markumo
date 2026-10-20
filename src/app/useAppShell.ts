@@ -1224,6 +1224,7 @@ export function useAppShell() {
     wordWrap: preferences.wordWrap,
     showOutline: preferences.showOutline,
     defaultMdMode: preferences.defaultMdMode,
+    liveToolbar: preferences.liveToolbar,
     autoSave: preferences.autoSave,
     autoSaveDelay: preferences.autoSaveDelay,
     treeClickMode: preferences.treeClickMode,

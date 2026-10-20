@@ -6,6 +6,25 @@ export interface MarkdownTypography { width:number; fontSize:number; fontFamily:
 export const defaultMarkdownTypography=():MarkdownTypography=>({width:860,fontSize:16,fontFamily:'system',lineHeight:1.6,codeLineNumbers:true,codeWrap:false,imageBorder:true})
 export interface MarkdownClipboardSettings { copyMarkdown: boolean; copyWholeLine: boolean }
 export const defaultMarkdownClipboard = (): MarkdownClipboardSettings => ({ copyMarkdown: false, copyWholeLine: false })
+export type MarkdownToolbarCommand = 'footnote' | 'link-reference' | 'math' | 'toc' | 'yaml'
+export interface LiveToolbarState {
+  heading: number
+  bold: boolean
+  italic: boolean
+  strike: boolean
+  inlineCode: boolean
+  link: boolean
+  quote: boolean
+  bullet: boolean
+  ordered: boolean
+  task: boolean
+  codeBlock: boolean
+  inCodeBlock: boolean
+  hasYaml: boolean
+  readOnly: boolean
+  composing: boolean
+}
+export interface MarkdownToolbarState extends LiveToolbarState { canUndo: boolean; canRedo: boolean }
 export interface LiveEditor {
   readonly composing:boolean
   readonly selection:{anchor:number;head:number}
@@ -13,6 +32,8 @@ export interface LiveEditor {
   focus():void
   reveal(position:number,align?:'nearest'|'start'):void
   format(format:MarkdownFormat):boolean
+  toolbarState():LiveToolbarState
+  insertToolbar(command:MarkdownToolbarCommand):boolean
   typography(settings:MarkdownTypography):void
   caretAnimation(mode:CaretAnimation):void
   bracketMode(mode:BracketMode):void

@@ -73,6 +73,7 @@
           :welcome="!openedDocuments.length && !workspace.rootPath"
           :startup-loading="startupLoading"
           :root-path="workspace.rootPath"
+          :live-toolbar="liveToolbar"
           @open-file="openFile()"
           @open-workspace="workspace.openWorkspaceDialog()"
           @new-doc="createNewDoc"
@@ -138,6 +139,7 @@
       v-model:word-wrap="wordWrap"
       v-model:show-outline="showOutline"
       v-model:default-md-mode="defaultMdMode"
+      v-model:live-toolbar="liveToolbar"
       v-model:font-family="fontFamily"
       v-model:indent-size="indentSize"
       v-model:use-tabs="useTabs"
@@ -196,7 +198,7 @@ import UpdateConfirm from './components/modals/UpdateConfirm.vue'
 import RecoveryDialog from './components/modals/RecoveryDialog.vue'
 import { computed } from 'vue'
 import { useAppShell } from './app/useAppShell'
-const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, defaultMdMode, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, smartExpand, compactFolders, syntaxStyle, bracketMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
+const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, defaultMdMode, liveToolbar, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, smartExpand, compactFolders, syntaxStyle, bracketMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
   paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
   setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,
