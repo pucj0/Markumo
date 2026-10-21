@@ -7,6 +7,7 @@ import { inputRules, textblockTypeInputRule, wrappingInputRule, InputRule } from
 import { wrapInList, splitListItem, sinkListItem, liftListItem } from 'prosemirror-schema-list'
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, goToNextCell, isInTable, selectedRect } from 'prosemirror-tables'
 import { tableEditingWithDragGuard } from './tableTextSelection'
+import { TableView } from 'prosemirror-tables'
 import { gapCursor } from 'prosemirror-gapcursor'
 import { LiveTableToolbar, type TableToolbarCommand } from './LiveTableToolbar'
 import { markdownSchema as s } from './MarkdownSchema'
@@ -409,6 +410,7 @@ export class MarkdownEditorController implements LiveEditor {
         ],
       }),
       nodeViews: {
+        table: node => new TableView(node, 60),
         code_block: (node, view, getPos) => {
           const code = new CodeBlockView(
             node,
@@ -1020,7 +1022,8 @@ export class MarkdownEditorController implements LiveEditor {
   private focusToolbarTable(position: number | undefined, toolbar: HTMLElement) {
     let currentPos = position
     if (currentPos === undefined && this.view?.dom) {
-      const next = toolbar.nextElementSibling
+      const sibling = toolbar.nextElementSibling
+      const next = sibling?.tagName === 'TABLE' ? sibling : sibling?.querySelector('table')
       if (next && next.tagName === 'TABLE') {
         try {
           currentPos = this.view.posAtDOM(next, 0) - 1

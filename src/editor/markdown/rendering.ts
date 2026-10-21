@@ -8,7 +8,7 @@ import { markdownSemantics, markdownSyntaxExtensions } from './semantics'
 import { sanitizeHtml } from './html/SafeHtmlRenderer'
 import { installMarkdownMath, mathBlockParts } from './mathSemantics'
 import { staticCodeLines } from './staticCode'
-export interface PreviewSlot { id: string; kind: 'math-inline' | 'math-block' | 'code' | 'diagram'; source: string }
+export interface PreviewSlot { id: string; kind: 'math-inline' | 'math-block' | 'code' | 'diagram' | 'image' | 'task'; source: string; alt?: string; from?: number }
 export interface PreviewEnvironment extends Record<PropertyKey, unknown> { slots?: PreviewSlot[]; slotPrefix?: string }
 export function previewSlot(env: PreviewEnvironment, kind: PreviewSlot['kind'], source: string) {
   env.slots ??= []
@@ -23,12 +23,16 @@ const imageParser=parser.configure(markdownSyntaxExtensions)
 // no raw HTML and no renderer-created network/file resource URLs.
 export { markdownSemantics } from './semantics'
 export { fenceLanguage } from '../languages'
-export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
+export function createMarkdownRenderer(onLanguageReady: () => void = () => {}, preview = false) {
   const md = new MarkdownIt(markdownSemantics)
-  installMarkdownMath(md)
+  // Export customizes its own renderers. Only the hydrated preview emits math
+  // placeholders; static consumers must never silently lose formula source.
+  if (preview) installMarkdownMath(md)
   for (const type of ['math_inline', 'math_block']) md.renderer.rules[type] = (tokens, index, _options, env: PreviewEnvironment = {}) => {
     const block = type === 'math_block', token = tokens[index]
     const source = block ? mathBlockParts(token.content)?.value ?? token.content : token.content
+    const count = Number(env.mathCount || 0); env.mathCount = count + 1
+    if (count >= 256) return `<${block ? 'div' : 'span'} class="md-render-error">公式达到每次预览 256 个预算：${md.utils.escapeHtml(source)}</${block ? 'div' : 'span'}>`
     const id = previewSlot(env, block ? 'math-block' : 'math-inline', source)
     const tag = block ? 'div' : 'span'
     return `<${tag} class="${block ? 'md-math-output' : 'md-inline-math'}" data-md-render="${id}"${token.map ? ` data-source-line="${token.map[0] + 1}"` : ''}></${tag}>`
@@ -62,9 +66,11 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
     }})
     let imageIndex=0
     let listDepth=0, tableDepth=0
+    const items: typeof state.tokens = []
     for (const token of state.tokens) {
-      if (token.type==='list_item_open') listDepth++
-      if (token.type==='list_item_close') listDepth--
+      if (token.type==='list_item_open') { listDepth++; items.push(token) }
+      if (token.type==='list_item_close') { listDepth--; items.pop() }
+      if (preview && listDepth > 0 && (token.type === 'paragraph_open' || token.type === 'paragraph_close')) token.hidden = false
       if (token.type==='table_open') tableDepth++
       if (token.type==='table_close') tableDepth--
       if (token.type!=='inline') continue
@@ -73,6 +79,7 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
         const check = new state.Token('markumo_task','input',0)
         check.meta={checked:/^\[[xX]\]/.test(first.content)}
         first.content=first.content.slice(4);token.children!.unshift(check)
+        items.at(-1)?.attrJoin('class', 'md-task')
       }
       for (const child of token.children || []) if (child.type==='image') {
         const candidate=images[imageIndex],source=String(child.attrGet('src')||'')
@@ -82,11 +89,23 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
       }
     }
   })
-  md.renderer.rules.markumo_task=(tokens,index)=>`<input class="md-preview-task" type="checkbox" disabled aria-label="${tokens[index].meta?.checked?'已完成任务':'待办任务'}"${tokens[index].meta?.checked?' checked':''}>`
-  md.renderer.rules.image=(tokens,index)=> {
+  md.renderer.rules.markumo_task=(tokens,index,_options,env = {})=> {
+    const checked = !!tokens[index].meta?.checked
+    if (!preview) return `<input class="md-preview-task" type="checkbox" disabled${checked?' checked':''}>`
+    const id = previewSlot(env, 'task', checked ? 'x' : ' ')
+    return `<span class="md-task-slot" data-md-render="${id}"></span>`
+  }
+  md.renderer.rules.image=(tokens,index,_options,env = {})=> {
     const token=tokens[index],source=String(token.attrGet('src')||''),alt=token.content
     if(token.meta?.inTable||typeof token.meta?.from!=='number')return md.utils.escapeHtml(`![${alt}](${source})`)
-    return `<span class="md-image-slot" data-md-source="${md.utils.escapeHtml(source)}" data-md-alt="${md.utils.escapeHtml(alt)}" data-source-from="${token.meta.from}"></span>`
+    const id = previewSlot(env, 'image', source)
+    const slot = (env as PreviewEnvironment).slots!.at(-1)!
+    slot.alt = alt; slot.from = token.meta.from
+    return `<span class="md-image-slot" data-md-render="${id}"></span>`
+  }
+  if (preview) {
+    md.renderer.rules.table_open = (tokens, index, options, _env, self) => `<div class="md-table-scroll">${self.renderToken(tokens,index,options)}`
+    md.renderer.rules.table_close = () => '</table></div>\n'
   }
   md.renderer.rules.fence = (tokens, index, options, env) => {
     const token = tokens[index], code = token.content.replace(/\n$/, '')
@@ -104,7 +123,9 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
     const spans = support && code.length <= 64 * 1024 ? syntaxSpans(visible, support) : []
     const rows = staticCodeLines(visible, spans, md.utils.escapeHtml)
     const warning = visible !== code ? '<small>代码预览达到 128 KiB / 5000 行预算；复制仍使用完整代码。</small>' : ''
-    return `<div class="md-preview-fence md-code-surface" data-md-render="${id}"${line}>${copyButton}<pre><code>${rows}</code></pre>${warning}</div>`
+    const languageClass = token.info.trim().split(/\s+/)[0]
+    const codeClass = languageClass ? ` class="${md.utils.escapeHtml(options.langPrefix + languageClass)}"` : ''
+    return `<div class="md-preview-fence md-code-surface" data-md-render="${id}"${line}>${copyButton}<pre><code${codeClass}>${rows}</code></pre>${warning}</div>`
   }
   md.renderer.rules.html_block = (tokens, index) => sanitizeHtml(tokens[index].content)
   md.renderer.rules.html_inline = (tokens, index) => sanitizeHtml(tokens[index].content)

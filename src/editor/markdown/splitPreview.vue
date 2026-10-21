@@ -1,5 +1,5 @@
 <template>
-  <div class="split-preview-pane" :style="markdownTypographyStyle(settings)" :data-code-numbers="settings.codeLineNumbers" :data-code-wrap="settings.codeWrap" :data-image-border="imageBorder !== false">
+  <div class="split-preview-pane" :style="markdownTypographyStyle(settings)" :data-code-numbers="settings.codeLineNumbers" :data-code-wrap="settings.codeWrap" :data-image-border="(imageBorder ?? settings.imageBorder) !== false">
     <div
       ref="contentRef"
       class="split-preview-content markdown-body"
@@ -45,7 +45,7 @@ const revision = ref(0)
 let disposed = false
 const md = createMarkdownRenderer(() => {
   if (!disposed) revision.value++
-})
+}, true)
 const previewText = ref(props.content)
 let timer: ReturnType<typeof setTimeout> | undefined
 
@@ -103,11 +103,23 @@ watch([renderedHtml, () => props.resources, () => props.resourceKey], async () =
   if (disposed || generation !== hydrateGeneration) return
 
   const slots = new Map(rendered.value.slots.map(slot => [slot.id, slot]))
+  // Raw HTML tables have already been sanitized; give them the same local
+  // scroll boundary as Markdown tables without changing document source.
+  for (const table of contentRef.value?.querySelectorAll('table') || []) {
+    if (table.parentElement?.classList.contains('md-table-scroll')) continue
+    const wrapper = document.createElement('div'); wrapper.className = 'md-table-scroll'
+    table.replaceWith(wrapper); wrapper.append(table)
+  }
   const diagrams: { host: HTMLElement; source: string }[] = []
   for (const host of contentRef.value?.querySelectorAll<HTMLElement>('[data-md-render]') || []) {
     const slot = slots.get(host.dataset.mdRender || '')
     if (!slot) continue
-    if (slot.kind === 'code') continue
+    if (slot.kind === 'code' || slot.kind === 'image') continue
+    if (slot.kind === 'task') {
+      const input = document.createElement('input')
+      input.type = 'checkbox'; input.disabled = true; input.checked = slot.source === 'x'; input.setAttribute('aria-label', input.checked ? '已完成任务' : '待办任务')
+      host.replaceChildren(input); continue
+    }
     if (slot.kind === 'diagram') { const diagram = host.querySelector<HTMLElement>('.md-diagram'); if (diagram) diagrams.push({ host: diagram, source: slot.source }); continue }
     const current = () => !disposed && generation === hydrateGeneration && snapshot === props.content
     void renderMath(host, slot.source, slot.kind === 'math-block', current).catch(error => {
@@ -153,19 +165,22 @@ watch([renderedHtml, () => props.resources, () => props.resourceKey], async () =
 
   // 挂载图片
   for (const host of Array.from(contentRef.value?.querySelectorAll<HTMLElement>('.md-image-slot') || []).slice(0, 64)) {
-    const source = host.dataset.mdSource || ''
-    const from = Number(host.dataset.sourceFrom || 0)
+    const slot = slots.get(host.dataset.mdRender || '')
+    if (slot?.kind !== 'image') continue
+    const source = slot.source
+    const from = slot.from || 0
+    host.classList.toggle('md-image-standalone', host.parentElement?.tagName === 'P' && [...host.parentElement.childNodes].every(node => node === host || !node.textContent?.trim()))
     mountedImages.push(
       mountMarkdownImage(
         host,
         source,
-        host.dataset.mdAlt || '',
+        slot.alt || '',
         props.resources || fallbackResources,
         () => emit('edit-image', from, snapshot),
         () => {
           // 图片尺寸测量完毕后，重新校准滚动锚点
           if (!disposed && generation === hydrateGeneration) {
-            // trigger potential scroll measurement
+            host.classList.toggle('md-image-ready', !!host.querySelector('img')?.naturalWidth)
           }
         }
       )
@@ -253,7 +268,7 @@ defineExpose({ syncScroll })
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--paper);
+  background: var(--editor);
   overflow: hidden;
   height: 100%;
   position: relative;
@@ -262,11 +277,6 @@ defineExpose({ syncScroll })
 .split-preview-content {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 24px;
-  color: var(--ink);
-  font-family: var(--md-font-family);
-  font-size: var(--md-font-size);
-  line-height: var(--md-line-height);
   box-sizing: border-box;
 }
 :deep(.md-math-output) { margin: 1em 0; max-width: 100%; overflow-x: auto; text-align: center; }
@@ -274,54 +284,6 @@ defineExpose({ syncScroll })
 :deep(.md-math-output .katex-display > .katex) { white-space: nowrap; }
 :deep(.md-inline-math) { display: inline; }
 :deep(.md-render-error) { color: var(--pink); white-space: pre-wrap; overflow-wrap: anywhere; }
-
-/* 标题样式：对齐 Markdown Live / Typora */
-:deep(h1), :deep(h2), :deep(h3), :deep(h4), :deep(h5), :deep(h6) {
-  color: var(--bright);
-  font-weight: 600;
-  margin-top: 1.2em;
-  margin-bottom: 0.6em;
-  line-height: 1.35;
-}
-
-:deep(h1) {
-  font-size: 1.85em;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 0.3em;
-}
-
-:deep(h2) {
-  font-size: 1.45em;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 0.25em;
-}
-
-:deep(h3) { font-size: 1.25em; }
-:deep(h4) { font-size: 1.1em; }
-:deep(h5), :deep(h6) { font-size: 1em; }
-
-:deep(p) {
-  margin: 0.8em 0;
-}
-
-:deep(ul), :deep(ol) {
-  padding-left: 24px;
-  margin: 0.8em 0;
-}
-
-:deep(li) {
-  margin: 0.25em 0;
-}
-
-/* 行内代码 */
-:deep(:not(pre) > code) {
-  font-family: var(--font-mono);
-  background: var(--soft);
-  color: var(--pink, #d99bbe);
-  padding: 2px 5px;
-  border-radius: 4px;
-  font-size: 0.88em;
-}
 
 /* 代码块：无两层边框，无大语言条，单层细边框与淡灰底色 */
 :deep(.md-preview-fence) {
@@ -402,61 +364,6 @@ defineExpose({ syncScroll })
   background: var(--hover);
 }
 
-/* 引用块 */
-:deep(blockquote) {
-  border-left: 3px solid var(--accent);
-  background: rgba(156, 147, 244, 0.05);
-  padding: 6px 14px;
-  margin: 1em 0;
-  color: var(--sub);
-  border-radius: 0 4px 4px 0;
-}
-
-:deep(blockquote p) {
-  margin: 0.4em 0;
-}
-
-/* 链接 */
-:deep(a) {
-  color: var(--blue);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-/* 分隔线 */
-:deep(hr) {
-  border: none;
-  height: 1px;
-  background: var(--line);
-  margin: 1.5em 0;
-}
-
-/* 表格：单层边框，自然排版 */
-:deep(table) {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 1em 0;
-  border: 1px solid var(--line);
-}
-
-:deep(th), :deep(td) {
-  border: 1px solid var(--line);
-  padding: 7px 12px;
-  text-align: left;
-}
-
-:deep(th) {
-  background: var(--soft);
-  color: var(--bright);
-  font-weight: 600;
-}
-
-/* 任务列表复选框 */
-:deep(.md-preview-task) {
-  margin-right: 6px;
-  vertical-align: middle;
-}
-
 /* 图片样式：自适应、无厚重灰框 */
 :deep(.md-image-slot) {
   display: inline-block;
@@ -480,9 +387,4 @@ defineExpose({ syncScroll })
   cursor: pointer;
 }
 
-@media(max-width: 760px) {
-  .split-preview-content {
-    padding: 12px 14px;
-  }
-}
 </style>

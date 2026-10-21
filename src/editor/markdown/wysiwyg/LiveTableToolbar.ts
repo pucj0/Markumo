@@ -58,11 +58,17 @@ export class LiveTableToolbar {
       const active = activePosition !== null && activePosition === position
       element.classList.toggle('is-active', active)
       if (active) {
-        const table = element.nextElementSibling as HTMLElement | null
-        if (table?.tagName === 'TABLE') {
-          element.style.top = `${table.offsetTop - 28}px`
-          element.style.left = `${table.offsetLeft}px`
-          element.style.width = `${table.offsetWidth}px`
+        const surface = element.nextElementSibling as HTMLElement | null
+        if (surface?.tagName === 'TABLE' || surface?.classList.contains('tableWrapper')) {
+          // TableView owns a local scrolling wrapper. Position against its visible
+          // bounds, in the toolbar's containing block, rather than the wide table.
+          const parent = element.offsetParent as HTMLElement | null
+          if (!parent) continue
+          const bounds = surface.getBoundingClientRect()
+          const origin = parent.getBoundingClientRect()
+          element.style.top = `${bounds.top - origin.top + parent.scrollTop - 28}px`
+          element.style.left = `${bounds.left - origin.left + parent.scrollLeft}px`
+          element.style.width = `${surface.clientWidth}px`
         }
       }
     }

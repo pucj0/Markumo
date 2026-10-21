@@ -4,7 +4,7 @@
     <ImageViewer v-if="doc?.kind === 'image'" :key="`${doc.id}:${doc.fileToken}:${doc.lastDiskVersion}:${pane}`" :doc="doc" :state="manager.mediaViewState(doc.id, pane)" @metadata="(media, version) => doc && manager.updateMediaMetadata(doc.id, media, version)" />
     <PdfViewer v-if="doc?.kind === 'pdf'" :key="`${doc.id}:${doc.fileToken}:${doc.lastDiskVersion}:${pane}`" :doc="doc" :pane="pane" :state="manager.mediaViewState(doc.id, pane)" @metadata="(media, version) => doc && manager.updateMediaMetadata(doc.id, media, version)" />
     <div v-show="doc && !isMedia(doc)" ref="host" class="editor-host" :style="hostStyle" @scroll.capture="onEditorScroll"></div>
-    <div v-if="currentMode === 'split' && !tooLarge" class="split-resizer" title="拖动调整双栏比例" @mousedown.prevent="startSplitResize"></div>
+    <div v-if="currentMode === 'split' && !tooLarge" class="split-resizer" role="separator" aria-label="调整 Markdown 双栏比例" aria-orientation="vertical" :aria-valuenow="Math.round(splitRatio * 100)" :aria-valuemin="20" :aria-valuemax="80" tabindex="0" title="拖动调整双栏比例" @keydown.left.prevent="splitRatio = Math.max(.2, splitRatio - .05)" @keydown.right.prevent="splitRatio = Math.min(.8, splitRatio + .05)" @mousedown.prevent="startSplitResize"></div>
     <SplitPreview v-if="currentMode === 'split'" ref="preview" :style="previewStyle" :typography="manager.getMarkdownTypography()" :image-border="manager.getMarkdownTypography().imageBorder" :content="text" :too-large="tooLarge" :resources="resources" :resource-key="`${doc?.fileToken||''}|${doc?.path||''}`" @scroll-line="onPreviewScroll" @edit-image="editImage" />
     <ClassHexPanel v-if="doc?.kind === 'javaClass'" :key="doc.id" :doc="doc" :files="files" />
     <EmptyEditorPane v-if="!doc" @new-doc="newDocument" @quick-open="quickOpen" />
@@ -41,15 +41,17 @@ const currentMode = computed(() => {
 const splitRatio = ref(0.5)
 const hostStyle = computed(() => {
   if (currentMode.value === 'split') {
-    return { flex: `0 0 ${splitRatio.value * 100}%` }
+    return { flex: `0 0 calc(${splitRatio.value * 100}% - ${splitRatio.value * 5}px)` }
   }
   return { flex: '1 1 0%' }
 })
 const previewStyle = computed(() => {
-  return { flex: `0 0 ${(1 - splitRatio.value) * 100}%` }
+  return { flex: '1 1 0%' }
 })
 
+let stopSplitResize: (() => void) | undefined
 function startSplitResize(_e: MouseEvent) {
+  stopSplitResize?.()
   const container = host.value?.parentElement
   if (!container) return
   const startRect = container.getBoundingClientRect()
@@ -62,11 +64,13 @@ function startSplitResize(_e: MouseEvent) {
     window.removeEventListener('mouseup', onMouseUp)
     document.body.style.cursor = ''
     document.body.style.userSelect = ''
+    stopSplitResize = undefined
   }
   document.body.style.cursor = 'col-resize'
   document.body.style.userSelect = 'none'
   window.addEventListener('mousemove', onMouseMove)
   window.addEventListener('mouseup', onMouseUp)
+  stopSplitResize = onMouseUp
 }
 
 const tooLarge = computed(() => !!props.doc && (props.manager.getState(props.doc.id)?.doc.length || 0) > 1024 * 1024)
@@ -128,7 +132,7 @@ watch(() => props.pane, (pane, previous) => {
 watch(() => !!props.doc, (present, previous) => {
   if (present && !previous && props.manager.activePane === props.pane) props.manager.focusPane(props.pane)
 }, { flush: 'post' })
-onBeforeUnmount(() => props.manager.unmount(props.pane, host.value))
+onBeforeUnmount(() => { stopSplitResize?.(); props.manager.unmount(props.pane, host.value) })
 </script>
 <style scoped>
 .pane-body { flex: 1; display: flex; min-width: 0; min-height: 0; position: relative; overflow: hidden }
