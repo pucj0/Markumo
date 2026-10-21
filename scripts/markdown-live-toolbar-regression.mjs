@@ -93,6 +93,25 @@ try {
   await page.goto(`http://127.0.0.1:${port}/${output}/index.html`)
   await page.waitForFunction(() => window.appTest?.setup?.settingsReady, null, { timeout: 30000 })
 
+  await test('Source formatting works before the language module loads and still protects code blocks', async () => {
+    for (const text of ['## title\ntext', '```md\n## title\n```', '> ```md\n> ## title', '    ## title']) {
+      const result = await page.evaluate(text => {
+        const manager = window.appTest.setup.manager
+        const id = manager.createUntitled('md')
+        manager.setMarkdownMode(id, 'source', 'main')
+        manager.dispatch(id, { changes: { from: 0, insert: text }, selection: { anchor: text.indexOf('title') } })
+        const loading = manager.metadata(id).languageStatus
+        const changed = manager.formatMarkdown('heading-0', 'main')
+        const after = manager.getText(id)
+        manager.close(id, true, 'main')
+        return { loading, changed, after }
+      }, text)
+      assert.equal(result.loading, 'loading')
+      assert.equal(result.changed, text.startsWith('##'), text)
+      assert.equal(result.after, text.startsWith('##') ? 'title\ntext' : text)
+    }
+  })
+
   await test('toolbar uses a 44px full-width Nomo-style row with left groups and right utilities', async () => {
     const id = await newDoc('# Title\n\nTarget paragraph.\n\n```js\ncode\n```\n')
     const geometry = await page.evaluate(() => {

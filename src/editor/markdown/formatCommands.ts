@@ -1,11 +1,24 @@
-import { EditorSelection, type EditorState, type TransactionSpec } from '@codemirror/state'
+import { EditorSelection, type EditorState, type Text, type TransactionSpec } from '@codemirror/state'
 import { isolateHistory } from '@codemirror/commands'
-import { ensureSyntaxTree } from '@codemirror/language'
+import { DocInput, ensureSyntaxTree, language } from '@codemirror/language'
+import type { Tree } from '@lezer/common'
+import { parser } from '@lezer/markdown'
+import { markdownSyntaxExtensions } from './semantics'
+
+const blockParser = parser.configure(markdownSyntaxExtensions)
+const pendingLanguageTrees = new WeakMap<Text, Tree>()
 
 // Use the Markdown block tree, including nested/unterminated fences. A range
 // ending at a fence does not select it; a caret on the fence itself does.
 export function markdownSelectionInCodeBlock(state: EditorState): boolean {
-  const tree = ensureSyntaxTree(state, Math.max(...state.selection.ranges.map(range => state.doc.lineAt(range.to).to)), 50)
+  let tree = ensureSyntaxTree(state, Math.max(...state.selection.ranges.map(range => state.doc.lineAt(range.to).to)), 50)
+  // A newly opened Source pane can receive commands before its async language
+  // extension arrives. Parse Markdown blocks directly rather than treating the
+  // missing extension as a code block. Immutable documents share the cached tree.
+  if (!tree && !state.facet(language)) {
+    tree = pendingLanguageTrees.get(state.doc) ?? blockParser.parse(new DocInput(state.doc))
+    pendingLanguageTrees.set(state.doc, tree)
+  }
   if (!tree) return true // Parsing has not caught up: do not mutate an unknown block.
   return state.selection.ranges.some(range => {
     let inside = false
