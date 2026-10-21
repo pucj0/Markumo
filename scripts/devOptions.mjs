@@ -1,6 +1,6 @@
 import { join, resolve } from 'node:path'
 
-// Keep runner/application arguments intact. Only consume our watch opt-in
+// Keep runner/application arguments intact. Only consume our legacy watch alias
 // before Tauri's first `--`, never an application argument with the same name.
 export function devOptions(input, project, environment = process.env) {
   const args = [...input], env = { ...environment }
@@ -8,14 +8,10 @@ export function devOptions(input, project, environment = process.env) {
   const separator = args.indexOf('--')
   const optionEnd = separator < 0 ? args.length : separator
   const watchIndex = args.slice(0, optionEnd).indexOf('--watch')
-  // This app edits files itself, including its own source tree. Restarting the
-  // desktop process or remounting App on those saves discards editor state and
-  // repeats initialize_launch. Code hot reload must be an explicit opt-in.
-  const watch = watchIndex >= 0 && !args.slice(0, optionEnd).includes('--no-watch')
+  const watch = !args.slice(0, optionEnd).includes('--no-watch')
   if (watchIndex >= 0) args.splice(watchIndex, 1)
   const insertion = args.indexOf('--')
   const additions = []
-  if (!watch && !args.slice(0, insertion < 0 ? args.length : insertion).includes('--no-watch')) additions.push('--no-watch')
   // Profile data from the retired default is imported once by the Rust startup.
   const data = resolve(project, env.MARKUMO_DEV_DATA_DIR || '.markumo-dev')
   const temp = join(data, 'temp'), webview = join(data, 'webview')

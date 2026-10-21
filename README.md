@@ -59,7 +59,7 @@ pnpm install --frozen-lockfile
 pnpm tauri dev
 ```
 
-桌面开发模式默认关闭代码热更新和自动重启，避免保存项目源码时刷新编辑器、重复进入初始化画面。开发界面需要热更新时，运行 `pnpm tauri:watch`（或 `pnpm tauri dev --watch`）；此模式保存应用源码可能刷新或重启窗口，请先保存其他文档。`pnpm dev` 仍保留网页热更新。开发数据保存在项目的 `.markumo-dev/` 中，不影响正式版配置。
+开发模式默认支持热更新。需要关闭自动重启时，运行 `pnpm tauri dev --no-watch`。开发数据保存在项目的 `.markumo-dev/` 中，不影响正式版配置。
 
 ### 浏览器预览
 
