@@ -11,6 +11,7 @@ import { gapCursor } from 'prosemirror-gapcursor'
 import { LiveTableToolbar, type TableToolbarCommand } from './LiveTableToolbar'
 import { markdownSchema as s } from './MarkdownSchema'
 import { MarkdownSourceBridge, textPatch, type SourcePatch } from './MarkdownSourceBridge'
+import { mathBlockParts, mapMathSelection, mergeMathComposition, type MathSelection } from './MathSource'
 import { InlineSourceView, inlineSourceRange } from './InlineSourceView'
 import { Decoration, DecorationSet } from 'prosemirror-view'
 import { CodeBlockView } from './CodeBlockView'
@@ -78,6 +79,9 @@ export class MarkdownEditorController implements LiveEditor {
   private caretMode: CaretAnimation
   private brackets: BracketMode
   private disposed = false
+  // A newly focused surface invalidates deferred focus restoration by the old one.
+  private focusEpoch = 0
+  private onFocusOwnerChanged = () => { this.focusEpoch++ }
   private copySettings = defaultMarkdownClipboard()
   private liveClipboard!: LiveClipboard
   private contextMenu = new LiveContextMenu(notice, () => this.view.focus())
@@ -486,7 +490,10 @@ export class MarkdownEditorController implements LiveEditor {
     this.searchController = new LiveSearchController(this.view, this.dom, () => this.codeViews)
 
     // Listeners
-    this.dom.addEventListener('compositionend', this.onCompositionEnd)
+    // Trusted native events may run a microtask checkpoint between listeners.
+    // Clear the guard before a child editor queues its final composition commit.
+    this.dom.addEventListener('compositionend', this.onCompositionEnd, true)
+    this.dom.addEventListener('focusin', this.onFocusOwnerChanged, true)
     this.dom.addEventListener('compositionstart', this.onCompositionStart, true)
     this.dom.addEventListener('pointerdown', this.onCanvasPointerDown)
     this.dom.addEventListener('keydown', event => {
@@ -1066,14 +1073,18 @@ export class MarkdownEditorController implements LiveEditor {
     this.dismissedInline = { from: editor.from, to: editor.to }
     this.inlineSource = null
     const hadFocus = focus || document.activeElement === editor.input || editor.dom.contains(document.activeElement) || this.view.hasFocus()
+    const epoch = this.focusEpoch
     // Let the current input handler finish before removing its editing DOM.
     queueMicrotask(() => {
+      if (this.disposed) { editor.destroy(); return }
       if(this.inlineSource && this.inlineSource!==editor){editor.destroy();return}
+      const active = document.activeElement
+      const ownsFocus = epoch === this.focusEpoch && (active === document.body || active === this.view.dom || editor.dom.contains(active))
       // A blur may run before PM receives the browser's selectionchange. Keep
       // the new DOM caret instead of restoring the old image/link selection.
       let nextSelection: Selection | undefined
       const native = document.getSelection()
-      if (native?.anchorNode && native.focusNode && this.view.dom.contains(native.anchorNode) && this.view.dom.contains(native.focusNode) && !editor.dom.contains(native.anchorNode)) {
+      if (ownsFocus && native?.anchorNode && native.focusNode && this.view.dom.contains(native.anchorNode) && this.view.dom.contains(native.focusNode) && !editor.dom.contains(native.anchorNode)) {
         try {
           nextSelection=TextSelection.create(this.view.state.doc,this.view.posAtDOM(native.anchorNode,native.anchorOffset),this.view.posAtDOM(native.focusNode,native.focusOffset))
         } catch { /* Detached DOM selection: keep PM's current selection. */ }
@@ -1081,13 +1092,13 @@ export class MarkdownEditorController implements LiveEditor {
       editor.destroy()
       if (!this.disposed) {
         if (this.pendingSource !== null) { const source=this.pendingSource; this.pendingSource=null; this.sync(source) }
-        if (hadFocus && !nextSelection) {
+        if (ownsFocus && hadFocus && !nextSelection) {
           const targetPos = Math.min(position ?? editor.from, this.view.state.doc.content.size)
           nextSelection = Selection.near(this.view.state.doc.resolve(targetPos))
         }
         if(nextSelection && nextSelection.$from.doc===this.view.state.doc)this.view.dispatch(this.view.state.tr.setSelection(nextSelection))
         else this.view.updateState(this.view.state)
-        if (hadFocus) this.view.focus()
+        if (ownsFocus && hadFocus) this.view.focus()
       }
     })
   }
@@ -1193,6 +1204,7 @@ export class MarkdownEditorController implements LiveEditor {
         }
       })
     this.inlineSource = editor; this.dismissedInline = null
+    this.focusEpoch++
     this.view.updateState(this.view.state)
     editor.focus(Math.max(0, Math.min(range.raw.length, this.bridge.sourcePosition(pos) - range.sourceFrom)))
     if (kind === 'image') this.options.selected(range.sourceTo, range.sourceTo)
@@ -1531,19 +1543,15 @@ export class MarkdownEditorController implements LiveEditor {
     let dead = false
     let isEditing = false
     let selfDispatch = false
+    let composing = false
+    let endingComposition = false
+    let compositionBase = ''
+    let settlingComposition = false
 
     const latex = () => {
       if (!display) return node.attrs.latex || ''
-      const src = String(node.attrs.source || '').trim()
-      if (src.startsWith('$$') && src.endsWith('$$') && src.length >= 4) {
-        let inner = src.slice(2, -2)
-        if (inner.startsWith('\r\n')) inner = inner.slice(2)
-        else if (inner.startsWith('\n')) inner = inner.slice(1)
-        if (inner.endsWith('\r\n')) inner = inner.slice(0, -2)
-        else if (inner.endsWith('\n')) inner = inner.slice(0, -1)
-        return inner
-      }
-      return src
+      const src = String(node.attrs.source || '')
+      return mathBlockParts(src)?.value ?? src
     }
 
     const render = () => {
@@ -1565,6 +1573,7 @@ export class MarkdownEditorController implements LiveEditor {
       const pos = getPos()
       if (dead || this.options.readOnly?.() || pos === undefined || view.state.doc.nodeAt(pos) !== node) return
       this.closeInline()
+      this.focusEpoch++
       this.properties.hidden = true
       isEditing = true
       input.value = latex()
@@ -1576,11 +1585,18 @@ export class MarkdownEditorController implements LiveEditor {
       input.setSelectionRange(len, len)
     }
 
-    input.oninput = () => {
+    const selection = (): MathSelection => ({ start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection })
+    const restore = (value: string, range: MathSelection) => {
+      if (input.value !== value) input.value = value
+      input.setSelectionRange(Math.min(range.start, value.length), Math.min(range.end, value.length), range.direction)
+    }
+    const commit = () => {
       const pos = getPos()
-      if (dead || input.hidden || this.options.readOnly?.() || pos === undefined || view.state.doc.nodeAt(pos) !== node || this.compositionActive) return
+      if (dead || !isEditing || this.options.readOnly?.() || pos === undefined || view.state.doc.nodeAt(pos) !== node || composing || endingComposition || this.compositionActive) return
       const val = input.value
-      const attrs = display ? { ...node.attrs, source: `$$\n${val}\n$$` } : { ...node.attrs, latex: val }
+      if (val === latex()) return
+      const parts = display ? mathBlockParts(String(node.attrs.source)) : null
+      const attrs = display ? { ...node.attrs, source: `${parts!.opening}${val}${parts!.closing}` } : { ...node.attrs, latex: val }
       selfDispatch = true
       try {
         view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, attrs))
@@ -1588,16 +1604,48 @@ export class MarkdownEditorController implements LiveEditor {
         selfDispatch = false
       }
     }
-
-    input.addEventListener('compositionend', () => { queueMicrotask(() => { if (!dead) input.oninput?.(new Event('input')) }) })
+    input.oninput = event => { if (!(event as InputEvent).isComposing) commit() }
+    const onCompositionStart = () => { composing = true; compositionBase = latex() }
+    const onCompositionEnd = () => {
+      composing = false
+      endingComposition = true
+      // The root's compositionend must clear its flag first. The final native
+      // input may arrive on either side of this microtask; commit is idempotent.
+      queueMicrotask(() => {
+        if (dead) return
+        const draft = input.value, range = selection()
+        endingComposition = false
+        if (this.pendingSource !== null) {
+          const source = this.pendingSource
+          this.pendingSource = null
+          settlingComposition = true
+          try { this.sync(source) } finally { settlingComposition = false }
+          if (dead) return
+          const merged = mergeMathComposition(compositionBase, draft, latex(), range)
+          restore(merged.value, merged.selection)
+          if (merged.conflict) notice('公式同时被其他 Pane 修改；已保留本次完成的输入法内容，请核对公式。')
+        }
+        commit()
+        if (!dom.contains(document.activeElement)) finish()
+      })
+    }
+    input.addEventListener('compositionstart', onCompositionStart)
+    input.addEventListener('compositionend', onCompositionEnd)
+    input.onbeforeinput = event => {
+      if (composing || endingComposition || event.isComposing) return
+      if (event.inputType === 'historyUndo' || event.inputType === 'historyRedo') {
+        event.preventDefault()
+        if (!this.options.readOnly?.()) this.options.history(event.inputType === 'historyRedo')
+      }
+    }
 
     input.onkeydown = event => {
-      if (event.isComposing) return
+      if (event.isComposing || event.keyCode === 229 || composing || endingComposition || this.compositionActive) return
       if ((event.ctrlKey || event.metaKey) && ['f','r'].includes(event.key.toLowerCase())) {
         event.preventDefault(); finish(); this.find(event.key.toLowerCase() === 'r'); return
       }
       if ((event.ctrlKey || event.metaKey) && ['z','y'].includes(event.key.toLowerCase())) {
-        event.preventDefault(); this.options.history(event.key.toLowerCase() === 'y' || event.shiftKey); return
+        event.preventDefault(); if (!this.options.readOnly?.()) this.options.history(event.key.toLowerCase() === 'y' || event.shiftKey); return
       }
       if (event.key === 'Escape' || (event.key === 'Enter' && (!display || event.ctrlKey || event.metaKey))) {
         event.preventDefault(); finish()
@@ -1607,11 +1655,11 @@ export class MarkdownEditorController implements LiveEditor {
     }
 
     input.onblur = (event: FocusEvent) => {
-      if (this.compositionActive) return
+      if (composing || endingComposition || this.compositionActive) return
       const related = event.relatedTarget instanceof globalThis.Node ? event.relatedTarget : null
       if (related && dom.contains(related)) return
       queueMicrotask(() => {
-        if (!dead && isEditing && !dom.contains(document.activeElement)) {
+        if (!dead && isEditing && !composing && !endingComposition && !dom.contains(document.activeElement)) {
           finish()
         }
       })
@@ -1630,28 +1678,27 @@ export class MarkdownEditorController implements LiveEditor {
       }
     }
 
+    const refreshReadOnly = () => { input.readOnly = this.options.readOnly?.() ?? false }
+    refreshReadOnly()
+    this.extensionViews.add(refreshReadOnly)
+
     return {
       dom,
       stopEvent: () => true,
       ignoreMutation: () => true,
       update: next => {
         if (next.type !== node.type) return false
-        if (display && !/^\$\$[\s\S]*\$\$$/.test(String(next.attrs.source).trim())) return false
+        if (display && !mathBlockParts(String(next.attrs.source))) return false
         const previous = latex()
         node = next
         if (isEditing) {
-          if (selfDispatch) {
+          if (selfDispatch || composing || endingComposition || settlingComposition) {
             if (latex() !== previous) render()
             return true
           }
           const newLatex = latex()
           if (newLatex !== input.value) {
-            const selStart = input.selectionStart
-            const selEnd = input.selectionEnd
-            input.value = newLatex
-            if (document.activeElement === input) {
-              input.setSelectionRange(Math.min(selStart, newLatex.length), Math.min(selEnd, newLatex.length))
-            }
+            restore(newLatex, mapMathSelection(selection(), textPatch(input.value, newLatex)))
             render()
           }
           return true
@@ -1660,10 +1707,31 @@ export class MarkdownEditorController implements LiveEditor {
         return true
       },
       destroy: () => {
+        if (!this.disposed && isEditing && (composing || settlingComposition) && input.value !== latex()) notice(`正在输入的公式已被删除或替换，未提交的源码：${input.value}`)
+        const interrupted = composing
         dead = true
+        isEditing = composing = endingComposition = false
         generation++
         dom.onclick = null
         preview.onmousedown = null
+        input.oninput = input.onbeforeinput = input.onkeydown = input.onblur = null
+        input.removeEventListener('compositionstart', onCompositionStart)
+        input.removeEventListener('compositionend', onCompositionEnd)
+        this.extensionViews.delete(refreshReadOnly)
+        // Removing an IME target need not deliver compositionend. Release only
+        // this target's guard, and wait until PM finishes destroying the view.
+        if (interrupted && !this.disposed) {
+          this.compositionActive = false
+          queueMicrotask(() => {
+            if (this.disposed || this.composing) return
+            this.options.compositionChanged?.()
+            if (this.pendingSource !== null) {
+              const source = this.pendingSource
+              this.pendingSource = null
+              this.sync(source)
+            }
+          })
+        }
       },
     }
   }
@@ -1712,6 +1780,7 @@ export class MarkdownEditorController implements LiveEditor {
     if (readOnly !== this.wasReadOnly) {
       this.wasReadOnly = readOnly
       this.view.setProps({ editable: () => !this.options.readOnly?.() })
+      for (const refresh of this.extensionViews) refresh()
     }
   }
 
@@ -1882,7 +1951,8 @@ export class MarkdownEditorController implements LiveEditor {
     this.disposed = true
     this.inlineSource?.destroy()
     this.inlineSource = null
-    this.dom.removeEventListener('compositionend', this.onCompositionEnd)
+    this.dom.removeEventListener('compositionend', this.onCompositionEnd, true)
+    this.dom.removeEventListener('focusin', this.onFocusOwnerChanged, true)
     this.dom.removeEventListener('compositionstart', this.onCompositionStart, true)
     this.dom.removeEventListener('pointerdown', this.onCanvasPointerDown)
     this.searchController.destroy()

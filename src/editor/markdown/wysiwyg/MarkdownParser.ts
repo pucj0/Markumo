@@ -11,6 +11,7 @@ const tokens = { ...defaultMarkdownParser.tokens,
   td:{block:'table_cell',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({align:String(tok.attrGet('style')||'').replace('text-align:','') || null})},
   s:{mark:'strike'}, softbreak:{node:'soft_break'},
   math_inline:{node:'math_inline',getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({latex:tok.content})},
+  math_block:{block:'protected_source',noCloseToken:true,getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({source:tok.content})},
   footnote_reference:{node:'footnote_reference',getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({label:tok.content})},
   html_inline:{node:'html_inline',getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({source:tok.content})},
   html_block:{block:'html_block',noCloseToken:true,getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({source:tok.content})},
@@ -18,11 +19,32 @@ const tokens = { ...defaultMarkdownParser.tokens,
   bullet_list:{...defaultMarkdownParser.tokens.bullet_list,getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({bullet:tok.markup,tight:true})},
   list_item:{block:'list_item',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({checked:tok.meta?.checked ?? null})},
 }
+// A formula is one source atom even when its body contains blank lines.
+// CommonMark paragraph ranges would otherwise split $$...$$ into several blocks.
+tokenizer.block.ruler.before('fence','markumo_math_block',(state,startLine,endLine,silent)=>{
+  if(state.sCount[startLine]-state.blkIndent>=4)return false
+  const from=state.bMarks[startLine]+state.tShift[startLine]
+  if(!state.src.startsWith('$$',from))return false
+  for(let line=startLine;line<endLine;line++){
+    const end=state.eMarks[line],text=state.src.slice(state.bMarks[line],end)
+    if(!/\$\$[ \t]*$/.test(text)||line===startLine&&state.src.slice(from,end).trimEnd().length<4)continue
+    if(silent)return true
+    const token=state.push('math_block','div',0)
+    token.block=true;token.map=[startLine,line+1];token.content=state.src.slice(from,end)
+    state.line=line+1
+    return true
+  }
+  return false
+})
 tokenizer.inline.ruler.before('escape','markumo_math_footnotes',(state,silent)=>{
   const rest=state.src.slice(state.pos),note=/^\[\^([^\]\n]+)\]/.exec(rest)
   if(note){if(!silent){const token=state.push('footnote_reference','sup',0);token.content=note[1]}state.pos+=note[0].length;return true}
   if(rest[0]!=='$'||rest[1]==='$')return false
-  let end=1;while((end=rest.indexOf('$',end))>=0){if(rest[end-1]!=='\\')break;end++}
+  let end=1;while((end=rest.indexOf('$',end))>=0){
+    let escapes=0;for(let i=end-1;i>=0&&rest[i]==='\\';i--)escapes++
+    if(escapes%2===0)break
+    end++
+  }
   if(end<1||rest.slice(1,end).includes('\n'))return false
   if(!silent){const token=state.push('math_inline','span',0);token.content=rest.slice(1,end)}state.pos+=end+1;return true
 })
@@ -105,7 +127,7 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
     let node:Node
     if(reused)node=reused.node
     else try {
-      const complex=raw || /(^|\n)(?:\[\^[^\]]+\]:|\$\$|\[toc\]|:::+|>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\])/i.test(original)
+      const complex=raw || /(^|\n)(?:\[\^[^\]]+\]:| {0,3}\$\$|\[toc\]|:::+|>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\])/i.test(original)
       if(complex) node=s.nodes.protected_source.create({source:original,label})
       else {
         node=markdownParser.parse(original,env).firstChild!
