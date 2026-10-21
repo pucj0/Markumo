@@ -43,6 +43,7 @@ export interface LiveEditor {
   shortcut(event:KeyboardEvent):boolean
   clipboard(operation:'copy'|'cut'|'paste'|'select-all'):Promise<void>
   refreshResources():void
+  typewriterMode(enabled: boolean): void
   destroy():void
   find(replace?:boolean):void
   findNext():void
@@ -53,6 +54,8 @@ export interface LiveOptions {
   shortcutLabel?(id:string):string|undefined
   caretAnimation?:CaretAnimation
   bracketMode?:BracketMode
+  typewriterMode?: boolean
+  isPaneActive?(): boolean
   source:string; anchor:number; head:number; resources:MarkdownResources; typography:MarkdownTypography; clipboard?:MarkdownClipboardSettings
   publish(expected:string,patch:{from:number;to:number;insert:string},update:unknown,isolated:boolean):boolean
   selected(anchor:number,head:number):void

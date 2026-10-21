@@ -47,6 +47,7 @@ export interface ShellCommandsHost {
   startupLoading: Ref<boolean>
   updateInstalling: Ref<boolean>
   focusMode: Ref<boolean>
+  typewriterMode: Ref<boolean>
   sidebarVisible: Ref<boolean>
   sidebarPanel: Ref<SidebarPanel>
   appMode: Ref<AppMode>
@@ -71,6 +72,7 @@ export interface ShellCommandsHost {
   openPalette: (category?: 'action' | 'file' | 'all') => void
   toggleSidebar: () => void
   toggleFocus: () => void
+  toggleTypewriter: () => void
   toggleTheme: () => void
   setMode: (mode: AppMode) => void
   setMarkdownMode: (mode: MarkdownMode) => void
@@ -275,6 +277,7 @@ export function useShellCommands(host: ShellCommandsHost) {
       },
       { id: 'toggle-outline', title: '显示/隐藏大纲', detail: '', category: 'action', action: () => { host.showOutline.value = !host.showOutline.value } },
       { id: 'toggle-focus', title: '切换专注模式', detail: 'F8', category: 'action', action: host.toggleFocus },
+      { id: 'toggle-typewriter', title: '切换打字机模式', detail: 'F9', category: 'action', action: host.toggleTypewriter },
       { id: 'focus-left-pane', title: '聚焦左侧分栏', detail: '', category: 'action', action: () => host.manager.layout.focusDirection('left') },
       { id: 'focus-right-pane', title: '聚焦右侧分栏', detail: '', category: 'action', action: () => host.manager.layout.focusDirection('right') },
       { id: 'focus-up-pane', title: '聚焦上方分栏', detail: '', category: 'action', action: () => host.manager.layout.focusDirection('up') },

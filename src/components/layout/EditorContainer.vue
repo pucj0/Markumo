@@ -17,7 +17,8 @@
           :desktop="desktop"
           :root-path="rootPath"
           :live-toolbar="liveToolbar"
-          :outline-visible="showOutline"
+          :outline-visible="showOutline && !focusMode"
+          :focus-mode="focusMode"
           :markdown-width="markdownWidth"
           @new-doc="$emit('new-doc')"
           @open-file="$emit('open-file')"
@@ -32,13 +33,13 @@
       </div>
     </div>
 
-    <div v-if="showOutline && doc" class="outline-resizer" role="separator" aria-label="调整大纲宽度" aria-orientation="vertical" tabindex="0"
+    <div v-if="showOutline && !focusMode && doc" class="outline-resizer" role="separator" aria-label="调整大纲宽度" aria-orientation="vertical" tabindex="0"
       :aria-valuenow="visibleOutlineWidth" :aria-valuemin="160" :aria-valuemax="maxOutlineWidth" title="拖动调整大纲宽度，双击恢复默认"
       @pointerdown="startOutlineResize" @lostpointercapture="stopOutlineResize" @dblclick="setOutlineWidth(240)"
       @keydown.left.prevent="setOutlineWidth(visibleOutlineWidth + 10)" @keydown.right.prevent="setOutlineWidth(visibleOutlineWidth - 10)"
       @keydown.home.prevent="setOutlineWidth(160)" @keydown.end.prevent="setOutlineWidth(maxOutlineWidth)"
     ></div>
-    <aside v-if="showOutline && doc" class="outline-sidebar" :style="{ width: `${visibleOutlineWidth}px` }">
+    <aside v-if="showOutline && !focusMode && doc" class="outline-sidebar" :style="{ width: `${visibleOutlineWidth}px` }">
       <div class="outline-head">
         <span>大纲</span>
         <button
@@ -75,6 +76,7 @@ const props = withDefaults(defineProps<{
   doc: EditorDocument | null
   manager: DocumentManager
   showOutline: boolean
+  focusMode?: boolean
   outlineWidth?: number
   desktop: boolean
   wordWrap?: boolean

@@ -45,6 +45,8 @@ export function useAppShell() {
   const sidebarWidth = ref(254)
   const sidebarPanel = ref<SidebarPanel>('files')
   const focusMode = ref(false)
+  const savedSidebarVisible = ref<boolean | null>(null)
+  const savedShowOutline = ref<boolean | null>(null)
 
   // --- Modal & Tool Component Refs ---
   const paletteRef = ref<InstanceType<typeof CommandPalette> | null>(null)
@@ -706,8 +708,40 @@ export function useAppShell() {
   }
 
   function toggleFocus() {
-    focusMode.value = !focusMode.value
-    toast(focusMode.value ? '专注模式 · Esc 退出' : '已退出专注模式')
+    const activePane = manager.activePane
+    if (!focusMode.value) {
+      savedSidebarVisible.value = sidebarVisible.value
+      savedShowOutline.value = preferences.showOutline.value
+      sidebarVisible.value = false
+      preferences.showOutline.value = false
+      focusMode.value = true
+      toast('专注模式 · Esc 退出')
+    } else {
+      focusMode.value = false
+      if (savedSidebarVisible.value !== null) {
+        sidebarVisible.value = savedSidebarVisible.value
+        savedSidebarVisible.value = null
+      }
+      if (savedShowOutline.value !== null) {
+        preferences.showOutline.value = savedShowOutline.value
+        savedShowOutline.value = null
+      }
+      toast('已退出专注模式')
+    }
+    void nextTick(() => {
+      manager.focusPane(activePane, false)
+      const live = manager.activeLiveEditor
+      if (live && !live.composing) {
+        live.focus()
+      } else {
+        manager.activeEditorView?.focus()
+      }
+    })
+  }
+
+  function toggleTypewriter() {
+    preferences.typewriterMode.value = !preferences.typewriterMode.value
+    toast(preferences.typewriterMode.value ? '打字机模式 · 已开启' : '已退出打字机模式')
   }
 
   function openSettings(section?: string) {
@@ -1021,6 +1055,7 @@ export function useAppShell() {
     startupLoading,
     updateInstalling,
     focusMode,
+    typewriterMode: preferences.typewriterMode,
     sidebarVisible,
     sidebarPanel,
     appMode,
@@ -1043,6 +1078,7 @@ export function useAppShell() {
     openPalette,
     toggleSidebar,
     toggleFocus,
+    toggleTypewriter,
     toggleTheme: preferences.toggleTheme,
     setMode,
     setMarkdownMode,
@@ -1238,6 +1274,7 @@ export function useAppShell() {
     keymapPreset: preferences.keymapPreset,
     wordWrap: preferences.wordWrap,
     showOutline: preferences.showOutline,
+    typewriterMode: preferences.typewriterMode,
     defaultMdMode: preferences.defaultMdMode,
     liveToolbar: preferences.liveToolbar,
     externalFileMonitoring: preferences.externalFileMonitoring,
@@ -1274,6 +1311,7 @@ export function useAppShell() {
     handleSelectPanel,
     toggleTheme: preferences.toggleTheme,
     toggleFocus,
+    toggleTypewriter,
     openSettings,
     openPalette,
     selectDocById,

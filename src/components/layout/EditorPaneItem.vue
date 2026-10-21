@@ -39,7 +39,7 @@
       @reveal-in-explorer="$emit('reveal-in-explorer', $event)"
     />
 
-    <Breadcrumb :doc="activeDoc" />
+    <Breadcrumb v-if="!focusMode" :doc="activeDoc" />
     <ExternalFileBanner v-if="activeDoc && files" :files="files" :id="activeDoc.id" />
 
     <WelcomePage
@@ -104,6 +104,7 @@ const props = withDefaults(defineProps<{
   rootPath?: string | null
   liveToolbar?: boolean
   outlineVisible?: boolean
+  focusMode?: boolean
   markdownWidth?: number
 }>(), { liveToolbar: true })
 

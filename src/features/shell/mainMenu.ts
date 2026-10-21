@@ -2,7 +2,7 @@ import { menuCommand as cmd, separator as sep, recentFileCommand, recentWorkspac
 import { readablePath } from './pathDisplay'
 import type { MarkdownMode } from '../../types'
 export interface MainMenuState {
-  sidebar: boolean; outline: boolean; wrap: boolean; split: boolean; focus: boolean
+  sidebar: boolean; outline: boolean; wrap: boolean; split: boolean; focus: boolean; typewriter?: boolean
   markdown: boolean; markdownMode?: MarkdownMode; composing: boolean
   recentFiles: { path:string; name:string }[]; recentWorkspaces: string[]
   canExport?: boolean
@@ -60,6 +60,6 @@ export function mainMenu(state: MainMenuState): MenuGroup[] {
         cmd('restore-pane','恢复编辑器布局'),
         cmd('merge-panes','合并所有分栏'),
       ]),
-      checkbox('toggle-focus','专注模式',state.focus)]},
+      checkbox('toggle-focus','专注模式',state.focus),checkbox('toggle-typewriter','打字机模式',!!state.typewriter)]},
   ]
 }

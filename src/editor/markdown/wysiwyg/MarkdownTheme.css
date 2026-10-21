@@ -31,6 +31,10 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
   font: var(--md-font-size)/var(--md-line-height) var(--md-font-family);
 }
 
+.markdown-live.typewriter-mode .md-document {
+  padding-bottom: max(320px, calc(50vh - 40px)) !important;
+}
+
 .markdown-live .md-prose {
   outline: none;
   white-space: pre-wrap;

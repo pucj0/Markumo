@@ -67,6 +67,7 @@
           :doc="activeDoc"
           :manager="manager"
           :show-outline="showOutline"
+          :focus-mode="focusMode"
           :desktop="desktop"
           :word-wrap="wordWrap"
           :files="files"
@@ -140,6 +141,7 @@
       v-model:syntax-style="syntaxStyle"
       v-model:bracket-mode="bracketMode"
       v-model:word-wrap="wordWrap"
+      v-model:typewriter-mode="typewriterMode"
       v-model:show-outline="showOutline"
       v-model:default-md-mode="defaultMdMode"
       v-model:live-toolbar="liveToolbar"
@@ -159,6 +161,14 @@
       :shortcuts="shortcuts"
       @update:shortcuts="updateShortcuts"
     />
+
+    <!-- 专注模式退出浮动提示 -->
+    <div v-if="focusMode" class="focus-exit-dock">
+      <button class="focus-exit-btn" title="退出专注模式 (Esc / F8)" @click="toggleFocus">
+        <span class="focus-exit-icon">✕</span>
+        <span>退出专注模式 (Esc)</span>
+      </button>
+    </div>
 
     <!-- 操作提示 Toast -->
     <ExternalFileDialogs :files="files" />
@@ -205,7 +215,7 @@ import UpdateConfirm from './components/modals/UpdateConfirm.vue'
 import RecoveryDialog from './components/modals/RecoveryDialog.vue'
 import { computed } from 'vue'
 import { useAppShell } from './app/useAppShell'
-const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, defaultMdMode, liveToolbar, externalFileMonitoring, autoReloadExternal, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, smartExpand, compactFolders, syntaxStyle, bracketMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
+const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, typewriterMode, defaultMdMode, liveToolbar, externalFileMonitoring, autoReloadExternal, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, smartExpand, compactFolders, syntaxStyle, bracketMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
   paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
   setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,
@@ -256,6 +266,37 @@ const activeRoot = computed(() => appMode.value === 'workspace' && activeDoc.val
 
 @media (max-width: 900px) {
   .workspace-layout > .sidebar-wrapper { width: 210px !important; }
+}
+
+.focus-exit-dock {
+  position: fixed;
+  top: 12px;
+  right: 18px;
+  z-index: 1000;
+  opacity: 0.35;
+  transition: opacity 0.2s ease;
+}
+.focus-exit-dock:hover {
+  opacity: 1;
+}
+.focus-exit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  font-size: 12px;
+  line-height: 1.4;
+  background: var(--soft);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  user-select: none;
+}
+.focus-exit-btn:hover {
+  background: var(--hover);
+  color: var(--bright);
 }
 
 .center-area {

@@ -37,7 +37,9 @@ import { LiveContextMenu, type LiveMenuEntry, type LiveMenuItem } from './LiveCo
 import { defaultMarkdownClipboard, type MarkdownClipboardSettings } from './contracts'
 import { shortcutLabel } from '../../../features/shell/editorSettings'
 import { textClipboard } from '../../../features/shell/clipboard'
-import { cancelSmoothScroll, smoothScrollTo } from '../../core/smoothScroll'
+import { cancelSmoothScroll, smoothScrollTo, isSmoothScrolling } from '../../core/smoothScroll'
+import { calculateTypewriterScroll, type CaretCoords } from '../../core/typewriterScroll'
+import { EditorView as CMEditorView } from '@codemirror/view'
 import { createSmoothCaretPlugin } from './plugins/SmoothCaret'
 import { trailingParagraphPlugin, withTrailingParagraph } from './TrailingParagraph'
 import type { BracketMode } from '../../core/brackets'
@@ -81,6 +83,11 @@ export class MarkdownEditorController implements LiveEditor {
   private caretMode: CaretAnimation
   private brackets: BracketMode
   private disposed = false
+  private typewriterEnabled = false
+  private typewriterFollowing = true
+  private typewriterAlignScheduled = false
+  private typewriterResizeObserver?: ResizeObserver
+  private typewriterCleanup?: () => void
   // A newly focused surface invalidates deferred focus restoration by the old one.
   private focusEpoch = 0
   private onFocusOwnerChanged = () => { this.focusEpoch++ }
@@ -113,6 +120,8 @@ export class MarkdownEditorController implements LiveEditor {
 
   private onCompositionEnd = () => {
     this.compositionActive = false
+    this.typewriterFollowing = true
+    this.scheduleTypewriterAlign()
     setTimeout(() => {
       if (!this.disposed) this.options.compositionChanged?.()
       if (!this.disposed && this.pendingSource !== null) {
@@ -137,7 +146,8 @@ export class MarkdownEditorController implements LiveEditor {
       : new MarkdownSourceBridge(options.source)
     this.wasReadOnly = options.readOnly?.() ?? false
 
-    this.dom.className = 'markdown-live'
+    this.typewriterEnabled = options.typewriterMode ?? false
+    this.dom.className = 'markdown-live' + (this.typewriterEnabled ? ' typewriter-mode' : '')
     this.dom.setAttribute('aria-label', 'Markdown 所见即所得编辑器')
 
     // Table Toolbar (always anchored directly above table)
@@ -516,9 +526,126 @@ export class MarkdownEditorController implements LiveEditor {
       }
     })
 
+        const onTypewriterWheel = () => {
+      cancelSmoothScroll(this.dom)
+      this.typewriterFollowing = false
+    }
+    const onTypewriterScroll = () => {
+      if (isSmoothScrolling(this.dom)) return
+      this.typewriterFollowing = false
+    }
+    const onTypewriterKeydown = (event: KeyboardEvent) => {
+      if (event.key === 'PageUp' || event.key === 'PageDown') {
+        cancelSmoothScroll(this.dom)
+        this.typewriterFollowing = false
+        return
+      }
+      if (!event.altKey && !event.ctrlKey && !event.metaKey) {
+        this.typewriterFollowing = true
+      } else if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+        this.typewriterFollowing = true
+      }
+    }
+    const onTypewriterPointerDown = (event: PointerEvent) => {
+      if ((event.target instanceof HTMLElement && this.view.dom.contains(event.target)) || (event.target as HTMLElement)?.closest?.('.cm-editor')) {
+        this.typewriterFollowing = true
+        queueMicrotask(() => this.scheduleTypewriterAlign())
+      }
+    }
+
+    this.dom.addEventListener('wheel', onTypewriterWheel, { passive: true })
+    this.dom.addEventListener('scroll', onTypewriterScroll, { passive: true })
+    this.dom.addEventListener('keydown', onTypewriterKeydown, { capture: true })
+    this.dom.addEventListener('pointerdown', onTypewriterPointerDown)
+
+    if (typeof ResizeObserver !== 'undefined') {
+      this.typewriterResizeObserver = new ResizeObserver(() => {
+        if (!this.disposed && this.typewriterEnabled && this.typewriterFollowing && !this.compositionActive && this.isPaneActive() && this.dom.contains(document.activeElement)) {
+          this.scheduleTypewriterAlign()
+        }
+      })
+      this.typewriterResizeObserver.observe(mount)
+    }
+
+    this.typewriterCleanup = () => {
+      this.dom.removeEventListener('wheel', onTypewriterWheel)
+      this.dom.removeEventListener('scroll', onTypewriterScroll)
+      this.dom.removeEventListener('keydown', onTypewriterKeydown, true)
+      this.dom.removeEventListener('pointerdown', onTypewriterPointerDown)
+      this.typewriterResizeObserver?.disconnect()
+    }
+
     this.typography(options.typography)
     this.reveal(options.head)
     this.updateTools()
+    if (this.typewriterEnabled) {
+      this.scheduleTypewriterAlign()
+    }
+  }
+
+  private isPaneActive(): boolean {
+    return this.options.isPaneActive ? this.options.isPaneActive() : true
+  }
+
+  private getActiveCaretCoords(): CaretCoords | null {
+    const activeEl = document.activeElement
+    if (activeEl && this.dom.contains(activeEl)) {
+      const cmEl = activeEl.closest<HTMLElement>('.cm-editor')
+      if (cmEl) {
+        const embeddedView = (cmEl as any).cmView?.view || CMEditorView.findFromDOM(cmEl)
+        if (embeddedView) {
+          try {
+            const head = embeddedView.state.selection.main.head
+            const c = embeddedView.coordsAtPos(head)
+            if (c) return { top: c.top, bottom: c.bottom }
+          } catch {}
+        }
+      }
+    }
+    try {
+      const head = this.view.state.selection.head
+      const c = this.view.coordsAtPos(head)
+      if (c) return { top: c.top, bottom: c.bottom }
+    } catch {}
+    return null
+  }
+
+  private scheduleTypewriterAlign() {
+    if (!this.typewriterEnabled || !this.typewriterFollowing || this.compositionActive || !this.isPaneActive() || this.disposed) return
+    if (this.typewriterAlignScheduled) return
+    this.typewriterAlignScheduled = true
+    requestAnimationFrame(() => {
+      this.typewriterAlignScheduled = false
+      this.performTypewriterAlign()
+    })
+  }
+
+  private performTypewriterAlign() {
+    if (!this.typewriterEnabled || !this.typewriterFollowing || this.compositionActive || !this.isPaneActive() || this.disposed) return
+    const coords = this.getActiveCaretCoords()
+    if (!coords) return
+    const calc = calculateTypewriterScroll(this.dom, coords)
+    if (!calc.needed) return
+    smoothScrollTo(
+      this.dom,
+      () => {
+        const currentCoords = this.getActiveCaretCoords()
+        if (!currentCoords) return this.dom.scrollTop
+        return calculateTypewriterScroll(this.dom, currentCoords).destination
+      },
+      () => !this.disposed && this.typewriterEnabled && this.typewriterFollowing && !this.compositionActive && this.isPaneActive()
+    )
+  }
+
+  typewriterMode(enabled: boolean) {
+    this.typewriterEnabled = enabled
+    this.dom.classList.toggle('typewriter-mode', enabled)
+    if (enabled) {
+      this.typewriterFollowing = true
+      this.scheduleTypewriterAlign()
+    } else {
+      cancelSmoothScroll(this.dom)
+    }
   }
 
   private enterFence: Command = (state, dispatch) => {
@@ -655,6 +782,7 @@ export class MarkdownEditorController implements LiveEditor {
         this.scheduleInlineEntry()
         this.updateFenceAutocomplete()
         this.slashController?.update()
+        if (tr.selectionSet || tr.docChanged) this.scheduleTypewriterAlign()
         return
       }
       const prepared = this.bridge.prepare(applied.state.doc, tr.getMeta('inlineSourcePatch') as SourcePatch | undefined)
@@ -698,6 +826,7 @@ export class MarkdownEditorController implements LiveEditor {
       this.options.selected(sel.anchor, sel.head)
       this.updateFenceAutocomplete()
       this.slashController?.update()
+      this.scheduleTypewriterAlign()
     } catch (error) {
       notice(`Markdown 修改未应用：${String(error)}`)
     }
@@ -1972,6 +2101,7 @@ export class MarkdownEditorController implements LiveEditor {
 
   destroy() {
     cancelSmoothScroll(this.dom)
+    this.typewriterCleanup?.()
     this.contextMenu.close()
     this.imagePreview.destroy()
     this.fenceAutocomplete?.destroy()

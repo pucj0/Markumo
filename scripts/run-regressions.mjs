@@ -35,6 +35,7 @@ const SMOKE_TESTS = [
   'scripts/recovery-regression.mjs',
   'scripts/slash-commands-regression.mjs',
   'scripts/math-editor-regression.mjs',
+  'scripts/typewriter-focus-regression.mjs',
 ]
 
 // Full regression suite: all existing regression scripts
@@ -74,6 +75,7 @@ const FULL_REGRESSION_TESTS = [
   'scripts/recovery-regression.mjs',
   'scripts/media-regression.mjs',
   'scripts/windows-artifacts-regression.mjs',
+  'scripts/typewriter-focus-regression.mjs',
   'scripts/release-regression.mjs'
 ]
 

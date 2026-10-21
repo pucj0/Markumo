@@ -27,6 +27,7 @@ import { isMedia, type MediaViewState } from '../../features/files/media'
 import { MediaDocumentStore } from './mediaDocumentStore'
 import { cancelSmoothScroll, smoothScrollTo } from './smoothScroll'
 import { smoothCaret } from './smoothCaret'
+import { typewriterExtension } from './typewriterScroll'
 import type { CaretAnimation } from './caretMotion'
 
 export interface DocumentSeed { id: string; name: string; path: string; text: string; pinned?: boolean; mode?: MarkdownMode; kind?: 'text' | 'javaClass'; classInfo?: ClassInfo; encoding?: string; bom?: boolean; eol?: EditorDocument['eol'] }
@@ -45,6 +46,7 @@ interface CachedDocument {
   indent: Compartment
   caret: Compartment
   brackets: Compartment
+  typewriter: Compartment
   languageGeneration: number
   readyLanguageGeneration: number | null
   scroll: { top: number; left: number }
@@ -62,6 +64,7 @@ export class DocumentManager {
   private markdownClipboard = defaultMarkdownClipboard()
   private caretAnimation: CaretAnimation = 'smooth'
   private bracketMode: BracketMode = 'matching'
+  private typewriterMode = false
   private shortcutLabels: Record<string,string> = {}
   setShortcutLabels(labels:Record<string,string>) {this.shortcutLabels={...labels}}
   private readonly records = new Map<string, CachedDocument>()
@@ -171,13 +174,17 @@ export class DocumentManager {
     const isMd = !binary && !byteEditor && /\.(md|markdown)$/i.test(seed.name)
     const initialMdMode: MarkdownMode | undefined = isMd ? (seed.mode || this.defaultMarkdownMode) : undefined
 
-    const brackets = new Compartment()
+    const brackets = new Compartment(), typewriter = new Compartment()
     const state = EditorState.create({
       doc: seed.text,
       extensions: [
         coreExtensions,
         brackets.of(bracketHighlight(binary || byteEditor ? 'off' : this.bracketMode)),
         caret.of(smoothCaret(this.caretAnimation)),
+        typewriter.of(typewriterExtension({
+          enabled: this.typewriterMode,
+          isPaneActive: (view: EditorView) => this.paneView(this.activePane) === view,
+        })),
         imageImportBookmarks,
         markdownResources.of(createMarkdownResources(() => this.records.get(seed.id)?.meta.fileToken,()=>{const meta=this.records.get(seed.id)?.meta;return `${meta?.fileToken||''}|${meta?.path||''}`})),
         isMd ? sourceSlashExtension() : [],
@@ -231,7 +238,7 @@ export class DocumentManager {
         encoding: seed.encoding || 'UTF-8', eol: seed.eol || (/\r\n/.test(seed.text) ? 'CRLF' : 'LF'), bom: seed.bom ?? false, readOnly: false, lastDiskVersion: null,
         charCount: state.doc.length, line: 1, column: 1, mode: initialMdMode,
       },
-      state, baseline: state.doc, baselineEndings: endings.snapshot(state), endings, language, wrap, theme, markdownMode, indent, caret, brackets, languageGeneration: 0, readyLanguageGeneration: null, scroll: { top: 0, left: 0 },
+      state, baseline: state.doc, baselineEndings: endings.snapshot(state), endings, language, wrap, theme, markdownMode, indent, caret, brackets, typewriter, languageGeneration: 0, readyLanguageGeneration: null, scroll: { top: 0, left: 0 },
       panes: { main: { selection: state.selection, top: 0, left: 0 }, secondary: { selection: state.selection, top: 0, left: 0 } },
     }
     this.records.set(seed.id, record)
@@ -641,6 +648,7 @@ export class DocumentManager {
         const editor=new MarkdownEditorController(parent,{
           shortcutLabel:id=>this.shortcutLabels[id],
           source,anchor:saved.selection.main.anchor,head:saved.selection.main.head,resources:record.state.facet(markdownResources),typography:this.markdownTypography,clipboard:this.markdownClipboard,caretAnimation:this.caretAnimation,bracketMode:this.bracketMode,
+          typewriterMode:this.typewriterMode,isPaneActive:()=>this.activePane===resolved,
           publish:(expected,patch,update,isolated)=>{
             if(this.records.get(record.meta.id)!==record||record.state.doc.toString()!==expected||record.state.readOnly)return false
             this.liveOrigin={pane:resolved,update}
@@ -1297,6 +1305,24 @@ export class DocumentManager {
     this.caretAnimation = mode
     for (const record of this.records.values()) this.effects(record, [record.caret.reconfigure(smoothCaret(mode))])
     for (const live of this.liveViews.values()) live.editor.caretAnimation(mode)
+  }
+  setTypewriterMode(enabled: boolean) {
+    this.typewriterMode = enabled
+    for (const record of this.records.values()) {
+      this.effects(record, [
+        record.typewriter.reconfigure(typewriterExtension({
+          enabled,
+          isPaneActive: (view: EditorView) => this.paneView(this.activePane) === view,
+        }))
+      ])
+    }
+    for (const live of this.liveViews.values()) {
+      live.editor.typewriterMode(enabled)
+    }
+    this.notify()
+  }
+  getTypewriterMode() {
+    return this.typewriterMode
   }
   setMarkdownTypography(settings:MarkdownTypography){this.markdownTypography={...settings};for(const live of this.liveViews.values())live.editor.typography(settings);this.notify()}
   getMarkdownTypography(){return this.markdownTypography}

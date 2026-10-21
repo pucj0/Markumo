@@ -14,6 +14,7 @@
       :root-path="rootPath"
       :live-toolbar="liveToolbar"
       :outline-visible="outlineVisible"
+      :focus-mode="focusMode"
       :markdown-width="markdownWidth"
       @new-doc="$emit('new-doc')"
       @open-file="$emit('open-file')"
@@ -41,6 +42,7 @@
     :root-path="rootPath"
       :live-toolbar="liveToolbar"
       :outline-visible="outlineVisible"
+      :focus-mode="focusMode"
       :markdown-width="markdownWidth"
     @new-doc="$emit('new-doc')"
     @open-file="$emit('open-file')"
@@ -79,6 +81,7 @@
         :root-path="rootPath"
       :live-toolbar="liveToolbar"
       :outline-visible="outlineVisible"
+      :focus-mode="focusMode"
       :markdown-width="markdownWidth"
         @new-doc="$emit('new-doc')"
         @open-file="$emit('open-file')"
@@ -119,6 +122,7 @@
         :root-path="rootPath"
       :live-toolbar="liveToolbar"
       :outline-visible="outlineVisible"
+      :focus-mode="focusMode"
       :markdown-width="markdownWidth"
         @new-doc="$emit('new-doc')"
         @open-file="$emit('open-file')"
@@ -156,6 +160,7 @@ const props = withDefaults(defineProps<{
   rootPath?: string | null
   liveToolbar?: boolean
   outlineVisible?: boolean
+  focusMode?: boolean
   markdownWidth?: number
 }>(), { liveToolbar: true })
 

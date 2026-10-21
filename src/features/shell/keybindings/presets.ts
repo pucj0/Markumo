@@ -46,6 +46,7 @@ const fleetBindings: Record<string, string> = {
   'next-tab': 'Alt+ArrowRight',
   'previous-tab': 'Alt+ArrowLeft',
   'toggle-focus': 'Mod+Shift+F12',
+  'toggle-typewriter': 'F9',
 }
 
 // 3. Typora 风格方案（参考 Typora 官方 Markdown 快捷键）
@@ -81,6 +82,7 @@ const typoraBindings: Record<string, string> = {
   'heading-0': 'Mod+0',
   'toggle-outline': 'Mod+Shift+1',
   'toggle-focus': 'F8',
+  'toggle-typewriter': 'F9',
 }
 
 export const keymapPresets: Record<KeymapPresetId, KeymapPreset> = {

@@ -70,6 +70,7 @@ export function useShellPreferences(host: ShellPreferencesHost) {
   const bracketMode = ref<EditorSettings['bracketMode']>('matching')
   const keymapPreset = ref<KeymapPresetId>('markumo')
   const caretAnimation = ref<EditorSettings['caretAnimation']>('smooth')
+  const typewriterMode = ref(false)
 
   const markdownTypography = ref(defaultMarkdownTypography())
   const outlineWidth = ref(240)
@@ -139,6 +140,7 @@ export function useShellPreferences(host: ShellPreferencesHost) {
   watch(syntaxStyle, value => applySyntaxStyle(value), { immediate: true, flush: 'sync' })
   watch(bracketMode, value => host.manager.setBracketMode(value), { immediate: true })
   watch(caretAnimation, value => host.manager.setCaretAnimation(value), { immediate: true })
+  watch(typewriterMode, value => host.manager.setTypewriterMode(value), { immediate: true })
   watch(markdownTypography, value => host.manager.setMarkdownTypography(value), { immediate: true, deep: true })
   watch(markdownClipboard, value => host.manager.setMarkdownClipboard(value), { immediate: true, deep: true })
 
@@ -207,6 +209,7 @@ export function useShellPreferences(host: ShellPreferencesHost) {
       fontFamily: fontFamily.value,
       wordWrap: wordWrap.value,
       showOutline: showOutline.value,
+      typewriterMode: typewriterMode.value,
       externalFileMonitoring: externalFileMonitoring.value,
       autoReloadExternal: autoReloadExternal.value,
       autoSave: autoSave.value,
@@ -422,6 +425,7 @@ export function useShellPreferences(host: ShellPreferencesHost) {
     fontFamily,
     wordWrap,
     showOutline,
+    typewriterMode,
     defaultMdMode,
     liveToolbar,
     indentSize,

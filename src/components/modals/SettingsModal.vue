@@ -32,6 +32,8 @@
               <div class="settingrow"><span class="setting-label">括号高亮</span><SegmentedControl id="settings-bracket-mode" label="括号高亮" :model-value="bracketMode || 'matching'" :options="[{value:'off',label:'关闭'},{value:'matching',label:'仅匹配'},{value:'rainbow',label:'彩虹括号'}]" @update:model-value="emit('update:bracketMode', $event as EditorSettings['bracketMode'])" /></div>
               <div class="settingrow"><span class="setting-label">光标动画</span><SegmentedControl id="settings-caret-animation" label="光标动画" :model-value="caretAnimation" :options="[{value:'off',label:'关闭'},{value:'quick',label:'快速跟手'},{value:'smooth',label:'平滑滑动'}]" @update:model-value="emit('update:caretAnimation', $event as EditorSettings['caretAnimation'])" /></div>
               <div class="settingrow"><label for="settings-wrap">自动软换行</label><input id="settings-wrap" class="setting-switch" type="checkbox" :checked="wordWrap" @change="$emit('update:wordWrap', ($event.target as HTMLInputElement).checked)" /></div>
+              <div class="settingrow"><span class="setting-label">打字机模式</span><SegmentedControl id="settings-typewriter-mode" label="打字机模式" :model-value="typewriterMode ? 'on' : 'off'" :options="[{value:'off',label:'关闭（默认）'},{value:'on',label:'开启'}]" @update:model-value="emit('update:typewriterMode', $event === 'on')" /></div>
+              <p class="setting-hint">开启后光标保持在可视阅读区域中部，用户持续输入时自然跟随，手动滚动时不抢回视口。</p>
               <div class="settingrow"><label for="settings-outline">显示文档大纲</label><input id="settings-outline" class="setting-switch" type="checkbox" :checked="showOutline" @change="$emit('update:showOutline', ($event.target as HTMLInputElement).checked)" /></div>
               <div class="settingrow"><label for="settings-indent">缩进宽度</label><div class="indent-control"><SegmentedControl label="常用缩进宽度" :model-value="indentSize" :options="[2,4,8].map(value=>({value,label:String(value)}))" @update:model-value="emit('update:indentSize',Number($event))" /><input id="settings-indent" type="number" min="1" max="8" :value="indentSize" aria-label="缩进宽度 1 至 8" @change="updateIndent" /></div></div>
               <div class="settingrow"><label for="settings-tabs">使用 Tab 缩进</label><input id="settings-tabs" class="setting-switch" type="checkbox" :checked="useTabs" @change="$emit('update:useTabs', ($event.target as HTMLInputElement).checked)" /></div>
@@ -277,6 +279,7 @@ const props = defineProps<{
   syntaxStyle?: EditorSettings['syntaxStyle']
   bracketMode?: EditorSettings['bracketMode']
   wordWrap: boolean
+  typewriterMode?: boolean
   showOutline: boolean
   defaultMdMode: MarkdownMode
   liveToolbar?: boolean
@@ -311,6 +314,7 @@ const emit = defineEmits<{
   (e: 'update:syntaxStyle', val: EditorSettings['syntaxStyle']): void
   (e: 'update:bracketMode', val: EditorSettings['bracketMode']): void
   (e: 'update:wordWrap', val: boolean): void
+  (e: 'update:typewriterMode', val: boolean): void
   (e: 'update:showOutline', val: boolean): void
   (e: 'update:defaultMdMode', val: MarkdownMode): void
   (e: 'update:liveToolbar', val: boolean): void

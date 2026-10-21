@@ -32,7 +32,7 @@ export interface EditorSettings extends UpdatePreferences {
   markdownClipboard:MarkdownClipboardSettings
   markdownTypography:MarkdownTypography
   theme: ThemePreference; uiFontSize: number; fontSize: number; fontFamily: 'system' | 'consolas' | 'cascadia'
-  wordWrap: boolean; showOutline: boolean; indentSize: number; useTabs: boolean; defaultMdMode: MarkdownMode
+  wordWrap: boolean; showOutline: boolean; typewriterMode: boolean; indentSize: number; useTabs: boolean; defaultMdMode: MarkdownMode
   liveToolbar: boolean
   externalFileMonitoring: boolean; autoReloadExternal: boolean
   autoSave: boolean; autoSaveDelay: number
@@ -53,7 +53,7 @@ export interface EditorSettings extends UpdatePreferences {
 export const fontFamilies = { system: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', consolas: 'Consolas, monospace', cascadia: '"Cascadia Code", Consolas, monospace' }
 export function defaultSettings(): EditorSettings {
   const markdownClipboard = defaultMarkdownClipboard(), outlineWidth = 240
-  return { bracketMode: 'matching', syntaxStyle: 'soft', ...defaultUpdatePreferences(), caretAnimation: 'smooth', outlineWidth, markdownClipboard, markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, indentSize: 4, useTabs: false, defaultMdMode: 'live', liveToolbar: true, externalFileMonitoring: true, autoReloadExternal: true, autoSave: false, autoSaveDelay: 1500, treeClickMode: 'single', autoFollowActiveFile: false, smartExpand: true, compactFolders: false, keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: currentShortcutVersion, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
+  return { bracketMode: 'matching', syntaxStyle: 'soft', ...defaultUpdatePreferences(), caretAnimation: 'smooth', outlineWidth, markdownClipboard, markdownTypography:defaultMarkdownTypography(), theme: 'system', uiFontSize: 14, fontSize: 14, fontFamily: 'system', wordWrap: false, showOutline: false, typewriterMode: false, indentSize: 4, useTabs: false, defaultMdMode: 'live', liveToolbar: true, externalFileMonitoring: true, autoReloadExternal: true, autoSave: false, autoSaveDelay: 1500, treeClickMode: 'single', autoFollowActiveFile: false, smartExpand: true, compactFolders: false, keymapPreset: 'markumo', imageRules: defaultImageRules(), documentImageRules: {}, settingsVersion: currentSettingsVersion, legacyAutoSaveNotice: false, shortcutVersion: currentShortcutVersion, customShortcuts:[], shortcuts: { ...defaultShortcuts }, fileModes: {} }
 }
 /** Drop the transient migration notice before writing preferences to disk. */
 export function persistedSettings(settings: EditorSettings) {
@@ -106,7 +106,7 @@ export function settingsFrom(raw: unknown): EditorSettings {
   if (Number.isInteger(s.uiFontSize) && s.uiFontSize! >= 12 && s.uiFontSize! <= 20) defaults.uiFontSize = s.uiFontSize!
   if (Number.isInteger(s.fontSize) && s.fontSize! >= 10 && s.fontSize! <= 24) defaults.fontSize = s.fontSize!
   if (s.fontFamily && ['system','consolas','cascadia'].includes(s.fontFamily)) defaults.fontFamily = s.fontFamily
-  for (const key of ['wordWrap','showOutline','useTabs','autoCheckUpdates','autoDownloadUpdates','autoFollowActiveFile','smartExpand','compactFolders'] as const) if (typeof s[key] === 'boolean') defaults[key] = s[key]!
+  for (const key of ['wordWrap','showOutline','typewriterMode','useTabs','autoCheckUpdates','autoDownloadUpdates','autoFollowActiveFile','smartExpand','compactFolders'] as const) if (typeof s[key] === 'boolean') defaults[key] = s[key]!
   // Automatic save is opt-in. A file written by an older version could not
   // record who enabled it, so an ambiguous legacy `true` is preserved (never
   // overwritten) and surfaced as a one-time notice instead. From version 4 on,

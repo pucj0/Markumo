@@ -476,6 +476,14 @@ const definitions: Omit<KeybindingCommand,'executeId'|'supported'|'contexts'|'us
     scope: 'global',
     defaultBinding: 'F8',
   },
+  {
+    id: 'toggle-typewriter',
+    label: '切换打字机模式',
+    category: 'view',
+    description: '保持光标在可视编辑区中部跟随输入',
+    scope: 'global',
+    defaultBinding: 'F9',
+  },
 ]
 
 const codeCommands = new Set(['delete-line','move-line-up','move-line-down','copy-line-down','comment-line','fold-code','unfold-code','uppercase','lowercase'])
@@ -499,7 +507,7 @@ export const commandMap = new Map<string, KeybindingCommand>(
 
 /** Older menu/palette IDs share configuration with their canonical command. */
 export function commandDefinition(id:string) {
-  const aliases: Record<string,string> = {outline:'toggle-outline',focus:'toggle-focus','md-live':'md-mode-live','md-source':'md-mode-source','md-split':'md-mode-split','split-right':'split-editor'}
+  const aliases: Record<string,string> = {outline:'toggle-outline',focus:'toggle-focus',typewriter:'toggle-typewriter','md-live':'md-mode-live','md-source':'md-mode-source','md-split':'md-mode-split','split-right':'split-editor'}
   return commandMap.get(aliases[id] || (id.startsWith('format-') ? id.slice(7) : id))
     || allCommands.find(command=>command.executeId===id)
 }
