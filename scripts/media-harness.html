@@ -17,8 +17,14 @@ const blobs=new Set(),workers=new Set(),requests=[]
 const create=URL.createObjectURL.bind(URL),revoke=URL.revokeObjectURL.bind(URL),OriginalWorker=Worker
 URL.createObjectURL=(blob)=>{const url=create(blob);blobs.add(url);return url}
 URL.revokeObjectURL=(url)=>{blobs.delete(url);revoke(url)}
+window.openedUrls=[]
+const origOpen=window.open
+window.open=(...args)=>{window.openedUrls.push(args[0]);return null}
+window.notices=[]
+window.addEventListener('editor-notice',e=>window.notices.push(e.detail))
 window.Worker=class extends OriginalWorker {constructor(...args){super(...args);workers.add(this)}terminate(){workers.delete(this);super.terminate()}}
 window.__TAURI_INTERNALS__={invoke:async(command,args)=>{
+  if(command==='open_external_link'){window.openedUrls.push(args.url);return null}
   if(command==='media_metadata'){const r=await fetch(`/test-media/${encodeURIComponent(args.token)}?meta=1`);if(!r.ok)throw new Error(await r.text());return r.json()}
   if(command==='read_media_chunk'){requests.push(args);const r=await fetch(`/test-media/${encodeURIComponent(args.token)}?offset=${args.offset}&length=${args.length}`);if(!r.ok)throw new Error(await r.text());return r.arrayBuffer()}
   throw new Error('Unexpected IPC: '+command)

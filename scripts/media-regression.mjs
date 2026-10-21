@@ -11,6 +11,9 @@ const mime={png:'image/png',apng:'image/png',jpg:'image/jpeg',jfif:'image/jpeg',
 if (!fs.existsSync(path.join(root, 'bookmark.pdf'))) {
   await import('./generate-bookmark-pdf.mjs')
 }
+if (!fs.existsSync(path.join(root, 'links.pdf'))) {
+  await import('./generate-link-pdf.mjs')
+}
 const server=await createServer({server:{port:1421,strictPort:true},plugins:[{name:'test-fixtures',configureServer(server){server.middlewares.use('/test-media/',async(req,res)=>{
   try{
     const url=new URL(req.url,'http://localhost'),name=decodeURIComponent(url.pathname.slice(1))
@@ -166,6 +169,134 @@ try{
   await page.evaluate(()=>document.body.classList.remove('light'))
 
   await page.evaluate(()=>window.mediaTest.close());await page.waitForFunction(()=>window.mediaTest.workers.size===0)
+
+  // 1-11. Test links.pdf: safe annotation link layer, internal navigation, coordinate jump, external URL, blocking unsafe schemes
+  console.log('PDF links & safe annotation layer')
+  await page.evaluate(() => window.mediaTest.open('links.pdf'))
+  await page.waitForFunction(() => document.querySelectorAll('.pdf-page .textLayer span').length > 0, { timeout: 30000 })
+  await page.waitForFunction(() => document.querySelectorAll('.pdf-page .annotation-host a.pdf-link-annotation').length >= 5)
+
+  // 1. Verify link elements and coordinates
+  const linksCount = await page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').count()
+  assert.equal(linksCount, 8, `Expected 8 link annotations on page 1, got ${linksCount}`)
+
+  // Verify bounding box of first link (Page 3 jump)
+  const link1Box = await page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').first().boundingBox()
+  assert.ok(link1Box && link1Box.width > 50 && link1Box.height > 10, 'Link bounding box must be valid')
+
+  // 2. Click Link 1: Jump to Page 3
+  await page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').first().click()
+  await flush()
+  assert.equal(await pageBox.inputValue(), '3', 'Clicking link 1 must jump to Page 3')
+
+  // 3. Jump back to Page 1 and click Link 2 (Coordinate jump to Page 2 at Y=500)
+  await pageBox.fill('1')
+  await pageBox.press('Enter')
+  await flush()
+  await page.waitForFunction(() => document.querySelector('.pdf-page[aria-label="第 1 页"] .annotation-host'))
+  const link2 = page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').nth(1)
+  await link2.click()
+  await flush()
+  assert.equal(await pageBox.inputValue(), '2', 'Clicking link 2 must navigate to Page 2')
+
+  // 4. Jump back to Page 1 and click Link 3 (Named destination 'named-chapter' -> Page 3)
+  await pageBox.fill('1')
+  await pageBox.press('Enter')
+  await flush()
+  await page.waitForFunction(() => document.querySelector('.pdf-page[aria-label="第 1 页"] .annotation-host'))
+  const link3 = page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').nth(2)
+  await link3.click()
+  await flush()
+  assert.equal(await pageBox.inputValue(), '3', 'Clicking named dest link must jump to Page 3')
+
+  // 5. External HTTPS link (Link 4)
+  await pageBox.fill('1')
+  await pageBox.press('Enter')
+  await flush()
+  await page.waitForFunction(() => document.querySelector('.pdf-page[aria-label="第 1 页"] .annotation-host'))
+  await page.evaluate(() => { window.openedUrls = [] })
+  const link4 = page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').nth(3)
+  await link4.click()
+  await flush()
+  const openedUrls = await page.evaluate(() => window.openedUrls)
+  assert.ok(openedUrls.some(u => u.includes('https://example.com/test-page')), `Expected external URL opened, got: ${JSON.stringify(openedUrls)}`)
+  assert.equal(await pageBox.inputValue(), '1', 'Opening external link must not change current reading page')
+
+  // 6. JavaScript action and unsafe protocol link (Links 5 and 6)
+  await page.evaluate(() => { window.openedUrls = []; window.notices = [] })
+  const link5 = page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').nth(4)
+  await link5.click()
+  const link6 = page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').nth(5)
+  await link6.click()
+  await flush()
+  const unsafeOpened = await page.evaluate(() => window.openedUrls)
+  assert.equal(unsafeOpened.length, 0, 'Unsafe javascript actions/urls must NOT be opened or executed')
+  const notices = await page.evaluate(() => window.notices)
+  assert.ok(notices.length > 0, 'Security notice must be emitted for blocked actions')
+
+  // 7. Invalid destination (Link 7)
+  const link7 = page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').nth(6)
+  await link7.click()
+  await flush()
+  assert.equal(await pageBox.inputValue(), '1', 'Invalid destination must fail safely without crash')
+
+  // 8. NextPage named action (Link 8)
+  const link8 = page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').nth(7)
+  await link8.click()
+  await flush()
+  assert.equal(await pageBox.inputValue(), '2', 'NextPage action must jump to Page 2')
+
+  // 9. Zoom and rotation link layer alignment
+  await pageBox.fill('1')
+  await pageBox.press('Enter')
+  await flush()
+  await page.waitForFunction(() => document.querySelector('.pdf-page[aria-label="第 1 页"] .annotation-host'))
+  const boxBeforeZoom = await page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').first().boundingBox()
+  await page.getByRole('button', { name: '放大', exact: true }).click()
+  await flush()
+  const boxAfterZoom = await page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').first().boundingBox()
+  assert.ok(boxAfterZoom && boxBeforeZoom && boxAfterZoom.width > boxBeforeZoom.width, 'Link rect must scale on zoom')
+
+  // Rotate 90 deg
+  await page.getByRole('button', { name: '旋转 PDF', exact: true }).click()
+  await flush()
+  const boxAfterRot = await page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').first().boundingBox()
+  assert.ok(boxAfterRot && boxAfterRot.width > 0 && boxAfterRot.height > 0, 'Link rect must stay valid after rotation')
+
+  // 10. Single page mode navigation
+  await page.getByRole('button', { name: '连续滚动', exact: true }).click() // Switch to single page
+  await flush()
+  assert.equal(await page.locator('.pdf-page').count(), 1)
+  await pageBox.fill('1')
+  await pageBox.press('Enter')
+  await flush()
+  await page.waitForFunction(() => document.querySelector('.pdf-page[aria-label="第 1 页"] .annotation-host'))
+  await page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').first().click()
+  await flush()
+  await page.waitForFunction(() => document.querySelector('.pdf-page[aria-label="第 3 页"]'))
+  assert.equal(await pageBox.inputValue(), '3', 'Single page mode must jump to Page 3')
+
+  // Switch back to continuous
+  await page.getByRole('button', { name: '连续滚动', exact: true }).click()
+  await flush()
+
+  // Reset rotation
+  for (let r = 0; r < 3; r++) await page.getByRole('button', { name: '旋转 PDF', exact: true }).click()
+  await flush()
+
+  // 11. Text selection on page with links is intact
+  await pageBox.fill('1')
+  await pageBox.press('Enter')
+  await flush()
+  await page.waitForFunction(() => document.querySelector('.pdf-page[aria-label="第 1 页"] .textLayer span'))
+  const textSpans = await page.locator('.pdf-page[aria-label="第 1 页"] .textLayer span').count()
+  assert.ok(textSpans > 0, 'TextLayer spans must be present and selectable')
+
+  await page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').first().hover()
+  await page.screenshot({ path: '.markumo-media-test/pdf-links-hover.png' })
+  await page.screenshot({ path: '.markumo-media-test/pdf-links-test.png' })
+  await page.evaluate(() => window.mediaTest.close())
+  await page.waitForFunction(() => window.mediaTest.workers.size === 0)
 
   await page.evaluate(()=>window.mediaTest.open('long.pdf'))
   await page.waitForFunction(()=>document.querySelectorAll('.pdf-page .textLayer span').length>0)

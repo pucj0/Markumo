@@ -92,7 +92,25 @@
         <MediaEmpty v-else-if="!pdf" :error="error" :token="doc.fileToken" @retry="load" />
         <div v-show="pdf" ref="viewport" class="media-viewport pdf-viewport" :class="{ 'hand-mode':handMode,dragging:!!drag }" tabindex="0" aria-label="PDF 阅读区域" @scroll.passive="onScroll" @wheel="onWheel" @pointerdown="startPan" @pointermove="pan" @pointerup="endPan" @pointercancel="endPan">
           <div class="pdf-pages" :style="{height:`${contentHeight}px`,width:`${contentWidth}px`}">
-            <PdfPage v-for="number in visiblePages" :key="number" :pdf="pdf!" :api="api!" :number="number" :scale="scale" :rotation="view.rotation" :pixel-budget="Math.floor(64*1024*1024/4/Math.max(3,visiblePages.length)/2)" :query="searchOpen ? activeQuery : ''" :match="selected?.page===number ? selected.index : undefined" :match-request="matchRequest" :style="{top:`${pageTop(number)}px`,left:`${pageLeft(number)}px`}" @size="rememberSize" @match-location="revealMatch" />
+            <PdfPage
+              v-for="number in visiblePages"
+              :key="number"
+              :pdf="pdf!"
+              :api="api!"
+              :number="number"
+              :scale="scale"
+              :rotation="view.rotation"
+              :pixel-budget="Math.floor(64*1024*1024/4/Math.max(3,visiblePages.length)/2)"
+              :query="searchOpen ? activeQuery : ''"
+              :match="selected?.page===number ? selected.index : undefined"
+              :match-request="matchRequest"
+              :style="{top:`${pageTop(number)}px`,left:`${pageLeft(number)}px`}"
+              @size="rememberSize"
+              @match-location="revealMatch"
+              @navigate-dest="handleNavigateDest"
+              @open-url="openUrl"
+              @action="handleNamedAction"
+            />
           </div>
         </div>
         <div v-if="error && pdf" class="pdf-notice" role="alert">{{ error }} <button @click="load">重新加载</button></div>
@@ -111,6 +129,7 @@ import PdfPage from './PdfPage.vue'
 import PdfNavigation from './PdfNavigation.vue'
 import MediaEmpty from './MediaEmpty.vue'
 import ViewerIcon from './ViewerIcon.vue'
+import { resolvePdfDestination, openPdfExternalUrl } from './pdfLinkUtils'
 import './viewer.css'
 
 const props=defineProps<{doc:EditorDocument;pane:string;state:MediaViewState}>()
@@ -263,44 +282,71 @@ function startResizeNav(event:PointerEvent){
   window.addEventListener('pointermove',onPointerMove)
   window.addEventListener('pointerup',onPointerUp)
 }
-async function resolveDestination(docProxy:PDFJS.PDFDocumentProxy,dest:any){
-  if(!dest)return null
-  let explicitDest=dest
-  if(typeof dest==='string')explicitDest=await docProxy.getDestination(dest)
-  if(!Array.isArray(explicitDest)||!explicitDest.length)return null
-  const [pageRef,mode,...args]=explicitDest
-  let pageIndex=-1
-  if(typeof pageRef==='number')pageIndex=pageRef
-  else if(pageRef&&typeof pageRef==='object')pageIndex=await docProxy.getPageIndex(pageRef)
-  if(pageIndex<0||pageIndex>=docProxy.numPages)return null
-  const pageNumber=pageIndex+1
-  let top:number|undefined,left:number|undefined
-  if(mode&&typeof mode==='object'){
-    if(mode.name==='XYZ'){left=typeof args[0]==='number'?args[0]:undefined;top=typeof args[1]==='number'?args[1]:undefined}
-    else if(mode.name==='FitH'||mode.name==='FitBH')top=typeof args[0]==='number'?args[0]:undefined
-    else if(mode.name==='FitV'||mode.name==='FitBV')left=typeof args[0]==='number'?args[0]:undefined
-  }
-  return {pageNumber,top,left}
-}
 async function handleNavigateDest(dest:any){
   if(!pdf.value)return
   try{
-    const target=await resolveDestination(pdf.value,dest)
+    const target=await resolvePdfDestination(pdf.value,dest)
     if(!target)return
     explicitJumpSeq.value++
+
+    page.value=target.pageNumber
+    view.page=target.pageNumber
+
+    if(target.zoom!==undefined&&target.zoom>0){
+      view.fit='manual'
+      scale.value=target.zoom
+      view.scale=target.zoom
+    }else if(target.fitMode&&viewport.value?.clientWidth){
+      view.fit=target.fitMode
+      const host=viewport.value
+      const size=dimensions(target.pageNumber)
+      const w=(host.clientWidth-PADDING*2)/size.width
+      const h=(host.clientHeight-PADDING*2)/size.height
+      const next=Math.max(.05,Math.min(5,target.fitMode==='width'?w:Math.min(w,h)))
+      scale.value=next
+      view.scale=next
+    }
+
+    const pHeight=dimensions(target.pageNumber).height
+    let yInPage=0
     if(target.top!==undefined&&Number.isFinite(target.top)){
-      const pHeight=dimensions(target.pageNumber).height
-      const yInPage=Math.max(0,(pHeight-target.top)*scale.value)
+      yInPage=Math.max(0,(pHeight-target.top)*scale.value)
+    }
+    let xInPage=0
+    if(target.left!==undefined&&Number.isFinite(target.left)){
+      xInPage=Math.max(0,target.left*scale.value)
+    }
+
+    if(view.continuous){
       const targetY=pageTop(target.pageNumber)+yInPage
-      page.value=target.pageNumber
-      view.page=target.pageNumber
-      viewport.value?.scrollTo({top:targetY,left:pageLeft(target.pageNumber)})
+      const targetX=pageLeft(target.pageNumber)+xInPage
+      viewport.value?.scrollTo({top:targetY,left:targetX})
       syncPosition()
-    }else jump(target.pageNumber)
-  }catch(e){console.warn('Failed to resolve bookmark destination',e)}
+    }else{
+      const isSamePage=page.value===target.pageNumber
+      const doScroll=()=>{
+        const targetY=PADDING+yInPage
+        const targetX=pageLeft(target.pageNumber)+xInPage
+        viewport.value?.scrollTo({top:targetY,left:targetX})
+        syncPosition()
+      }
+      if(isSamePage)doScroll()
+      else void nextTick(doScroll)
+    }
+  }catch(e){console.warn('Failed to resolve destination',e)}
+}
+function handleNamedAction(action:string){
+  if(!pdf.value||!total.value)return
+  switch(action){
+    case 'FirstPage':jump(1);break
+    case 'LastPage':jump(total.value);break
+    case 'NextPage':if(page.value<total.value)jump(page.value+1);break
+    case 'PrevPage':if(page.value>1)jump(page.value-1);break
+    default:break
+  }
 }
 function openUrl(url:string){
-  if(/^https?:\/\//i.test(url))window.open(url,'_blank','noopener,noreferrer')
+  void openPdfExternalUrl(url)
 }
 function toggleContinuous(){const anchor=captureAnchor();view.continuous=!view.continuous;if(anchor){page.value=anchor.page;positionAt(anchor)}}
 function rotate(){
