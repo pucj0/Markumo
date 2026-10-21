@@ -188,6 +188,15 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 
 ## 八、新增功能回归测试规范
 
+### 外部文件变化与冲突
+
+`scripts/external-file-regression.mjs` 已加入 Smoke/完整回归，使用可控事件、延迟 IPC、真实编辑器/提示条/Diff，验证保存保护、确认失效、恢复与多 Pane。
+Rust 的 `files::external_tests` 和 `files::external::tests` 使用独立临时文件验证读取/授权/原生目录监听及释放。
+
+Windows 原生专项为 `scripts/external-file-native-regression.mjs`，要求先构建独立 `com.markumo.external-audit` identifier、`test-results/external-native/profile` 数据目录、devUrl `http://localhost:1493` 的调试程序到 `.markumo-dev/target/debug/markumo.exe`，并将覆盖配置保存为 `test-results/external-native/config.json`。脚本验证隔离标识后，只重建该专用 profile 和临时夹具；通过 WebView2 CDP 验收真实 Rust 监听与 GUI，并输出结果/截图。不能用生产标识或生产数据目录代替。
+
+完整设计、测量口径和限制见 [外部文件变化验收报告](external-file-changes.md)。
+
 ### Markdown Live 基线和性能测量
 
 ```bash

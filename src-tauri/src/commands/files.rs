@@ -360,16 +360,60 @@ pub async fn release_file(
 }
 
 #[tauri::command]
-pub async fn check_external_file(window: Window, store: State<'_, FileStore>, token: String) -> Result<String> {
-    operate(store.inner().clone(), window.label().into(), move |s| s.check_external(&token)).await
+pub async fn check_external_file(
+    window: Window,
+    store: State<'_, FileStore>,
+    token: String,
+) -> Result<String> {
+    operate(store.inner().clone(), window.label().into(), move |s| {
+        s.check_external(&token)
+    })
+    .await
 }
 #[tauri::command]
-pub async fn read_external_file(window: Window, store: State<'_, FileStore>, token: String, expected_version: String, encoding: String) -> Result<OpenFile> {
-    operate(store.inner().clone(), window.label().into(), move |s| s.read_external(&token, &expected_version, &encoding)).await
+pub async fn read_external_file(
+    window: Window,
+    store: State<'_, FileStore>,
+    token: String,
+    expected_version: String,
+    encoding: String,
+) -> Result<OpenFile> {
+    operate(store.inner().clone(), window.label().into(), move |s| {
+        s.read_external(&token, &expected_version, &encoding)
+    })
+    .await
 }
 #[tauri::command]
-pub async fn watch_external_files(window: Window, store: State<'_, FileStore>, tokens: Vec<String>, generation: u64) -> Result<crate::files::external::WatchStatus> {
-    operate(store.inner().clone(), window.label().into(), move |s| s.watch_external(tokens, generation)).await
+pub async fn watch_external_files(
+    window: Window,
+    store: State<'_, FileStore>,
+    tokens: Vec<String>,
+    generation: u64,
+    lease: u64,
+) -> Result<crate::files::external::WatchStatus> {
+    operate(store.inner().clone(), window.label().into(), move |s| {
+        s.watch_external(tokens, generation, lease)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn begin_external_watch(window: Window, store: State<'_, FileStore>) -> Result<u64> {
+    operate(store.inner().clone(), window.label().into(), move |s| {
+        Ok(s.begin_external_watch())
+    })
+    .await
+}
+#[tauri::command]
+pub async fn end_external_watch(
+    window: Window,
+    store: State<'_, FileStore>,
+    lease: u64,
+) -> Result<()> {
+    operate(store.inner().clone(), window.label().into(), move |s| {
+        s.end_external_watch(lease);
+        Ok(())
+    })
+    .await
 }
 #[tauri::command]
 pub async fn read_class_hex(

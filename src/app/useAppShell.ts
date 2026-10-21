@@ -146,7 +146,7 @@ export function useAppShell() {
   )
 
   async function importImages(id: string, sources: ImageSource[]) {
-    if (!desktop || fileBusy.value || files.workspaceBusy || files.saving.size || manager.isComposing || discardRef.value?.visible || settingsRef.value?.visible) {
+    if (!desktop || fileBusy.value || files.workspaceBusy || files.activeOperationCount || manager.isComposing || discardRef.value?.visible || settingsRef.value?.visible) {
       await imageGateway.release(sources.filter((s): s is NativeImageInput => 'token' in s).map(s => s.token)).catch(() => {})
       toast('请先完成当前文件操作，再导入图片。')
       return
@@ -230,7 +230,7 @@ export function useAppShell() {
       if (startupLoading.value) return
       let inputs = payload.inputs
       if (inputs.some(input => input.isDirectory)) {
-        if (fileBusy.value || files.workspaceBusy || files.saving.size || manager.isComposing || discardRef.value?.visible || settingsRef.value?.visible) {
+        if (fileBusy.value || files.workspaceBusy || files.activeOperationCount || manager.isComposing || discardRef.value?.visible || settingsRef.value?.visible) {
           toast('请完成当前操作后重新拖入文件夹。')
           return
         }
@@ -314,7 +314,7 @@ export function useAppShell() {
       markPending: async version => {
         await invoke('mark_update_pending', { targetVersion: version })
         await invoke('ensure_update_window')
-        if (manager.hasDirtyDocuments || manager.isComposing || fileBusy.value || files.workspaceBusy || files.saving.size) {
+        if (manager.hasDirtyDocuments || manager.isComposing || fileBusy.value || files.workspaceBusy || files.activeOperationCount) {
           throw Error('编辑状态已变化，停止安装。')
         }
       },
@@ -360,7 +360,7 @@ export function useAppShell() {
         dirtyCount: manager.openedDocuments.filter(doc => doc.dirty).length,
         fileBusy: fileBusy.value,
         workspaceBusy: files.workspaceBusy,
-        savingCount: files.saving.size,
+        savingCount: files.activeOperationCount,
         composing: manager.isComposing,
         ready: launchReady,
       })
@@ -396,7 +396,7 @@ export function useAppShell() {
         workspaceBusy: files.workspaceBusy,
         updateInstalling: updateInstalling.value,
         updateConfirmVisible: Boolean(updateConfirmRef.value?.visible),
-        savingCount: files.saving.size,
+        savingCount: files.activeOperationCount,
         composing: manager.isComposing,
         dirtyCount: manager.openedDocuments.filter(doc => doc.dirty).length,
         documentCount: manager.openedDocuments.length,
@@ -551,7 +551,7 @@ export function useAppShell() {
           startupLoading: startupLoading.value,
           fileBusy: fileBusy.value,
           workspaceBusy: files.workspaceBusy,
-          savingCount: files.saving.size,
+          savingCount: files.activeOperationCount,
           discardVisible: Boolean(discardRef.value?.visible),
           hasWorkspaceDialog: Boolean(document.querySelector('.workspace-operation-dialog')),
         }),
@@ -778,7 +778,7 @@ export function useAppShell() {
   }
 
   function closeOtherTabs(id: string, pane: string) {
-    if (fileBusy.value || files.saving.size || manager.isComposing || discardRef.value?.visible) {
+    if (fileBusy.value || files.activeOperationCount || manager.isComposing || discardRef.value?.visible) {
       toast('请等待当前文件操作完成。')
       return
     }
@@ -795,7 +795,7 @@ export function useAppShell() {
   }
 
   async function discardPending() {
-    if (fileBusy.value || files.saving.size || files.workspaceBusy || manager.isComposing) {
+    if (fileBusy.value || files.activeOperationCount || files.workspaceBusy || manager.isComposing) {
       composingHint()
       return
     }
@@ -816,7 +816,7 @@ export function useAppShell() {
     } else if (pending?.kind === 'window') {
       try {
         await flushCloseState()
-        if (fileBusy.value || files.saving.size || files.workspaceBusy || manager.isComposing) {
+        if (fileBusy.value || files.activeOperationCount || files.workspaceBusy || manager.isComposing) {
           pendingClose = pending
           return
         }
@@ -947,7 +947,7 @@ export function useAppShell() {
   }
 
   function beforeUnload(event: BeforeUnloadEvent) {
-    if (manager.hasDirtyDocuments || manager.isComposing || fileBusy.value || files.saving.size) {
+    if (manager.hasDirtyDocuments || manager.isComposing || fileBusy.value || files.activeOperationCount) {
       event.preventDefault()
       event.returnValue = ''
     }

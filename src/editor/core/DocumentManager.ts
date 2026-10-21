@@ -332,9 +332,10 @@ export class DocumentManager {
     this.attachMetadata(next, file)
     this.restoreFileMode(next)
     next.meta.mode = originalMode
+    const preserveSelection = (selection: EditorSelection) => EditorSelection.create(selection.ranges.map(r => r.to <= next.state.doc.length ? r : EditorSelection.range(Math.min(r.anchor,next.state.doc.length),Math.min(r.head,next.state.doc.length))),selection.mainIndex)
+    next.state = next.state.update({ selection: preserveSelection(record.state.selection), annotations: Transaction.addToHistory.of(false) }).state
     for (const [pane, position] of Object.entries(placements)) {
-      const length = next.state.doc.length
-      next.panes[pane] = { ...position, selection: EditorSelection.create(position.selection.ranges.map(r => EditorSelection.range(Math.min(r.anchor,length),Math.min(r.head,length))),position.selection.mainIndex) }
+      next.panes[pane] = { ...position, selection: preserveSelection(position.selection) }
     }
     for (const pane of this.layout.getAllLeafIds()) if (this.paneGroup(pane).activeId === id) this.showActive(pane)
     if (hadFocus) { this.views.get(hadFocus)?.focus(); this.liveViews.get(hadFocus)?.editor.focus() }

@@ -130,7 +130,7 @@ fn external_reads_keep_authority_and_expected_version_without_advancing_a_save()
     s.set_owner("b");
     assert_eq!(s.check_external(token).unwrap_err().code,"scope");
     assert_eq!(s.read_external(token,&version,"UTF-8").unwrap_err().code,"scope");
-    assert_eq!(s.watch_external(vec![token.clone()],1).unwrap_err().code,"scope");
+    assert_eq!(s.watch_external(vec![token.clone()],1,0).unwrap_err().code,"scope");
     s.set_owner("a"); s.release(token);
     assert_eq!(s.check_external(token).unwrap_err().code,"scope");
 }
@@ -182,3 +182,65 @@ fn external_read_does_not_follow_a_replaced_file_link() {
     assert!(s.read_external(&opened.metadata.token,&opened.metadata.version,"UTF-8").is_err());
     assert_eq!(fs::read(other).unwrap(),b"private");
 }
+
+#[cfg(windows)]
+#[test]
+fn external_exclusive_lock_keeps_buffer_authority_and_reports_unavailable() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("locked.txt");
+    fs::write(&path, "original").unwrap();
+    let mut s = FileService::default();
+    s.set_owner("a");
+    let opened = s.open_selected(path.clone(), None).unwrap();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&path)
+        .unwrap();
+    let error = s.check_external(&opened.metadata.token).unwrap_err();
+    assert!(error.code == "io" || error.code == "permission");
+    assert_eq!(s.grants.len(), 1);
+    drop(lock);
+    assert_eq!(fs::read(path).unwrap(), b"original");
+}
+
+#[test]
+fn external_explicit_encodings_preserve_unicode_and_line_endings() {
+    for (encoding, text) in [
+        ("GB18030", "中文\r\n下一行"),
+        ("UTF-16BE", "中文😀\nnext"),
+        ("windows-1252", "café\rnext"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("encoded.txt");
+        fs::write(&path, codec::encode(text, encoding, false).unwrap()).unwrap();
+        let mut s = FileService::default();
+        s.set_owner("a");
+        let opened = s.open_selected(path, Some(encoding)).unwrap();
+        let external = s
+            .read_external(&opened.metadata.token, &opened.metadata.version, encoding)
+            .unwrap();
+        assert_eq!(external.text, text);
+        assert_eq!(external.metadata.encoding, encoding);
+        assert!(!external.metadata.bom);
+    }
+}
+
+#[test]
+fn stale_hmr_lease_cannot_unsubscribe_a_new_controller_or_cross_window_boundary() {
+    let mut s = FileService::default();
+    s.set_owner("a");
+    let old = s.begin_external_watch();
+    let current = s.begin_external_watch();
+    s.end_external_watch(old);
+    assert_eq!(s.external_leases.get("a"), Some(&current));
+    assert_eq!(s.watch_external(vec![], 1, old).unwrap_err().code, "watch");
+    s.set_owner("b");
+    s.end_external_watch(current);
+    assert_eq!(s.external_leases.get("a"), Some(&current));
+    s.set_owner("a");
+    s.end_external_watch(current);
+    assert!(!s.external_leases.contains_key("a"));
+}
+

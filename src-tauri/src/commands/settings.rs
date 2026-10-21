@@ -285,6 +285,15 @@ pub async fn save_editor_settings(
 
 #[cfg(test)]
 mod branding_tests {
+    #[test]
+    fn external_file_preferences_default_on_and_round_trip_explicit_off() {
+        let defaults: super::EditorSettings = serde_json::from_str("{}").unwrap();
+        assert!(defaults.external_file_monitoring && defaults.auto_reload_external);
+        let settings: super::EditorSettings = serde_json::from_str(r#"{"externalFileMonitoring":false,"autoReloadExternal":false}"#).unwrap();
+        super::validate(&settings).unwrap();
+        let json=serde_json::to_value(settings).unwrap();
+        assert_eq!(json["externalFileMonitoring"],false); assert_eq!(json["autoReloadExternal"],false);
+    }
     use super::*;
     #[test]
     fn bracket_mode_defaults_validation_and_disk_round_trip() {

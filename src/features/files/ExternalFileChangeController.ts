@@ -42,8 +42,10 @@ export class ExternalFileChangeController {
   private started = false
   private generation = 0
   private signature = ''
+  private lease = 0
   private watchWrites = Promise.resolve()
   private unlisten?: () => void
+  private unfocus?: () => void
   private listenerFailed = false
   private stop: () => void
   private lastFocus = -Infinity
@@ -61,19 +63,29 @@ export class ExternalFileChangeController {
   blocked(id: string) { const s = this.state(id); return !!s && (s.conflictValid || s.phase === 'resolving') }
   checking(id: string) { return this.state(id)?.operation === 'check' }
   resolving(id: string) { return this.state(id)?.phase === 'resolving' }
+  get resolvingCount() { this.revision.value; return [...this.bindings.values()].filter(b => b.state.phase === 'resolving').length }
   configure(enabled: boolean, autoReload = true) {
     const changed = enabled !== this.enabled
     this.enabled = enabled; this.autoReload = autoReload
+    if (!enabled) this.monitoringError.value = null
+    else if (this.listenerFailed) this.monitoringError.value = '实时事件订阅不可用，将在窗口获得焦点时检查。'
     if (changed) { this.signature = ''; this.reconcile(); if (enabled && this.started) this.checkAll() }
   }
   async start() {
     if (this.started || this.disposed) return
     this.started = true
     try {
+      this.lease = await this.files.gateway.beginExternalWatch?.() ?? 0
+      if (this.disposed) { await this.files.gateway.endExternalWatch?.(this.lease); return }
       this.unlisten = await this.files.gateway.listenExternal?.(hint => this.hint(hint))
       if (this.disposed) { this.unlisten?.(); this.unlisten = undefined; return }
-    } catch (e) { this.listenerFailed = true; this.monitoringError.value = `实时监测未启动，将在窗口获得焦点时检查：${message(e)}` }
+    } catch (e) { this.listenerFailed = true; if (this.enabled) this.monitoringError.value = `实时监测未启动，将在窗口获得焦点时检查：${message(e)}` }
     window.addEventListener('focus', this.onFocus)
+    try {
+      const release = await this.files.gateway.listenFocus?.(this.onFocus)
+      if (this.disposed) { release?.(); return }
+      this.unfocus = release
+    } catch { /* DOM focus remains available on older hosts. */ }
     this.signature = ''; this.reconcile()
     await this.watchWrites
     if (this.enabled) this.checkAll()
@@ -126,9 +138,9 @@ export class ExternalFileChangeController {
       this.watchWrites = this.watchWrites.then(async () => {
         if (this.disposed || generation !== this.generation) return
         try {
-          if (this.files.gateway.watchExternal) this.watchStatus.value = await this.files.gateway.watchExternal(this.enabled ? tokens : [], generation)
-          if (generation === this.generation && !this.listenerFailed) this.monitoringError.value = null
-        } catch (e) { if (generation === this.generation) this.monitoringError.value = message(e) }
+          if (this.files.gateway.watchExternal) this.watchStatus.value = await this.files.gateway.watchExternal(this.enabled ? tokens : [], generation, this.lease)
+          if (generation === this.generation && (!this.listenerFailed || !this.enabled)) this.monitoringError.value = null
+        } catch (e) { if (generation === this.generation && this.enabled) this.monitoringError.value = message(e) }
       })
     }
     if (changed) this.publish()
@@ -357,10 +369,13 @@ export class ExternalFileChangeController {
   }
   dispose() {
     if (this.disposed) return
-    this.disposed = true; this.generation++; this.stop(); this.unlisten?.(); window.removeEventListener('focus',this.onFocus)
+    this.disposed = true; this.generation++; this.stop(); this.unlisten?.(); this.unfocus?.(); window.removeEventListener('focus',this.onFocus)
     for (const b of this.bindings.values()) this.invalidateCheck(b)
     if (this.timer) clearTimeout(this.timer)
-    if (this.started) this.watchWrites = this.watchWrites.then(async () => { await this.files.gateway.watchExternal?.([],this.generation) }).catch(() => {})
+    if (this.started) this.watchWrites = this.watchWrites.then(async () => {
+      if (this.files.gateway.endExternalWatch) await this.files.gateway.endExternalWatch(this.lease)
+      else await this.files.gateway.watchExternal?.([],this.generation,this.lease)
+    }).catch(() => {})
     this.bindings.clear(); this.queued.clear(); this.diff.value = null; this.confirmation.value = null; this.listeners.clear()
   }
 }

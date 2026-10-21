@@ -239,6 +239,7 @@ pub fn run() {
             commands::files::open_recent, commands::files::reopen_file,
             commands::files::save_file, commands::files::release_file,
             commands::files::check_external_file, commands::files::read_external_file, commands::files::watch_external_files,
+            commands::files::begin_external_watch, commands::files::end_external_watch,
             commands::files::read_class_hex,
             commands::files::media_metadata,
             commands::files::read_media_chunk,

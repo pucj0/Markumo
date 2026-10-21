@@ -16,6 +16,7 @@ export function fileError(error: unknown) {
 export class FileController {
   readonly external: ExternalFileChangeController
   readonly saving = new Set<string>()
+  get activeOperationCount() { return this.saving.size + this.external.resolvingCount }
   workspaceBusy = false
   private disposed = false
   private automaticErrors = new Map<string, Set<string>>()

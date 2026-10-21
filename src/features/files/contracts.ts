@@ -36,8 +36,11 @@ export interface WatchStatus { watcherCount: number; directoryCount: number; fil
 export interface FileGateway {
   checkExternal?(token: string): Promise<string>
   readExternal?(token: string, expectedVersion: string, encoding: string): Promise<OpenFile>
-  watchExternal?(tokens: string[], generation: number): Promise<WatchStatus>
+  beginExternalWatch?(): Promise<number>
+  endExternalWatch?(lease: number): Promise<void>
+  watchExternal?(tokens: string[], generation: number, lease?: number): Promise<WatchStatus>
   listenExternal?(handler: (hint: ExternalFileHint) => void): Promise<() => void>
+  listenFocus?(handler: () => void): Promise<() => void>
   openDialog(encoding?: FileOpenEncoding): Promise<OpenBatch>
   openRecent(path: string, encoding?: FileOpenEncoding): Promise<OpenFile>
   drainPending(): Promise<OpenBatch>
