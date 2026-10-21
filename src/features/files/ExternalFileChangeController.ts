@@ -54,7 +54,7 @@ export class ExternalFileChangeController {
     this.stop = manager.subscribe(() => this.reconcile())
     this.reconcile()
   }
-  setRecoveryCheckpoint(checkpoint: (id: string) => Promise<boolean>) { this.beforeReload = checkpoint }
+  setRecoveryCheckpoint(checkpoint?: (id: string) => Promise<boolean>) { this.beforeReload = checkpoint }
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   private publish() { this.revision.value++; for (const listener of this.listeners) listener() }
   state(id: string) { this.revision.value; return this.bindings.get(id)?.state }
@@ -233,10 +233,17 @@ export class ExternalFileChangeController {
       }
     }
   }
-  private read(id: string, version: string): Promise<OpenFile> {
+  private async read(id: string, version: string): Promise<OpenFile> {
     const doc = this.manager.metadata(id)!
     if (!this.files.gateway.readExternal) return Promise.reject(Error('当前文件服务不支持安全重载。'))
-    return this.files.gateway.readExternal(doc.fileToken!, version, doc.kind === 'javaClass' ? 'ClassInfo' : doc.kind === 'image' || doc.kind === 'pdf' ? 'Media' : doc.encoding)
+    const token = doc.fileToken!
+    const file = await this.files.gateway.readExternal(token, version, doc.kind === 'javaClass' ? 'ClassInfo' : doc.kind === 'image' || doc.kind === 'pdf' ? 'Media' : doc.encoding)
+    // The file can change after the native read validates it but before its
+    // IPC result reaches this operation. Reject that stale result as well.
+    if (file.version !== version || await this.files.gateway.checkExternal!(token) !== version) {
+      throw { code: 'conflict', message: '读取期间磁盘版本再次变化，旧操作已失效，请重新加载并确认。' }
+    }
+    return file
   }
   private resolved(b: Binding, file: OpenFile) {
     b.state.phase = 'normal'; b.state.conflictValid = false; b.state.hidden = false; b.state.error = undefined
@@ -357,7 +364,7 @@ export class ExternalFileChangeController {
         throw Error('磁盘版本已变化，原确认已失效，请重新加载并确认。')
       }
       if (!valid()) throw Error('编辑内容已变化，请重新加载并确认。')
-      if (intent.dirty && this.beforeReload && !await this.beforeReload(intent.id)) throw Error('当前内容尚未可靠写入恢复快照，请先另存当前内容后再加载。')
+      if (intent.dirty && (!this.beforeReload || !await this.beforeReload(intent.id))) throw Error('当前内容尚未可靠写入恢复快照，请先另存当前内容后再加载。')
       if (!valid()) throw Error('快照保存期间内容已变化，请重新确认。')
       const file = await this.read(intent.id, intent.version)
       if (!valid()) throw Error('读取期间内容已变化，请重新确认。')

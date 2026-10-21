@@ -165,12 +165,25 @@ impl RecoveryService {
         Ok(dir.clone())
     }
 
+    fn transaction(&self) -> Result<fs::File, String> {
+        let path = self.directory()?.join(".recovery.lock");
+        if fs::symlink_metadata(&path).is_ok_and(|m| !m.is_file() || m.file_type().is_symlink()) {
+            return Err("恢复存储锁不是普通文件".into());
+        }
+        let lock = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+            .open(&path).map_err(|e| format!("打开恢复存储锁失败：{e}"))?;
+        restrict(&path, false);
+        lock.lock().map_err(|e| format!("锁定恢复存储失败：{e}"))?;
+        Ok(lock)
+    }
+
     pub fn list(&self) -> Result<RecoveryList, String> {
         // Hold the mutation lock only for pruning and reading records. The
         // summaries below probe the user's original paths, which can be slow
         // (for example a network file) and must not block a snapshot save.
         let (mut entries, warnings) = {
             let _guard = self.lock();
+            let _transaction = self.transaction()?;
             let dir = self.directory()?;
             let mut warnings = self.prune_files()?;
             let mut entries = Vec::new();
@@ -219,6 +232,8 @@ impl RecoveryService {
 
     pub fn read(&self, id: &str) -> Result<RecoveryRead, String> {
         validate_id(id)?;
+        let _guard = self.lock();
+        let _transaction = self.transaction()?;
         let path = self.directory()?.join(format!("{id}.json"));
         match read_record(&path, id, self.limits.records) {
             Ok((record, version)) => Ok(RecoveryRead { record, version }),
@@ -287,6 +302,7 @@ impl RecoveryService {
         // Serialize saves, deletes and pruning. Without this, a list()-driven
         // prune could remove a record between its version read and replacement.
         let _guard = self.lock();
+        let _transaction = self.transaction()?;
         let dir = self.directory()?;
         let (target, bytes, warnings) = if let Some(id) = requested_id {
             record.id = id.clone();
@@ -326,6 +342,7 @@ impl RecoveryService {
             .len();
         // Summary probing of the user's original path can be slow; do it after
         // releasing the snapshot mutation lock.
+        drop(_transaction);
         drop(_guard);
         Ok(RecoverySaveResult {
             record: summary(&record, size),
@@ -337,6 +354,7 @@ impl RecoveryService {
     pub fn delete(&self, id: &str) -> Result<(), String> {
         validate_id(id)?;
         let _guard = self.lock();
+        let _transaction = self.transaction()?;
         let path = self.directory()?.join(format!("{id}.json"));
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),

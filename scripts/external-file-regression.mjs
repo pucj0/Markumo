@@ -26,8 +26,9 @@ window.defer=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a
 window.flushChecks=async t=>{clearTimeout(t.external.timer);t.external.timer=undefined;await t.external.drain()}
 window.flushAuto=async t=>{clearTimeout(t.auto.timer);t.auto.timer=undefined;await t.auto.flush();clearTimeout(t.auto.timer);t.auto.timer=undefined}
 window.make=(options={})=>{
+ const {recoveryStore=new Map(),...fileOptions}=options
  const manager=new DocumentManager([],async()=>[]), notices=[],released=[],writes=[],subscriptions=[]
- let serial=1, content=options.text??'one\\ntwo\\n', disk={token:'token',path:'E:/isolated/note.'+(options.extension||'txt'),name:'note.'+(options.extension||'txt'),encoding:options.encoding||'UTF-8',bom:options.bom||false,eol:options.eol||'LF',readOnly:false,version:'hash1:8:1',text:content,kind:'text',...options}
+ let serial=1, content=options.text??'one\\ntwo\\n', disk={token:'token',path:'E:/isolated/note.'+(options.extension||'txt'),name:'note.'+(options.extension||'txt'),encoding:options.encoding||'UTF-8',bom:options.bom||false,eol:options.eol||'LF',readOnly:false,version:'hash1:8:1',text:content,kind:'text',...fileOptions}
  const t={manager,notices,released,writes,subscriptions,disk,checks:0,reads:0,error:null,readGate:null,checkGate:null,saveGate:null,listener:null}
  const gateway={release:async token=>released.push(token),
  checkExternal:async token=>{t.checks++;if(t.checkImpl)return t.checkImpl(token);const version=t.disk.version,error=t.error;if(t.checkGate)await t.checkGate.promise;if(error)throw error;return version},
@@ -39,7 +40,18 @@ window.make=(options={})=>{
  }
  const files=new FileController(manager,gateway,message=>notices.push(message)),external=files.external
  files.accept(disk); const id=manager.activeId
- Object.assign(t,{files,external,id,gateway,edit:(text='local')=>manager.dispatch(id,{changes:{from:manager.getState(id).doc.length,insert:text},annotations:isolateHistory.of('full')}),change:(text='external')=>{t.disk={...t.disk,text,version:'hash'+(++serial)+':'+text.length+':'+serial}},dispose:()=>{t.auto?.dispose();t.app?.unmount();files.dispose();manager.dispose();document.querySelector('#fixture').replaceChildren()}})
+ // Real controllers share this controllable persistent transport. Rust atomic
+ // semantics are covered separately by native tests, never inferred from Map.set.
+ const transport={records:recoveryStore,calls:[],removed:[],fail:false,gate:null,
+  summary:r=>({id:r.id,name:r.name,path:r.path,updatedAt:r.updatedAt,charCount:r.text.length,sizeBytes:new TextEncoder().encode(r.text).length,mode:r.mode,panes:r.panes,diskExists:!!r.path,diskChanged:r.diskVersion!==t.disk.version}),
+  async list(){return {records:[...recoveryStore.values()].map(r=>this.summary(r)),warnings:[]}},
+  async read(id){if(!recoveryStore.has(id))throw Error('missing snapshot');return {...recoveryStore.get(id)}},
+  async save(input){this.calls.push({...input});if(this.gate)await this.gate.promise;if(this.fail)throw Error('injected recovery write failure');if(input.id&&!recoveryStore.has(input.id))throw Error('stale update of deleted snapshot');const rid=input.id||crypto.randomUUID().replaceAll('-','');const r={...input,id:rid,schemaVersion:1,updatedAt:Date.now(),charCount:input.text.length,checksum:'controlled transport',diskSize:null,diskModifiedNs:null};recoveryStore.set(rid,r);return {record:this.summary(r),warnings:[]}},
+  async remove(id){this.removed.push(id);recoveryStore.delete(id)}}
+ const recovery=new RecoveryController(manager,files,transport,message=>notices.push(message),{debounceMs:10})
+ files.setSavedHandler(id=>recovery.onSaved(id));external.setRecoveryCheckpoint(id=>recovery.checkpointBeforeReload(id))
+ const ready=recovery.start()
+ Object.assign(t,{files,external,id,gateway,recovery,transport,ready,edit:(text='local')=>manager.dispatch(id,{changes:{from:manager.getState(id).doc.length,insert:text},annotations:isolateHistory.of('full')}),change:(text='external')=>{t.disk={...t.disk,text,version:'hash'+(++serial)+':'+text.length+':'+serial}},dispose:()=>{recovery.dispose();t.auto?.dispose();t.app?.unmount();files.dispose();manager.dispose();document.querySelector('#fixture').replaceChildren()}})
  return t
 }
 `)
@@ -238,6 +250,39 @@ try {
  await page.getByRole('button',{name:'关闭比较并返回编辑器'}).click()
  await page.evaluate(()=>window.ui.dispose())
  await test('24 a failed recovery snapshot write blocks the destructive disk reload',async()=>{const t=make();const recovery=new f.RecoveryController(t.manager,t.files,{list:async()=>({records:[],warnings:[]}),read:async()=>{throw Error('unused')},save:async()=>{throw Error('injected snapshot write failure')},remove:async()=>{}},()=>{},{debounceMs:15});try{t.external.setRecoveryCheckpoint(id=>recovery.checkpointBeforeReload(id));await recovery.start();t.edit();t.change();await t.external.check(t.id);await t.external.requestReload(t.id);ok(!await t.external.confirmReload(),'failed checkpoint must not reload');ok(t.manager.getText(t.id).includes('local'),'dirty buffer was discarded');ok(t.manager.metadata(t.id).dirty);ok((recovery.lastError.value||'').includes('injected snapshot write failure'))}finally{recovery.dispose();t.dispose()}})
+ await test('24 real recovery + external reload: exact A/B/C under one ID, ordinary save and restart retain the unclaimed checkpoint',async()=>{
+  const store=new Map(),t=make({recoveryStore:store});let restarted
+  try{
+   await t.ready
+   let rid,expected
+   for(const text of ['A','B','C']){t.edit(text);expected=t.manager.getText(t.id);await t.recovery.flushForClose();const r=[...store.values()][0];if(!rid)rid=r.id;ok(r.id===rid&&r.text===expected&&store.size===1,'continuous update must persist the exact latest body')}
+   t.change('external disk');await t.external.check(t.id);await t.external.requestReload(t.id);ok(await t.external.confirmReload(),'real checkpoint must permit reload')
+   ok(t.manager.getText(t.id)==='external disk'&&!t.manager.metadata(t.id).dirty)
+   ok(t.recovery.records.value.some(r=>r.id===rid),'detached checkpoint must be visible immediately')
+   t.recovery.close();await t.recovery.reload();ok(store.get(rid).text===expected)
+   t.edit(' saved B');await t.recovery.flushForClose();ok(store.size===2,'ordinary editing must own a new snapshot')
+   ok(await t.files.save(t.id));ok(store.size===1&&store.get(rid).text===expected,'ordinary save deleted checkpoint')
+   const disk={...t.disk};t.dispose()
+   restarted=make({...disk,recoveryStore:store});await restarted.ready
+   const listed=restarted.recovery.records.value.find(r=>r.id===rid);ok(listed,'checkpoint lost across restart')
+   ok(await restarted.recovery.restore(listed));const draft=restarted.manager.activeDocument
+   ok(!draft.path&&restarted.manager.getText(draft.id)===expected,'changed original must restore exact old body to independent draft')
+   ok(restarted.manager.getText(restarted.id)===disk.text,'restore changed original B')
+   await restarted.recovery.open();await restarted.recovery.discardDocument(draft.id);ok(!store.has(rid),'explicit document discard must remove its claimed snapshot')
+  }finally{if(restarted)restarted.dispose();else t.dispose()}
+ })
+ await test('25 a failed forced checkpoint cannot reuse a previous successful same-Text receipt',async()=>{
+  const t=make();try{await t.ready;t.edit(' A');await t.recovery.flushForClose();const r=[...t.transport.records.values()][0],before=JSON.stringify(r),local=t.manager.getText(t.id),depth=f.undoDepth(t.manager.getState(t.id));t.transport.fail=true;t.change('external');await t.external.check(t.id);await t.external.requestReload(t.id);ok(!await t.external.confirmReload(),'failed current write must block destructive reload');ok(t.manager.getText(t.id)===local&&t.manager.metadata(t.id).dirty);ok(f.undoDepth(t.manager.getState(t.id))===depth);ok(JSON.stringify(t.transport.records.get(r.id))===before,'last valid snapshot changed on failure');ok(t.recovery.lastError.value.includes('injected recovery write failure'));ok(t.external.blocked(t.id));ok(await t.files.autoSave(t.id)==='skipped');t.transport.fail=false;await t.external.requestReload(t.id);ok(await t.external.confirmReload());ok(t.transport.records.get(r.id).text===local)}finally{t.dispose()}
+ })
+ await test('26 local edits during checkpoint invalidate reload, preserve the new buffer and keep autosave paused',async()=>{
+  const t=make();try{await t.ready;t.edit(' A');await t.recovery.flushForClose();t.change('external');await t.external.check(t.id);await t.external.requestReload(t.id);t.transport.gate=defer();const before=t.transport.calls.length,pending=t.external.confirmReload();while(t.transport.calls.length===before)await new Promise(r=>setTimeout(r,0));t.edit(' C during snapshot');t.transport.gate.resolve();ok(!await pending);ok(t.manager.getText(t.id).endsWith(' C during snapshot'));ok(t.manager.metadata(t.id).dirty&&t.external.blocked(t.id));ok(await t.files.autoSave(t.id)==='skipped');t.transport.gate=null;await t.recovery.flushForClose();ok([...t.transport.records.values()].some(r=>r.text===t.manager.getText(t.id)))}finally{t.dispose()}
+ })
+ await test('27 a file changed after read delivery invalidates the old operation without losing its local checkpoint',async()=>{
+  const t=make();try{await t.ready;t.edit(' local');const local=t.manager.getText(t.id);t.change('disk A');await t.external.check(t.id);await t.external.requestReload(t.id);const read=t.gateway.readExternal;t.gateway.readExternal=async(...args)=>{const snapshot=await read(...args);t.change('disk B after read');return snapshot};ok(!await t.external.confirmReload());ok(t.manager.getText(t.id)===local&&t.manager.metadata(t.id).dirty);ok([...t.transport.records.values()].some(r=>r.text===local));ok(t.external.blocked(t.id));await t.recovery.open();ok(t.recovery.records.value.length>0)}finally{t.dispose()}
+ })
+ await test('28 missing recovery protection fails closed; same-path Save As and blocked autosave never write the conflict file',async()=>{
+  const t=make();try{await t.ready;t.edit(' local');t.change('external');await t.external.check(t.id);t.external.setRecoveryCheckpoint(undefined);await t.external.requestReload(t.id);ok(!await t.external.confirmReload());t.target={token:'extra',path:'e:\\isolated\\NOTE.txt',version:t.disk.version};ok(!await t.files.save(t.id,true));ok(t.released.includes('extra'));ok(await t.files.autoSave(t.id)==='skipped');ok(t.writes.length===0&&t.manager.metadata(t.id).dirty)}finally{t.dispose()}
+ })
  assert.deepEqual(errors,[])
  fs.writeFileSync(`${output}/results.json`,JSON.stringify({results,eventMetrics},null,2))
  console.log(`PASS ${results.length} groups; event metrics ${JSON.stringify(eventMetrics)}`)
