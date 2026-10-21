@@ -257,7 +257,7 @@ export class CodeBlockView implements NodeView {
     this.dom.classList.toggle('is-focused', isFocused)
   }
 
-  private setMermaidEditing(editing: boolean) {
+  setMermaidEditing(editing: boolean) {
     if (this.isMermaid && !this.themeObserver) {
       let light = document.body.classList.contains('light')
       this.themeObserver = new MutationObserver(() => {

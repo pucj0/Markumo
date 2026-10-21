@@ -17,6 +17,7 @@ import { CodeBlockView } from './CodeBlockView'
 import { LiveImageView } from './LiveImageView'
 import { ImagePreview } from './ImagePreview'
 import { FenceAutocomplete } from './FenceAutocomplete'
+import { LiveSlashController } from '../slash/LiveSlashController'
 import { HtmlBlockView } from './HtmlBlockView'
 import { HtmlInlineView } from './HtmlInlineView'
 import { HtmlSourceView, isHtmlSourceNode } from './HtmlSourceView'
@@ -61,6 +62,7 @@ export class MarkdownEditorController implements LiveEditor {
   private properties = document.createElement('div')
   private searchController: LiveSearchController
   private fenceAutocomplete: FenceAutocomplete
+  private slashController: LiveSlashController
   private codeViews = new Set<CodeBlockView>()
   private liveImages = new Set<LiveImageView>()
   private htmlViews = new Set<HtmlSourceView>()
@@ -69,6 +71,7 @@ export class MarkdownEditorController implements LiveEditor {
   private onCompositionStart = () => {
     this.compositionActive = true
     this.fenceAutocomplete?.hide()
+    this.slashController?.close()
     queueMicrotask(() => { if (!this.disposed) this.options.compositionChanged?.() })
   }
   private settings: MarkdownTypography
@@ -111,6 +114,7 @@ export class MarkdownEditorController implements LiveEditor {
         this.pendingSource = null
         this.sync(source)
       }
+      if (!this.disposed) this.slashController?.update()
     }, 0)
   }
 
@@ -151,6 +155,7 @@ export class MarkdownEditorController implements LiveEditor {
     parent.append(this.dom)
     this.imagePreview = new ImagePreview(this.dom)
     this.fenceAutocomplete = new FenceAutocomplete(this.dom)
+    this.slashController = new LiveSlashController(this, this.dom)
 
     // Input Rules
     const rules = inputRules({
@@ -226,6 +231,20 @@ export class MarkdownEditorController implements LiveEditor {
             }
             return DecorationSet.create(state.doc, decorations)
           } } }),
+          new Plugin({
+            props: {
+              handleKeyDown: (_view, event) => {
+                if (this.shortcut(event)) return true
+                if (this.slashController?.handleKeyDown(event)) {
+                  return true
+                }
+                if (this.fenceAutocomplete?.handleKeyDown(event)) {
+                  return true
+                }
+                return false
+              },
+            },
+          }),
           keymap({
             'Mod-z': () => { options.history(false); return true },
             'Mod-y': () => { options.history(true); return true },
@@ -305,13 +324,6 @@ export class MarkdownEditorController implements LiveEditor {
           gapCursor(),
           new Plugin({
             props: {
-              handleKeyDown: (_view, event) => {
-                if (this.shortcut(event)) return true
-                if (this.fenceAutocomplete?.handleKeyDown(event)) {
-                  return true
-                }
-                return false
-              },
               handleTextInput: (view,from,to,text) => {
                 if(view.composing||this.compositionActive||!text.includes('>'))return false
                 const $from=view.state.doc.resolve(from)
@@ -350,6 +362,7 @@ export class MarkdownEditorController implements LiveEditor {
                   event.preventDefault()
                   this.properties.hidden = true
                   this.fenceAutocomplete.hide()
+                  this.slashController?.close()
                   const caret = keyboard ? view.coordsAtPos(view.state.selection.from) : null
                   this.contextMenu.open(caret?.left ?? event.clientX, caret?.bottom ?? event.clientY, this.contextEntries(event.target as Element), keyboard)
                   return true
@@ -362,6 +375,7 @@ export class MarkdownEditorController implements LiveEditor {
                   if (!this.properties.hidden && !(event.target as Element).closest('.md-properties')) {
                     this.properties.hidden = true
                   }
+                  this.slashController?.close()
                   return this.activateMark(view,event)
                 }
                 return this.activateLink(view,event)
@@ -630,6 +644,7 @@ export class MarkdownEditorController implements LiveEditor {
         this.options.selected(sel.anchor, sel.head)
         this.scheduleInlineEntry()
         this.updateFenceAutocomplete()
+        this.slashController?.update()
         return
       }
       const prepared = this.bridge.prepare(applied.state.doc, tr.getMeta('inlineSourcePatch') as SourcePatch | undefined)
@@ -649,6 +664,7 @@ export class MarkdownEditorController implements LiveEditor {
       const sel = this.selection
       this.options.selected(sel.anchor, sel.head)
       this.updateFenceAutocomplete()
+      this.slashController?.update()
     } catch (error) {
       notice(`Markdown 修改未应用：${String(error)}`)
     }
@@ -658,6 +674,7 @@ export class MarkdownEditorController implements LiveEditor {
     if (this.disposed || source === this.bridge.source) return
     cancelSmoothScroll(this.dom)
     this.contextMenu.close()
+    this.slashController?.close()
     if (this.composing) {
       this.pendingSource = source
       return
@@ -1776,6 +1793,7 @@ export class MarkdownEditorController implements LiveEditor {
     this.contextMenu.close()
     this.imagePreview.destroy()
     this.fenceAutocomplete?.destroy()
+    this.slashController?.destroy()
     this.disposed = true
     this.inlineSource?.destroy()
     this.inlineSource = null

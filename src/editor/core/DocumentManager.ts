@@ -21,6 +21,7 @@ import { markdownFormatTransaction, markdownSelectionInCodeBlock, type MarkdownF
 import { captureLineBaseline, savedLineBaseline } from './changeGutter'
 import { createMarkdownResources, markdownResources, refreshMarkdownResources } from '../markdown/images'
 import { imageImportBookmarks } from '../markdown/imageImport'
+import { sourceSlashExtension } from '../markdown/slash/SourceSlashExtension'
 import { sameFilePath } from '../../features/files/pathKey'
 import { isMedia, type MediaViewState } from '../../features/files/media'
 import { MediaDocumentStore } from './mediaDocumentStore'
@@ -179,6 +180,7 @@ export class DocumentManager {
         caret.of(smoothCaret(this.caretAnimation)),
         imageImportBookmarks,
         markdownResources.of(createMarkdownResources(() => this.records.get(seed.id)?.meta.fileToken,()=>{const meta=this.records.get(seed.id)?.meta;return `${meta?.fileToken||''}|${meta?.path||''}`})),
+        isMd ? sourceSlashExtension() : [],
         binary ? [EditorState.readOnly.of(true), EditorView.editable.of(false), EditorState.transactionFilter.of(tr => tr.docChanged ? [] : tr)] : [],
         indent.of([EditorState.tabSize.of(this.indentSize), indentUnit.of(this.useTabs ? '\t' : ' '.repeat(this.indentSize))]),
         Prec.highest(keymap.of([
