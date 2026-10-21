@@ -175,6 +175,8 @@ $$
     await page.evaluate(()=>window.t.manager.command('redo'))
     await page.waitForFunction(()=>document.querySelector('.split-preview-content a')?.getAttribute('href')==='https://new.example/')
     await page.evaluate(()=>{window.t.manager.closePane(window.otherPane);window.otherHost.remove()})
+    if (!await page.locator('.md-reference-source').first().evaluate(el=>el.open)) await page.locator('.md-reference-source summary').first().click()
+    assert.equal(await page.locator('.md-reference-source textarea').first().isVisible(),true)
     await page.screenshot({path:`${output}/phase03-reference-edit.png`})
   })
   await test('YAML, footnotes, TOC, callouts, HTML and unknown extensions keep their own presentations/source access',async()=>{
