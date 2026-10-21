@@ -615,9 +615,43 @@ body.light .file-icon-gray { color: #6c7c92; }
   height: auto;
 }
 
-.markdown-live .md-math-source { display: block; width: 100%; box-sizing: border-box; resize: vertical; padding: 8px; border: 0; border-bottom: 1px solid var(--line); outline: none; background: var(--md-code-bg); color: var(--text); font: 13px/1.6 var(--font-mono); }
-.markdown-live .md-inline-math .md-math-source { display: inline-block; width: 18em; max-width: 100%; height: 2em; resize: none; vertical-align: middle; padding: 2px 4px; }
-.markdown-live .md-math-editing { outline: 1px solid var(--line); }
+.markdown-live .md-math-source {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 8px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  outline: none;
+  background: var(--md-code-bg);
+  color: var(--text);
+  font: 13px/1.6 var(--font-mono);
+  caret-color: var(--bright) !important;
+  cursor: text !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+.markdown-live .md-inline-math .md-math-source {
+  display: inline-block;
+  width: 18em;
+  max-width: 100%;
+  height: 2em;
+  resize: none;
+  vertical-align: middle;
+  padding: 2px 4px;
+  caret-color: var(--bright) !important;
+  cursor: text !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+.markdown-live .md-math-editing {
+  outline: 1px solid var(--line);
+  cursor: default !important;
+}
+.markdown-live .md-math-editing .md-math-source {
+  cursor: text !important;
+}
 
 /* Anchored Popovers (for Link, Image, Inline Math) */
 .markdown-live .md-anchored-popover {

@@ -32,6 +32,7 @@ const SMOKE_TESTS = [
   'scripts/conversion-regression.mjs',
   'scripts/recovery-regression.mjs',
   'scripts/slash-commands-regression.mjs',
+  'scripts/math-editor-regression.mjs',
 ]
 
 // Full regression suite: all existing regression scripts
@@ -40,6 +41,7 @@ const FULL_REGRESSION_TESTS = [
   'scripts/markdown-live-controller-full-regression.mjs',
   'scripts/markdown-live-toolbar-regression.mjs',
   'scripts/slash-commands-regression.mjs',
+  'scripts/math-editor-regression.mjs',
   'scripts/markdown-undo-regression.mjs',
   'scripts/diagram-security-regression.mjs',
   'scripts/settings-keybindings-regression.mjs',

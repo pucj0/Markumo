@@ -9,9 +9,9 @@
     ]"
     @focusin="manager.focusPane(paneId, false)"
     @mousedown="manager.focusPane(paneId, false)"
-    @dragover.prevent="handleDragOver"
+    @dragover="handleDragOver"
     @dragleave="handleDragLeave"
-    @drop.prevent.stop="handleDrop"
+    @drop="handleDrop"
   >
     <TabBar
       :docs="paneDocs"
@@ -264,6 +264,12 @@ function handleDragLeave(event: DragEvent) {
 }
 
 function handleDrop(event: DragEvent) {
+  const types = event.dataTransfer?.types || []
+  if (!types.includes('application/x-markumo-tab') && !types.includes('application/x-markumo-file')) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
   const body = paneContainer.value?.querySelector<HTMLElement>('.pane-body') || paneContainer.value
   const zone = (event.target as Element).closest('.tabs') || !body
     ? 'center' : resolvePaneDropZone(body.getBoundingClientRect(), event.clientX, event.clientY)

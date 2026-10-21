@@ -1529,21 +1529,68 @@ export class MarkdownEditorController implements LiveEditor {
     dom.append(input, preview)
     let generation = 0
     let dead = false
-    const latex = () => display ? String(node.attrs.source).trim().slice(2, -2).trim() : node.attrs.latex
+    let isEditing = false
+    let selfDispatch = false
+
+    const latex = () => {
+      if (!display) return node.attrs.latex || ''
+      const src = String(node.attrs.source || '').trim()
+      if (src.startsWith('$$') && src.endsWith('$$') && src.length >= 4) {
+        let inner = src.slice(2, -2)
+        if (inner.startsWith('\r\n')) inner = inner.slice(2)
+        else if (inner.startsWith('\n')) inner = inner.slice(1)
+        if (inner.endsWith('\r\n')) inner = inner.slice(0, -2)
+        else if (inner.endsWith('\n')) inner = inner.slice(0, -1)
+        return inner
+      }
+      return src
+    }
+
     const render = () => {
       const request = ++generation
       void import('./renderers').then(renderer => renderer.renderMath(preview, latex(), display, () => !dead && request === generation))
         .catch(error => { if (!dead && request === generation) preview.textContent = `公式无法渲染：${String(error)}` })
     }
     render()
-    const finish = () => { input.hidden = true; dom.classList.remove('md-math-editing') }
+
+    const finish = () => {
+      if (dead) return
+      isEditing = false
+      input.hidden = true
+      dom.classList.remove('md-math-editing')
+      dom.title = '点击编辑公式'
+    }
+
+    const startEdit = () => {
+      const pos = getPos()
+      if (dead || this.options.readOnly?.() || pos === undefined || view.state.doc.nodeAt(pos) !== node) return
+      this.closeInline()
+      this.properties.hidden = true
+      isEditing = true
+      input.value = latex()
+      input.hidden = false
+      dom.classList.add('md-math-editing')
+      dom.removeAttribute('title')
+      input.focus()
+      const len = input.value.length
+      input.setSelectionRange(len, len)
+    }
+
     input.oninput = () => {
       const pos = getPos()
       if (dead || input.hidden || this.options.readOnly?.() || pos === undefined || view.state.doc.nodeAt(pos) !== node || this.compositionActive) return
-      const attrs = display ? { ...node.attrs, source: `$$\n${input.value}\n$$` } : { ...node.attrs, latex: input.value }
-      view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, attrs))
+      const val = input.value
+      const attrs = display ? { ...node.attrs, source: `$$\n${val}\n$$` } : { ...node.attrs, latex: val }
+      selfDispatch = true
+      try {
+        view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, attrs))
+      } finally {
+        selfDispatch = false
+      }
     }
+
     input.addEventListener('compositionend', () => { queueMicrotask(() => { if (!dead) input.oninput?.(new Event('input')) }) })
+
     input.onkeydown = event => {
       if (event.isComposing) return
       if ((event.ctrlKey || event.metaKey) && ['f','r'].includes(event.key.toLowerCase())) {
@@ -1558,12 +1605,29 @@ export class MarkdownEditorController implements LiveEditor {
         if (pos !== undefined) { view.dispatch(view.state.tr.setSelection(Selection.near(view.state.doc.resolve(pos + node.nodeSize)))); view.focus() }
       }
     }
-    input.onblur = () => { if (!this.compositionActive) finish() }
-    preview.onclick = () => {
-      const pos = getPos()
-      if (dead || this.options.readOnly?.() || pos === undefined || view.state.doc.nodeAt(pos) !== node) return
-      this.closeInline(); this.properties.hidden = true
-      input.value = latex(); input.hidden = false; dom.classList.add('md-math-editing'); input.focus()
+
+    input.onblur = (event: FocusEvent) => {
+      if (this.compositionActive) return
+      const related = event.relatedTarget instanceof globalThis.Node ? event.relatedTarget : null
+      if (related && dom.contains(related)) return
+      queueMicrotask(() => {
+        if (!dead && isEditing && !dom.contains(document.activeElement)) {
+          finish()
+        }
+      })
+    }
+
+    preview.onmousedown = event => {
+      if (isEditing) {
+        event.preventDefault()
+      }
+    }
+
+    dom.onclick = () => {
+      if (dead || this.options.readOnly?.()) return
+      if (input.hidden) {
+        startEdit()
+      }
     }
 
     return {
@@ -1575,11 +1639,32 @@ export class MarkdownEditorController implements LiveEditor {
         if (display && !/^\$\$[\s\S]*\$\$$/.test(String(next.attrs.source).trim())) return false
         const previous = latex()
         node = next
-        if (input.value !== latex() && !input.hidden) { input.value = latex(); finish() }
+        if (isEditing) {
+          if (selfDispatch) {
+            if (latex() !== previous) render()
+            return true
+          }
+          const newLatex = latex()
+          if (newLatex !== input.value) {
+            const selStart = input.selectionStart
+            const selEnd = input.selectionEnd
+            input.value = newLatex
+            if (document.activeElement === input) {
+              input.setSelectionRange(Math.min(selStart, newLatex.length), Math.min(selEnd, newLatex.length))
+            }
+            render()
+          }
+          return true
+        }
         if (latex() !== previous) render()
         return true
       },
-      destroy: () => { dead = true; generation++; preview.onclick = null },
+      destroy: () => {
+        dead = true
+        generation++
+        dom.onclick = null
+        preview.onmousedown = null
+      },
     }
   }
 
