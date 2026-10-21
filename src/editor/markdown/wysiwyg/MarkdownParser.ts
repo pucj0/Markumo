@@ -3,8 +3,10 @@ import { inlineHtmlRanges } from './HtmlSourceRanges'
 import { MarkdownParser, defaultMarkdownParser } from 'prosemirror-markdown'
 import type { Node } from 'prosemirror-model'
 import { markdownSchema as s } from './MarkdownSchema'
+import { installMarkdownMath } from '../mathSemantics'
 
 export const tokenizer = new MarkdownIt('commonmark', {html:true,linkify:true}).enable(['table','strikethrough','linkify'])
+installMarkdownMath(tokenizer)
 const tokens = { ...defaultMarkdownParser.tokens,
   table:{block:'table'}, thead:{ignore:true}, tbody:{ignore:true}, tr:{block:'table_row'},
   th:{block:'table_header',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({align:String(tok.attrGet('style')||'').replace('text-align:','') || null})},
@@ -19,34 +21,11 @@ const tokens = { ...defaultMarkdownParser.tokens,
   bullet_list:{...defaultMarkdownParser.tokens.bullet_list,getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({bullet:tok.markup,tight:true})},
   list_item:{block:'list_item',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({checked:tok.meta?.checked ?? null})},
 }
-// A formula is one source atom even when its body contains blank lines.
-// CommonMark paragraph ranges would otherwise split $$...$$ into several blocks.
-tokenizer.block.ruler.before('fence','markumo_math_block',(state,startLine,endLine,silent)=>{
-  if(state.sCount[startLine]-state.blkIndent>=4)return false
-  const from=state.bMarks[startLine]+state.tShift[startLine]
-  if(!state.src.startsWith('$$',from))return false
-  for(let line=startLine;line<endLine;line++){
-    const end=state.eMarks[line],text=state.src.slice(state.bMarks[line],end)
-    if(!/\$\$[ \t]*$/.test(text)||line===startLine&&state.src.slice(from,end).trimEnd().length<4)continue
-    if(silent)return true
-    const token=state.push('math_block','div',0)
-    token.block=true;token.map=[startLine,line+1];token.content=state.src.slice(from,end)
-    state.line=line+1
-    return true
-  }
-  return false
-})
-tokenizer.inline.ruler.before('escape','markumo_math_footnotes',(state,silent)=>{
-  const rest=state.src.slice(state.pos),note=/^\[\^([^\]\n]+)\]/.exec(rest)
-  if(note){if(!silent){const token=state.push('footnote_reference','sup',0);token.content=note[1]}state.pos+=note[0].length;return true}
-  if(rest[0]!=='$'||rest[1]==='$')return false
-  let end=1;while((end=rest.indexOf('$',end))>=0){
-    let escapes=0;for(let i=end-1;i>=0&&rest[i]==='\\';i--)escapes++
-    if(escapes%2===0)break
-    end++
-  }
-  if(end<1||rest.slice(1,end).includes('\n'))return false
-  if(!silent){const token=state.push('math_inline','span',0);token.content=rest.slice(1,end)}state.pos+=end+1;return true
+tokenizer.inline.ruler.before('escape','markumo_footnotes',(state,silent)=>{
+  const note=/^\[\^([^\]\n]+)\]/.exec(state.src.slice(state.pos))
+  if(!note)return false
+  if(!silent){const token=state.push('footnote_reference','sup',0);token.content=note[1]}
+  state.pos+=note[0].length;return true
 })
 // Task syntax becomes a real list-item attribute. No checkbox state lives only in DOM.
 tokenizer.core.ruler.after('inline','markumo_tasks', state => {

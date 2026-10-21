@@ -6,6 +6,16 @@ import { parser } from '@lezer/markdown'
 import { imageDestination } from './images'
 import { markdownSemantics, markdownSyntaxExtensions } from './semantics'
 import { sanitizeHtml } from './html/SafeHtmlRenderer'
+import { installMarkdownMath, mathBlockParts } from './mathSemantics'
+export interface PreviewSlot { id: string; kind: 'math-inline' | 'math-block'; source: string }
+export interface PreviewEnvironment extends Record<PropertyKey, unknown> { slots?: PreviewSlot[]; slotPrefix?: string }
+export function previewSlot(env: PreviewEnvironment, kind: PreviewSlot['kind'], source: string) {
+  env.slots ??= []
+  env.slotPrefix ??= `md-${crypto.randomUUID()}`
+  const id = `${env.slotPrefix}-${env.slots.length}`
+  env.slots.push({ id, kind, source })
+  return id
+}
 const imageParser=parser.configure(markdownSyntaxExtensions)
 
 // Shared semantics: GFM tables/tasks, literal punctuation, visible soft line breaks,
@@ -14,6 +24,14 @@ export { markdownSemantics } from './semantics'
 export { fenceLanguage } from '../languages'
 export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
   const md = new MarkdownIt(markdownSemantics)
+  installMarkdownMath(md)
+  for (const type of ['math_inline', 'math_block']) md.renderer.rules[type] = (tokens, index, _options, env: PreviewEnvironment = {}) => {
+    const block = type === 'math_block', token = tokens[index]
+    const source = block ? mathBlockParts(token.content)?.value ?? token.content : token.content
+    const id = previewSlot(env, block ? 'math-block' : 'math-inline', source)
+    const tag = block ? 'div' : 'span'
+    return `<${tag} class="${block ? 'md-math-output' : 'md-inline-math'}" data-md-render="${id}"${token.map ? ` data-source-line="${token.map[0] + 1}"` : ''}></${tag}>`
+  }
   const languages = new Map<LanguageName, LanguageSupport | null>()
   const pending = new Set<LanguageName>()
   md.options.highlight = (code, info) => {

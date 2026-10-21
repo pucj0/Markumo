@@ -1,10 +1,7 @@
 import { textPatch, type SourcePatch } from './MarkdownSourceBridge'
 
 /** Strip only delimiter-adjacent line breaks. Spaces belong to the source. */
-export function mathBlockParts(source: string) {
-  const match = /^([ \t]*\$\$(?:\r?\n)?)([\s\S]*?)((?:\r?\n)?\$\$[ \t]*)$/.exec(source)
-  return match ? { opening: match[1], value: match[2], closing: match[3] } : null
-}
+export { mathBlockParts } from '../mathSemantics'
 
 export interface MathSelection { start: number; end: number; direction: 'forward' | 'backward' | 'none' }
 

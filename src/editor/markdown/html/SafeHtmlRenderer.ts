@@ -17,7 +17,7 @@ const ALLOWED_ATTR = [
   'href', 'target', 'rel',
   'src', 'alt', 'width', 'height', 'loading',
   'colspan', 'rowspan', 'headers', 'scope', 'align', 'valign',
-  'open', 'data-source-line', 'data-md-copy', 'data-line', 'viewbox', 'viewBox', 'fill', 'stroke', 'stroke-width', 'd',
+  'open', 'data-source-line', 'data-md-copy', 'data-md-render', 'data-line', 'viewbox', 'viewBox', 'fill', 'stroke', 'stroke-width', 'd',
   'x', 'y', 'x1', 'x2', 'y1', 'y2', 'cx', 'cy', 'r', 'rx', 'ry', 'points', 'transform', 'xmlns',
 ]
 

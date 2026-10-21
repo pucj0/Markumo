@@ -16,7 +16,8 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import { openMarkdownLink } from './links'
-import { createMarkdownRenderer } from './rendering'
+import { createMarkdownRenderer, type PreviewEnvironment } from './rendering'
+import { renderMath } from './wysiwyg/renderers'
 import { createMarkdownResources, mountMarkdownImage, type MarkdownResources } from './images'
 import { textClipboard } from '../../features/shell/clipboard'
 import { htmlForPreview, mountHtmlImages, type MountedImageHandle } from './html/SafeHtmlRenderer'
@@ -61,20 +62,22 @@ onUnmounted(() => {
   mountedHtmlImages = undefined
 })
 
-const renderedHtml = computed(() => {
+const rendered = computed(() => {
   revision.value
   if (props.tooLarge || previewText.value.length > 1024 * 1024) {
-    return '<p>文档较大，已暂停只读预览；源码仍可编辑。</p>'
+    return { html: '<p>文档较大，已暂停只读预览；源码仍可编辑。</p>', slots: [] }
   }
-  const tokens = md.parse(previewText.value || '', {})
+  const environment: PreviewEnvironment = { slots: [] }
+  const tokens = md.parse(previewText.value || '', environment)
   for (const token of tokens) {
     if (token.map && token.nesting === 1 && token.level === 0) {
       token.attrSet('data-source-line', String(token.map[0] + 1))
     }
   }
-  const rawRendered = md.renderer.render(tokens, md.options, {})
-  return htmlForPreview(rawRendered)
+  const rawRendered = md.renderer.render(tokens, md.options, environment)
+  return { html: htmlForPreview(rawRendered), slots: environment.slots || [] }
 })
+const renderedHtml = computed(() => rendered.value.html)
 
 const fallbackResources = createMarkdownResources(() => undefined)
 
@@ -86,6 +89,16 @@ watch([renderedHtml, () => props.resources, () => props.resourceKey], async () =
 
   await nextTick()
   if (disposed || generation !== hydrateGeneration) return
+
+  const slots = new Map(rendered.value.slots.map(slot => [slot.id, slot]))
+  for (const host of contentRef.value?.querySelectorAll<HTMLElement>('[data-md-render]') || []) {
+    const slot = slots.get(host.dataset.mdRender || '')
+    if (!slot) continue
+    const current = () => !disposed && generation === hydrateGeneration && snapshot === props.content
+    void renderMath(host, slot.source, slot.kind === 'math-block', current).catch(error => {
+      if (host.isConnected && current()) { host.classList.add('md-render-error'); host.textContent = String(error instanceof Error ? error.message : error) }
+    })
+  }
 
   // 绑定代码块复制按钮
   for (const button of Array.from(contentRef.value?.querySelectorAll<HTMLButtonElement>('[data-md-copy]') || [])) {
@@ -229,6 +242,11 @@ defineExpose({ syncScroll })
   line-height: 1.65;
   box-sizing: border-box;
 }
+:deep(.md-math-output) { margin: 1em 0; max-width: 100%; overflow-x: auto; text-align: center; }
+:deep(.md-math-output .katex-display) { margin: 0; }
+:deep(.md-math-output .katex-display > .katex) { white-space: nowrap; }
+:deep(.md-inline-math) { display: inline; }
+:deep(.md-render-error) { color: var(--pink); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* 标题样式：对齐 Markdown Live / Typora */
 :deep(h1), :deep(h2), :deep(h3), :deep(h4), :deep(h5), :deep(h6) {
