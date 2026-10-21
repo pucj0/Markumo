@@ -814,7 +814,9 @@ body.light .file-icon-gray { color: #6c7c92; }
 .markdown-live .md-protected textarea {
   display: block;
   width: 100%;
-  min-height: 120px;
+  min-height: 48px;
+  max-height: 280px;
+  box-sizing: border-box;
   resize: vertical;
   background: var(--editor);
   color: var(--text);
@@ -823,6 +825,10 @@ body.light .file-icon-gray { color: #6c7c92; }
   white-space: pre;
   font: 13px/1.6 var(--font-mono);
 }
+.markdown-live .md-reference-source { margin: .25em 0; border: 0; background: transparent; font: 12px/1.5 var(--font-sans); }
+.markdown-live .md-reference-source summary { padding: 2px 0; opacity: .65; }
+.markdown-live .md-reference-source[open] { border: 1px solid var(--line); border-radius: 4px; }
+.markdown-live .md-reference-source[open] summary { padding: 4px 8px; }
 
 .markdown-live .md-math-output {
   overflow: auto;

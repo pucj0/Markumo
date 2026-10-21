@@ -57,14 +57,14 @@ export class MarkdownSourceBridge {
       // missing blocks must not count as the same existing first block.
       const prefix = !blocks.length ? (old && old === this.blocks[0] ? old.prefix : '') : (old ? old.prefix || (!raw.startsWith('\n') ? '\n\n' : '') : (!raw.startsWith('\n') ? '\n\n' : ''))
       source+=prefix;const from=source.length;source+=raw
-      if(node.type.name==='protected_source' && !old?.node.eq(node) && /^\s*\[[^\]]+\]:/m.test(raw))definitionsChanged=true
+      if(node.type.name==='protected_source' && !old?.node.eq(node) && (node.attrs.kind === 'reference' || old?.node.attrs.kind === 'reference' || /^\s*\[[^\]]+\]:/m.test(raw)))definitionsChanged=true
       blocks.push({id,from,to:source.length,raw,prefix,node})
     })
     if(inlinePatch&&!inlineApplied)throw new Error('局部源码目标已失效，拒绝修改。')
     source+=this.tail
     const patch=textPatch(this.source,source)
-    if(this.blocks.some(block=>!used.has(block.id)&&/^\s*\[[^\]]+\]:/m.test(block.raw)))definitionsChanged=true
-    return {source,patch,commit:()=>{this.source=source;this.doc=withoutTrailingParagraph(doc);this.blocks=blocks;if(definitionsChanged)this.environment=parseMarkdown(source).environment}}
+    if(this.blocks.some(block=>!used.has(block.id)&&(block.node.attrs.kind === 'reference'||/^\s*\[[^\]]+\]:/m.test(block.raw))))definitionsChanged=true
+    return {source,patch,definitionsChanged,commit:()=>{this.source=source;this.doc=withoutTrailingParagraph(doc);this.blocks=blocks;if(definitionsChanged)this.environment=parseMarkdown(source).environment}}
   }
   sourcePosition(pos:number){
     let offset=0

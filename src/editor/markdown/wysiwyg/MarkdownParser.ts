@@ -7,11 +7,18 @@ import { installMarkdownMath } from '../mathSemantics'
 
 export const tokenizer = new MarkdownIt('commonmark', {html:true,linkify:true}).enable(['table','strikethrough','linkify'])
 installMarkdownMath(tokenizer)
+// Markdown-it strips its hidden definition tokens before inline parsing. Keep
+// the native ranges out-of-band before that step; do not reimplement its grammar.
+const referenceDefinitions = new WeakMap<object, ReturnType<typeof tokenizer.parse>>()
+tokenizer.core.ruler.before('strip_references', 'markumo_reference_ranges', state => {
+  referenceDefinitions.set(state.env, state.tokens.filter(token => token.type === 'reference_definition' && token.level === 0))
+})
 const tokens = { ...defaultMarkdownParser.tokens,
   table:{block:'table'}, thead:{ignore:true}, tbody:{ignore:true}, tr:{block:'table_row'},
   th:{block:'table_header',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({align:String(tok.attrGet('style')||'').replace('text-align:','') || null})},
   td:{block:'table_cell',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({align:String(tok.attrGet('style')||'').replace('text-align:','') || null})},
   s:{mark:'strike'}, softbreak:{node:'soft_break'},
+  reference_definition:{ignore:true},
   math_inline:{node:'math_inline',getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({latex:tok.content})},
   math_block:{block:'protected_source',noCloseToken:true,getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({source:tok.content})},
   footnote_reference:{node:'footnote_reference',getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({label:tok.content})},
@@ -70,6 +77,7 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
   const scan=yaml ? yaml[0].replace(/[^\n]/g,' ') + source.slice(yaml[0].length) : source
   const env: Record<string, unknown> = { ...referenceEnvironment, references: { ...referenceEnvironment.references as object } }
   const parsed=tokenizer.parse(scan,env)
+  const definitions = referenceDefinitions.get(env) || []
   // Reuse immutable blocks from the current revision only. Tokenization still
   // establishes the new reference environment first; changed references force
   // normal parsing, even when the referring block's raw text is unchanged.
@@ -81,24 +89,31 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
       else reusable.set(block.raw,{blocks:[block],used:0})
     }
   }
-  const ranges:{from:number;to:number;raw?:boolean;isHtml?:boolean;label?:string}[]=[]
+  const ranges:{from:number;to:number;raw?:boolean;isHtml?:boolean;label?:string;kind?:string}[]=[]
   if(yaml)ranges.push({from:0,to:yaml[0].replace(/\n$/,'').length,raw:true,label:'YAML Front Matter'})
   let level=0
-  for(const token of parsed){
+  for(const token of [...parsed, ...definitions]){
     if(level===0 && token.map){
       let to=starts[token.map[1]] ?? source.length
       while(to>(starts[token.map[0]]||0) && source[to-1]==='\n'){
         to--
         if(source[to-1]==='\r')to--
       }
-      ranges.push({from:starts[token.map[0]],to,raw:token.type==='html_block',label:token.type==='html_block'?'HTML（安全源码）':'扩展语法（保留源码）'})
+      const reference = token.type === 'reference_definition'
+      const footnote = reference && String(token.meta?.label || '').startsWith('^')
+      ranges.push({from:starts[token.map[0]],to,raw:token.type==='html_block'||reference,
+        kind: reference ? footnote ? 'footnote' : 'reference' : undefined,
+        label: reference ? footnote ? '脚注定义' : '链接引用定义' : token.type==='html_block'?'HTML（安全源码）':'扩展语法（保留源码）'})
     }
     level+=token.nesting
   }
   ranges.sort((a,b)=>a.from-b.from)
   const blocks:SourceBlock[]=[]; let cursor=0
-  const add=(from:number,to:number,raw:boolean,label='扩展语法（保留源码）')=>{
+  const add=(from:number,to:number,raw:boolean,label='扩展语法（保留源码）',kind?:string)=>{
     const original=source.slice(from,to),entry=reusable.get(original)
+    kind ??= /^---\r?\n/.test(original) && from === 0 ? 'yaml' : /^\s*\[\^/.test(original) ? 'footnote'
+      : /^\[toc\]$/i.test(original.trim()) ? 'toc' : /^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(original) ? 'callout'
+      : /^:::+/m.test(original) ? 'extension' : 'unknown'
     const candidate=entry && entry.used<entry.blocks.length?entry.blocks[entry.used++]:undefined
     // Protected blocks can depend on position (notably YAML at document start).
     const reused=!raw && candidate?.node.type.name!=='protected_source'?candidate:undefined
@@ -107,12 +122,12 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
     if(reused)node=reused.node
     else try {
       const complex=raw || /(^|\n)(?:\[\^[^\]]+\]:| {0,3}\$\$|\[toc\]|:::+|>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\])/i.test(original)
-      if(complex) node=s.nodes.protected_source.create({source:original,label})
+      if(complex) node=s.nodes.protected_source.create({source:original,label,kind})
       else {
         node=markdownParser.parse(original,env).firstChild!
-        if(!node)node=s.nodes.protected_source.create({source:original,label})
+        if(!node)node=s.nodes.protected_source.create({source:original,label,kind})
       }
-    }catch{node=s.nodes.protected_source.create({source:original,label})}
+    }catch{node=s.nodes.protected_source.create({source:original,label,kind})}
     if(!reused)node=node.type.create({...node.attrs,sourceId:id},node.content,node.marks)
     blocks.push({id,from,to,raw:original,prefix:source.slice(cursor,from),node});cursor=to
   }
@@ -120,7 +135,7 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
     if(range.from<cursor)continue
     const gap=source.slice(cursor,range.from)
     if(gap.trim()){const from=cursor+(gap.match(/^\s*/)?.[0].length||0);add(from,range.from-gap.match(/\s*$/)![0].length,true,'引用定义 / 扩展源码')}
-    add(range.from,range.to,!!range.raw,range.label)
+    add(range.from,range.to,!!range.raw,range.label,range.kind)
   }
   if(source.slice(cursor).trim())add(cursor,source.length,true,'引用定义 / 扩展源码')
   const doc=s.nodes.doc.create(null,blocks.length?blocks.map(b=>b.node):s.nodes.paragraph.create())

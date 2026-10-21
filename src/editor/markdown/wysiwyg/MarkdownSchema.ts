@@ -25,7 +25,7 @@ nodes.html_inline = {
 }
 nodes.protected_source = {
   group: 'block', atom: true, selectable: true, isolating: true,
-  attrs: { sourceId: {default:null}, source: {default:''}, label: {default:'受保护源码'} },
+  attrs: { sourceId: {default:null}, source: {default:''}, label: {default:'受保护源码'}, kind: {default:'unknown'} },
   toDOM: node => ['pre', {'data-protected-source':'true'}, node.attrs.source],
 }
 Object.assign(nodes, tableNodes({ tableGroup:'block', cellContent:'paragraph', cellAttributes:{

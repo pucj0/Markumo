@@ -129,6 +129,57 @@ $$
     await page.waitForFunction(()=>document.querySelector('.split-preview-content .md-render-error'))
     assert.equal(await page.locator('.split-preview-content .md-diagram a').count(),0)
   })
+  await test('reference definitions use native token positions; duplicate/multiline/unused sources round-trip exactly',async()=>{
+    const sources=[
+      '[链接][1]\n\n[1]: https://example.com\n',
+      '[链接][1]\n\n[1]: https://first.example "title"\n[1]: https://duplicate.example\n[unused]: ./unused.md\n\n',
+      '[链接][long label]\n\n[long\n label]:\n  <https://example.com/a>\n  "多行标题"\n\n',
+    ]
+    for(const source of [...sources,...sources.map(s=>s.replace(/\n/g,'\r\n'))]){
+      const result=await page.evaluate(source=>{const b=new window.t.MarkdownSourceBridge(source);return {source:b.prepare(b.doc).source,kinds:b.blocks.map(b=>b.node.attrs.kind),ranges:b.blocks.map(b=>b.raw===source.slice(b.from,b.to))}},source)
+      assert.equal(result.source,source);assert.ok(result.kinds.includes('reference'));assert.ok(result.ranges.every(Boolean))
+    }
+    await reset(sources[1])
+    assert.equal(await page.locator('.markdown-live .md-reference-definition').count(),3)
+    assert.equal(await page.locator('.markdown-live .md-reference-definition textarea').count(),0)
+    const heights=await page.locator('.md-reference-definition').evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().height))
+    assert.ok(heights.every(h=>h<40))
+    assert.equal(await page.locator('.markdown-live a').first().getAttribute('href'),'https://first.example/')
+    await page.screenshot({path:`${output}/phase03-references-collapsed.png`})
+  })
+  await test('editing definitions updates preceding links in both panes without rewriting reference syntax; undo/redo works',async()=>{
+    const source='[链接][1]\n\n[1]: https://old.example\n\nFooter'
+    await reset(source)
+    await page.evaluate(()=>{const m=window.t.manager;window.otherPane=m.splitPane('right','main',window.t.id);window.otherHost=document.createElement('div');window.otherHost.style.cssText='height:400px';document.body.append(window.otherHost);m.mountPane(window.otherHost,window.otherPane);m.focusPane('main',false)})
+    await page.waitForFunction(()=>document.querySelectorAll('.markdown-live .md-reference-definition').length===2)
+    await page.locator('.md-reference-source summary').first().click()
+    const input=page.locator('.md-reference-source textarea').first()
+    await input.fill('[1]: https://new.example')
+    await page.waitForFunction(()=>[...document.querySelectorAll('.markdown-live .md-prose a')].every(a=>a.getAttribute('href')==='https://new.example/'))
+    assert.equal(await input.evaluate(el=>document.activeElement===el),true)
+    assert.equal(await page.evaluate(()=>window.t.source()),source.replace('old.example','new.example'))
+    await input.fill('')
+    assert.equal(await input.evaluate(el=>document.activeElement===el),true)
+    await input.fill('[1]: https://new.example')
+    await page.waitForFunction(()=>document.querySelector('.markdown-live .md-prose a')?.getAttribute('href')==='https://new.example/')
+    await page.evaluate(()=>window.t.manager.command('undo'))
+    await page.waitForFunction(()=>document.querySelector('.markdown-live .md-prose a')?.getAttribute('href')==='https://old.example/')
+    assert.equal(await page.evaluate(()=>window.t.source()),source)
+    await page.evaluate(()=>window.t.manager.command('redo'))
+    await page.waitForFunction(()=>document.querySelector('.split-preview-content a')?.getAttribute('href')==='https://new.example/')
+    await page.evaluate(()=>{window.t.manager.closePane(window.otherPane);window.otherHost.remove()})
+    await page.screenshot({path:`${output}/phase03-reference-edit.png`})
+  })
+  await test('YAML, footnotes, TOC, callouts, HTML and unknown extensions keep their own presentations/source access',async()=>{
+    const source='---\ntitle: Keep\n---\n\n# Heading\n\n[toc]\n\n> [!NOTE]\n> Keep callout\n\n[^n]: footnote\n\n::: unknown\nKeep extension\n:::\n\n<div>safe HTML</div>'
+    await reset(source)
+    const result=await page.evaluate(()=>({kinds:window.t.live.bridge.blocks.filter(b=>b.node.type.name==='protected_source').map(b=>b.node.attrs.kind),source:window.t.live.bridge.prepare(window.t.live.bridge.doc).source}))
+    assert.equal(result.source,source);for(const kind of ['yaml','toc','callout','footnote','extension'])assert.ok(result.kinds.includes(kind),kind)
+    assert.equal(await page.locator('.markdown-live .md-callout').count(),1)
+    assert.equal(await page.locator('.markdown-live .md-html-preview').count(),1)
+    assert.equal(await page.locator('.md-reference-definition').count(),0)
+    assert.ok(await page.locator('.markdown-live .md-protected:not([hidden]) summary').count()>0)
+  })
   assert.deepEqual(errors,[])
   fs.writeFileSync(`${output}/result.json`,JSON.stringify({ok:true,browser:await browser.version(),tests:results,errors},null,2))
 } finally {await browser?.close();await server.close()}

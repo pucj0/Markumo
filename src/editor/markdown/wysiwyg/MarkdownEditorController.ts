@@ -656,9 +656,32 @@ export class MarkdownEditorController implements LiveEditor {
         return
       }
       const prepared = this.bridge.prepare(applied.state.doc, tr.getMeta('inlineSourcePatch') as SourcePatch | undefined)
-      const previous = { source: this.bridge.source, doc: this.bridge.doc, blocks: this.bridge.blocks, environment:this.bridge.environment }
+      const previous = { source: this.bridge.source, doc: this.bridge.doc, blocks: this.bridge.blocks, tail:this.bridge.tail, environment:this.bridge.environment }
       prepared.commit()
-      const update: LiveUpdate = { bridge: this.bridge, transactions: applied.transactions }
+      let nextState = applied.state
+      if (prepared.definitionsChanged) {
+        // Definitions affect preceding and following links. Reparse semantics
+        // against a fresh environment, but publish only the one source patch.
+        const fresh = parseMarkdown(prepared.source)
+        const byFrom = new Map(fresh.blocks.map(block => [block.from, block]))
+        // Keep the source-editing atom alive while its definition is temporarily
+        // incomplete (Ctrl+A, typing a new URL). Reparse referring blocks only.
+        this.bridge.blocks = this.bridge.blocks.map(block => {
+          const parsed = byFrom.get(block.from)
+          if (block.node.attrs.kind === 'reference' || !parsed || parsed.raw !== block.raw) return block
+          const node = parsed.node.type.create({ ...parsed.node.attrs, sourceId: block.id }, parsed.node.content, parsed.node.marks)
+          return { ...block, node }
+        })
+        this.bridge.environment = fresh.environment
+        this.bridge.doc = s.nodes.doc.create(null, this.bridge.blocks.length ? this.bridge.blocks.map(block => block.node) : s.nodes.paragraph.create())
+        const doc = withTrailingParagraph(this.bridge.doc)
+        const start = nextState.doc.content.findDiffStart(doc.content), end = nextState.doc.content.findDiffEnd(doc.content)
+        if (start !== null && end) {
+          const overlap = Math.max(0, start - Math.min(end.a, end.b))
+          nextState = nextState.apply(nextState.tr.replace(start, end.a + overlap, doc.slice(start, end.b + overlap)))
+        }
+      }
+      const update: LiveUpdate = { bridge: this.bridge, transactions: prepared.definitionsChanged ? [] : applied.transactions }
       if (prepared.patch && !this.options.publish(before, prepared.patch, update, !!tr.getMeta('isolated'))) {
         Object.assign(this.bridge, previous)
         this.view.updateState(this.view.state)
@@ -667,7 +690,7 @@ export class MarkdownEditorController implements LiveEditor {
       }
       for (const transaction of applied.transactions) this.inlineSource?.map(transaction)
       this.inlineSource?.mapSource(prepared.patch, tr.getMeta('inlineSourceEditor') === this.inlineSource)
-      this.view.updateState(applied.state)
+      this.view.updateState(nextState)
       this.updateTools()
       const sel = this.selection
       this.options.selected(sel.anchor, sel.head)
@@ -1403,20 +1426,27 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   private protectedView(node: Node, view: EditorView, getPos: () => number | undefined): NodeView {
+    const reference = node.attrs.kind === 'reference'
     const dom = document.createElement('div')
     const details = document.createElement('details')
     const summary = document.createElement('summary')
     const input = document.createElement('textarea')
     const preview = document.createElement('div')
 
-    details.className = 'md-protected'
-    dom.className = 'md-extension'
+    details.className = reference ? 'md-protected md-reference-source' : 'md-protected'
+    dom.className = reference ? 'md-extension md-reference-definition' : 'md-extension'
     dom.contentEditable = 'false'
-    summary.textContent = node.attrs.label
+    const referenceLabel = String(node.attrs.source).match(/^\s*\[((?:\\.|[^\]])+)\]:/)?.[1].replace(/\s+/g, ' ').slice(0, 60)
+    summary.textContent = reference ? `链接引用定义${referenceLabel ? ` [${referenceLabel}]` : ''} · 展开源码` : node.attrs.label
     input.value = node.attrs.source
     input.setAttribute('aria-label', node.attrs.label)
     input.spellcheck = false
-    details.append(summary, input)
+    input.readOnly = !!this.options.readOnly?.()
+    const sizeSource = () => { input.rows = Math.min(10, Math.max(2, input.value.split('\n').length)) }
+    sizeSource()
+    details.append(summary)
+    if (!reference) details.append(input)
+    details.ontoggle = () => { if (details.open && !input.parentElement) { details.append(input); sizeSource() } }
     dom.append(preview, details)
 
     let previous = ''
@@ -1483,6 +1513,7 @@ export class MarkdownEditorController implements LiveEditor {
     this.extensionViews.add(refresh)
 
     input.oninput = () => {
+      sizeSource()
       const pos = getPos()
       if (pos !== undefined && !this.options.readOnly?.() && view.state.doc.nodeAt(pos) === node) {
         view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, source: input.value }))
@@ -1503,15 +1534,18 @@ export class MarkdownEditorController implements LiveEditor {
       ignoreMutation: () => true,
       update: next => {
         if (next.type !== node.type) return false
+        if ((next.attrs.kind === 'reference') !== reference) return false
         if (/^\$\$[\s\S]*\$\$$/.test(String(next.attrs.source).trim())) return false
         if (isHtmlSourceNode(next)) return false
         node = next
         if (input.value !== next.attrs.source) input.value = next.attrs.source
+        input.readOnly = !!this.options.readOnly?.()
         refresh()
         return true
       },
       destroy: () => {
         input.oninput = null
+        details.ontoggle = null
         this.extensionViews.delete(refresh)
       },
     }
