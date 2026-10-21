@@ -178,7 +178,7 @@ try{
 
   // 1. Verify link elements and coordinates
   const linksCount = await page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').count()
-  assert.equal(linksCount, 8, `Expected 8 link annotations on page 1, got ${linksCount}`)
+  assert.equal(linksCount, 11, `Expected 11 link annotations on page 1, got ${linksCount}`)
 
   // Verify bounding box of first link (Page 3 jump)
   const link1Box = await page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').first().boundingBox()
@@ -189,15 +189,18 @@ try{
   await flush()
   assert.equal(await pageBox.inputValue(), '3', 'Clicking link 1 must jump to Page 3')
 
-  // 3. Jump back to Page 1 and click Link 2 (Coordinate jump to Page 2 at Y=500)
+  // 3. Jump back to Page 1 and click Link 2 (Coordinate jump to Page 2 at Y=500 on landscape page)
   await pageBox.fill('1')
   await pageBox.press('Enter')
   await flush()
   await page.waitForFunction(() => document.querySelector('.pdf-page[aria-label="第 1 页"] .annotation-host'))
+  const scrollBeforeLink2 = await page.locator('.pdf-viewport').evaluate(host => host.scrollTop)
   const link2 = page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').nth(1)
   await link2.click()
   await flush()
   assert.equal(await pageBox.inputValue(), '2', 'Clicking link 2 must navigate to Page 2')
+  const scrollAfterLink2 = await page.locator('.pdf-viewport').evaluate(host => host.scrollTop)
+  assert.ok(scrollAfterLink2 > scrollBeforeLink2, `Actual scroll coordinate must advance, before: ${scrollBeforeLink2}, after: ${scrollAfterLink2}`)
 
   // 4. Jump back to Page 1 and click Link 3 (Named destination 'named-chapter' -> Page 3)
   await pageBox.fill('1')
@@ -246,7 +249,56 @@ try{
   await flush()
   assert.equal(await pageBox.inputValue(), '2', 'NextPage action must jump to Page 2')
 
-  // 9. Zoom and rotation link layer alignment
+  // 9. FitR target rectangle destination (Link 9 -> Page 2 FitR)
+  await pageBox.fill('1')
+  await pageBox.press('Enter')
+  await flush()
+  await page.waitForFunction(() => document.querySelector('.pdf-page[aria-label="第 1 页"] .annotation-host'))
+  const link9 = page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').nth(8)
+  await link9.click()
+  await flush()
+  assert.equal(await pageBox.inputValue(), '2', 'FitR link must navigate to target page 2')
+
+  // 10. Non-zero CropBox page destination (Link 10 -> Page 4 [50 100 662 892])
+  await pageBox.fill('1')
+  await pageBox.press('Enter')
+  await flush()
+  await page.waitForFunction(() => document.querySelector('.pdf-page[aria-label="第 1 页"] .annotation-host'))
+  const link10 = page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').nth(9)
+  await link10.click()
+  await flush()
+  assert.equal(await pageBox.inputValue(), '4', 'Non-zero CropBox link must navigate to Page 4')
+
+  // 11. Extreme large XYZ zoom value (Link 11 -> 9999x zoom clamped to 500%)
+  await pageBox.fill('1')
+  await pageBox.press('Enter')
+  await flush()
+  await page.waitForFunction(() => document.querySelector('.pdf-page[aria-label="第 1 页"] .annotation-host'))
+  const link11 = page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').nth(10)
+  await link11.click()
+  await flush()
+  const clampedScale = await page.evaluate(() => window.mediaTest.manager.mediaViewState(window.mediaTest.manager.activeId, 'main').scale)
+  assert.ok(clampedScale <= 5.0, `Extreme zoom must be clamped <= 5.0, got: ${clampedScale}`)
+
+  // Reset scale
+  await page.getByRole('button', { name: '适应页面', exact: true }).click()
+  await flush()
+
+  // 12. Rapid consecutive link navigation clicks (consecutive jump requests)
+  await pageBox.fill('1')
+  await pageBox.press('Enter')
+  await flush()
+  await page.waitForFunction(() => document.querySelector('.pdf-page[aria-label="第 1 页"] .annotation-host'))
+  // Click link 1 then link 2 immediately
+  await Promise.all([
+    page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').first().click(),
+    page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').nth(1).click(),
+  ])
+  await flush()
+  const finalPage = await pageBox.inputValue()
+  assert.ok(['2', '3'].includes(finalPage), `Rapid navigation should resolve to one of the targets without error, got: ${finalPage}`)
+
+  // 13. Zoom and rotation link layer alignment
   await pageBox.fill('1')
   await pageBox.press('Enter')
   await flush()
@@ -263,7 +315,7 @@ try{
   const boxAfterRot = await page.locator('.pdf-page[aria-label="第 1 页"] .annotation-host a.pdf-link-annotation').first().boundingBox()
   assert.ok(boxAfterRot && boxAfterRot.width > 0 && boxAfterRot.height > 0, 'Link rect must stay valid after rotation')
 
-  // 10. Single page mode navigation
+  // 14. Single page mode navigation
   await page.getByRole('button', { name: '连续滚动', exact: true }).click() // Switch to single page
   await flush()
   assert.equal(await page.locator('.pdf-page').count(), 1)
@@ -284,7 +336,7 @@ try{
   for (let r = 0; r < 3; r++) await page.getByRole('button', { name: '旋转 PDF', exact: true }).click()
   await flush()
 
-  // 11. Text selection on page with links is intact
+  // 15. Text selection on page with links is intact
   await pageBox.fill('1')
   await pageBox.press('Enter')
   await flush()

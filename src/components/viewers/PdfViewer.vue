@@ -129,7 +129,7 @@ import PdfPage from './PdfPage.vue'
 import PdfNavigation from './PdfNavigation.vue'
 import MediaEmpty from './MediaEmpty.vue'
 import ViewerIcon from './ViewerIcon.vue'
-import { resolvePdfDestination, openPdfExternalUrl } from './pdfLinkUtils'
+import { resolvePdfDestination, computeTargetViewportCoords, openPdfExternalUrl } from './pdfLinkUtils'
 import './viewer.css'
 
 const props=defineProps<{doc:EditorDocument;pane:string;state:MediaViewState}>()
@@ -175,7 +175,7 @@ const passwordNeeded=ref(false),passwordWrong=ref(false),password=ref(''),passwo
 const drag=ref<{x:number;y:number;left:number;top:number}>()
 interface ReaderAnchor {page:number;x:number;y:number;clientX:number;clientY:number}
 let pendingAnchor:ReaderAnchor|undefined,positionEpoch=0,anchorFrame=0
-let passwordCallback:((value:string)=>void)|undefined,generation=0,searchGeneration=0,disposed=false
+let passwordCallback:((value:string)=>void)|undefined,generation=0,searchGeneration=0,disposed=false,navSequence=0
 let loading:PDFJS.PDFDocumentLoadingTask|undefined,nativeWorker:Worker|undefined,worker:PDFJS.PDFWorker|undefined,transport:PDFJS.PDFDataRangeTransport|undefined
 let resize:ResizeObserver|undefined,scrollFrame=0,searchTimer:ReturnType<typeof setTimeout>|undefined
 
@@ -284,54 +284,76 @@ function startResizeNav(event:PointerEvent){
 }
 async function handleNavigateDest(dest:any){
   if(!pdf.value)return
+  const currentNav=++navSequence
+  const fromPage=page.value
   try{
     const target=await resolvePdfDestination(pdf.value,dest)
-    if(!target)return
+    if(disposed||currentNav!==navSequence||!target)return
     explicitJumpSeq.value++
 
-    page.value=target.pageNumber
-    view.page=target.pageNumber
+    const isCrossPage=fromPage!==target.pageNumber
 
     if(target.zoom!==undefined&&target.zoom>0){
+      const safeZoom=Math.max(0.05,Math.min(5,target.zoom))
       view.fit='manual'
-      scale.value=target.zoom
-      view.scale=target.zoom
+      scale.value=safeZoom
+      view.scale=safeZoom
     }else if(target.fitMode&&viewport.value?.clientWidth){
       view.fit=target.fitMode
       const host=viewport.value
       const size=dimensions(target.pageNumber)
       const w=(host.clientWidth-PADDING*2)/size.width
       const h=(host.clientHeight-PADDING*2)/size.height
-      const next=Math.max(.05,Math.min(5,target.fitMode==='width'?w:Math.min(w,h)))
+      const next=Math.max(0.05,Math.min(5,target.fitMode==='width'?w:Math.min(w,h)))
       scale.value=next
       view.scale=next
     }
 
-    const pHeight=dimensions(target.pageNumber).height
-    let yInPage=0
-    if(target.top!==undefined&&Number.isFinite(target.top)){
-      yInPage=Math.max(0,(pHeight-target.top)*scale.value)
-    }
-    let xInPage=0
-    if(target.left!==undefined&&Number.isFinite(target.left)){
-      xInPage=Math.max(0,target.left*scale.value)
+    const targetPageProxy=await pdf.value.getPage(target.pageNumber)
+    if(disposed||currentNav!==navSequence)return
+
+    const box=targetPageProxy.getViewport({scale:1})
+    if(!sizes.has(target.pageNumber)){
+      sizes.set(target.pageNumber,{width:box.width,height:box.height})
     }
 
-    if(view.continuous){
-      const targetY=pageTop(target.pageNumber)+yInPage
-      const targetX=pageLeft(target.pageNumber)+xInPage
-      viewport.value?.scrollTo({top:targetY,left:targetX})
-      syncPosition()
-    }else{
-      const isSamePage=page.value===target.pageNumber
-      const doScroll=()=>{
-        const targetY=PADDING+yInPage
-        const targetX=pageLeft(target.pageNumber)+xInPage
-        viewport.value?.scrollTo({top:targetY,left:targetX})
-        syncPosition()
+    const totalRotation=(targetPageProxy.rotate+view.rotation)%360
+    const vp=targetPageProxy.getViewport({scale:scale.value,rotation:totalRotation})
+    const {vx,vy}=computeTargetViewportCoords(vp,target)
+
+    page.value=target.pageNumber
+    view.page=target.pageNumber
+
+    const executeScroll=()=>{
+      if(disposed||currentNav!==navSequence||!viewport.value)return
+      const host=viewport.value
+      const maxScrollY=Math.max(0,host.scrollHeight-host.clientHeight)
+      const maxScrollX=Math.max(0,host.scrollWidth-host.clientWidth)
+
+      let rawTargetY:number
+      let rawTargetX:number
+
+      if(view.continuous){
+        rawTargetY=pageTop(target.pageNumber)+(vy??0)
+        rawTargetX=pageLeft(target.pageNumber)+(vx??0)
+      }else{
+        rawTargetY=PADDING+(vy??0)
+        rawTargetX=pageLeft(target.pageNumber)+(vx??0)
       }
-      if(isSamePage)doScroll()
-      else void nextTick(doScroll)
+
+      const clampedY=Math.max(0,Math.min(maxScrollY,Math.round(rawTargetY)))
+      const clampedX=Math.max(0,Math.min(maxScrollX,Math.round(rawTargetX)))
+
+      host.scrollTo({top:clampedY,left:clampedX})
+      syncPosition()
+    }
+
+    if(!view.continuous&&isCrossPage){
+      await nextTick()
+      if(disposed||currentNav!==navSequence)return
+      executeScroll()
+    }else{
+      executeScroll()
     }
   }catch(e){console.warn('Failed to resolve destination',e)}
 }
@@ -462,7 +484,7 @@ function onKeydown(event:KeyboardEvent){
 }
 
 async function teardown(){
-  ++searchGeneration;searching.value=false;passwordNeeded.value=false;passwordCallback=undefined;password.value=''
+  ++searchGeneration;++navSequence;searching.value=false;passwordNeeded.value=false;passwordCallback=undefined;password.value=''
   ++positionEpoch;pendingAnchor=undefined;cancelAnimationFrame(anchorFrame);cancelAnimationFrame(scrollFrame);scrollFrame=0
   const oldLoading=loading,oldWorker=worker,oldNative=nativeWorker,oldTransport=transport
   loading=undefined;pdf.value=undefined;worker=undefined;nativeWorker=undefined;transport=undefined;oldTransport?.abort()

@@ -3,10 +3,13 @@ import { openMarkdownLink, safeMarkdownURL } from '../../editor/markdown/links'
 
 export interface ResolvedPdfTarget {
   pageNumber: number
-  top?: number
-  left?: number
+  rawTop?: number
+  rawLeft?: number
+  rawRight?: number
+  rawBottom?: number
   zoom?: number
-  fitMode?: string
+  fitMode?: 'page' | 'width' | 'height' | 'rect'
+  kind?: string
 }
 
 export interface PdfLinkItem {
@@ -18,6 +21,18 @@ export interface PdfLinkItem {
   action?: string
   title?: string
   ariaLabel: string
+}
+
+/**
+ * Sanitizes PDF destination zoom values.
+ * Strictly clamps to the viewer's 5% - 500% (0.05 - 5.0) range.
+ * Rejects NaN, Infinity, <= 0, and extreme values.
+ */
+export function sanitizePdfZoom(zoom: any): number | undefined {
+  if (typeof zoom !== 'number' || !Number.isFinite(zoom) || Number.isNaN(zoom) || zoom <= 0) {
+    return undefined
+  }
+  return Math.max(0.05, Math.min(5.0, zoom))
 }
 
 /**
@@ -66,32 +81,89 @@ export async function resolvePdfDestination(
   if (pageIndex < 0 || pageIndex >= docProxy.numPages) return null
   const pageNumber = pageIndex + 1
 
-  let top: number | undefined
-  let left: number | undefined
+  let rawTop: number | undefined
+  let rawLeft: number | undefined
+  let rawRight: number | undefined
+  let rawBottom: number | undefined
   let zoom: number | undefined
-  let fitMode: string | undefined
+  let fitMode: ResolvedPdfTarget['fitMode']
 
-  const modeName = typeof mode === 'string' ? mode.replace(/^\//, '') : mode?.name ? String(mode.name).replace(/^\//, '') : ''
+  const modeName = typeof mode === 'string'
+    ? mode.replace(/^\//, '')
+    : mode?.name
+    ? String(mode.name).replace(/^\//, '')
+    : ''
 
   if (modeName === 'XYZ') {
-    left = typeof args[0] === 'number' && Number.isFinite(args[0]) ? args[0] : undefined
-    top = typeof args[1] === 'number' && Number.isFinite(args[1]) ? args[1] : undefined
-    if (typeof args[2] === 'number' && Number.isFinite(args[2]) && args[2] > 0) {
-      zoom = args[2]
-    }
+    rawLeft = typeof args[0] === 'number' && Number.isFinite(args[0]) ? args[0] : undefined
+    rawTop = typeof args[1] === 'number' && Number.isFinite(args[1]) ? args[1] : undefined
+    zoom = sanitizePdfZoom(args[2])
   } else if (modeName === 'Fit' || modeName === 'FitB') {
     fitMode = 'page'
   } else if (modeName === 'FitH' || modeName === 'FitBH') {
-    top = typeof args[0] === 'number' && Number.isFinite(args[0]) ? args[0] : undefined
+    rawTop = typeof args[0] === 'number' && Number.isFinite(args[0]) ? args[0] : undefined
     fitMode = 'width'
   } else if (modeName === 'FitV' || modeName === 'FitBV') {
-    left = typeof args[0] === 'number' && Number.isFinite(args[0]) ? args[0] : undefined
+    rawLeft = typeof args[0] === 'number' && Number.isFinite(args[0]) ? args[0] : undefined
+    fitMode = 'height'
   } else if (modeName === 'FitR') {
-    left = typeof args[0] === 'number' && Number.isFinite(args[0]) ? args[0] : undefined
-    top = typeof args[3] === 'number' && Number.isFinite(args[3]) ? args[3] : undefined
+    rawLeft = typeof args[0] === 'number' && Number.isFinite(args[0]) ? args[0] : undefined
+    rawBottom = typeof args[1] === 'number' && Number.isFinite(args[1]) ? args[1] : undefined
+    rawRight = typeof args[2] === 'number' && Number.isFinite(args[2]) ? args[2] : undefined
+    rawTop = typeof args[3] === 'number' && Number.isFinite(args[3]) ? args[3] : undefined
+    fitMode = 'rect'
   }
 
-  return { pageNumber, top, left, zoom, fitMode }
+  return {
+    pageNumber,
+    rawTop,
+    rawLeft,
+    rawRight,
+    rawBottom,
+    zoom,
+    fitMode,
+    kind: modeName,
+  }
+}
+
+/**
+ * Computes destination viewport coordinates (vx, vy) from PDF.js PageViewport.
+ * Takes into account page rotation, cropBox, landscape, and non-zero page origins.
+ */
+export function computeTargetViewportCoords(
+  viewport: PDFJS.PageViewport,
+  target: ResolvedPdfTarget
+): { vx?: number; vy?: number } {
+  const result: { vx?: number; vy?: number } = {}
+  const viewBox = viewport.viewBox || [0, 0, viewport.width, viewport.height]
+  const originX = viewBox[0] || 0
+  const cornerY = viewBox[3] || viewport.height
+
+  if (target.kind === 'Fit' || target.kind === 'FitB') {
+    return { vx: 0, vy: 0 }
+  }
+
+  // Both coordinates provided (e.g. XYZ or FitR top-left)
+  if (target.rawLeft !== undefined && target.rawTop !== undefined) {
+    const pt = viewport.convertToViewportPoint(target.rawLeft, target.rawTop)
+    result.vx = Math.max(0, Math.min(viewport.width, pt[0]))
+    result.vy = Math.max(0, Math.min(viewport.height, pt[1]))
+    return result
+  }
+
+  // Only top provided (e.g. FitH, FitBH, or XYZ with null left)
+  if (target.rawTop !== undefined) {
+    const pt = viewport.convertToViewportPoint(originX, target.rawTop)
+    result.vy = Math.max(0, Math.min(viewport.height, pt[1]))
+  }
+
+  // Only left provided (e.g. FitV, FitBV, or XYZ with null top)
+  if (target.rawLeft !== undefined) {
+    const pt = viewport.convertToViewportPoint(target.rawLeft, cornerY)
+    result.vx = Math.max(0, Math.min(viewport.width, pt[0]))
+  }
+
+  return result
 }
 
 /**
@@ -119,10 +191,10 @@ export function convertAnnotationRects(
       const maxY = Math.max(...ys)
 
       rects.push({
-        left: minX,
-        top: minY,
-        width: Math.max(2, maxX - minX),
-        height: Math.max(2, maxY - minY),
+        left: Math.round(minX),
+        top: Math.round(minY),
+        width: Math.max(2, Math.round(maxX - minX)),
+        height: Math.max(2, Math.round(maxY - minY)),
       })
     }
   } else if (annot.rect && Array.isArray(annot.rect) && annot.rect.length >= 4) {
@@ -134,10 +206,10 @@ export function convertAnnotationRects(
     const maxY = Math.max(p1[1], p2[1])
 
     rects.push({
-      left: minX,
-      top: minY,
-      width: Math.max(2, maxX - minX),
-      height: Math.max(2, maxY - minY),
+      left: Math.round(minX),
+      top: Math.round(minY),
+      width: Math.max(2, Math.round(maxX - minX)),
+      height: Math.max(2, Math.round(maxY - minY)),
     })
   }
 
