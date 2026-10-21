@@ -110,9 +110,10 @@ mod dropped_directory_tests {
     #[test]
     fn hardlinked_images_are_rejected_consistently_with_other_files() {
         let temporary = tempfile::tempdir().unwrap();
-        let original = temporary.path().join("original.png");
+        let root = temporary.path().canonicalize().unwrap();
+        let original = root.join("original.png");
         std::fs::write(&original, b"\x89PNG\r\n\x1a\ntest").unwrap();
-        let hardlink = temporary.path().join("hardlink.png");
+        let hardlink = root.join("hardlink.png");
         if std::fs::hard_link(&original, &hardlink).is_err() {
             return;
         }
@@ -121,7 +122,7 @@ mod dropped_directory_tests {
         // Both directory entries now share one file identity.
         assert!(read_raster(&original).is_err());
 
-        let single = temporary.path().join("single.png");
+        let single = root.join("single.png");
         std::fs::write(&single, b"\x89PNG\r\n\x1a\ntest").unwrap();
         assert!(read_raster(&single).is_ok());
     }
@@ -129,14 +130,15 @@ mod dropped_directory_tests {
     #[test]
     fn markdown_image_reads_are_window_scoped_and_require_explicit_scope() {
         let temporary = tempfile::tempdir().unwrap();
-        let notes = temporary.path().join("notes");
+        let root = temporary.path().canonicalize().unwrap();
+        let notes = root.join("notes");
         let assets = notes.join("assets");
         std::fs::create_dir_all(&assets).unwrap();
         let document = notes.join("doc.md");
         std::fs::write(&document, "# note\n").unwrap();
         let inside = assets.join("inside.png");
         std::fs::write(&inside, b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00").unwrap();
-        let outside_dir = temporary.path().join("outside");
+        let outside_dir = root.join("outside");
         std::fs::create_dir(&outside_dir).unwrap();
         let outside = outside_dir.join("outside.png");
         std::fs::write(&outside, std::fs::read(&inside).unwrap()).unwrap();

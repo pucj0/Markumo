@@ -411,14 +411,17 @@ mod tests {
     #[test]
     fn quick_open_indexes_ten_and_fifty_thousand_disk_files() {
         let dir = tempfile::tempdir().unwrap();
+        // macOS temporary paths can contain /var -> /private/var. These
+        // fixtures model already-canonical workspace roots, not symlink grants.
+        let root = dir.path().canonicalize().unwrap();
         let mut created = 0;
         for count in [10_000, 50_000] {
             for index in created..count {
-                std::fs::write(dir.path().join(format!("file{index}.ts")), "").unwrap();
+                std::fs::write(root.join(format!("file{index}.ts")), "").unwrap();
             }
             created = count;
             let started = Instant::now();
-            let files = find_files_roots(&[dir.path().to_path_buf()], "", false, 50_000).unwrap();
+            let files = find_files_roots(&[root.clone()], "", false, 50_000).unwrap();
             println!(
                 "Quick Open disk index: {count} files, {:?}",
                 started.elapsed()
@@ -430,25 +433,26 @@ mod tests {
     #[test]
     fn quick_open_retains_partial_files_at_entry_budget_and_stops_at_timeout() {
         let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
         for name in ["a.ts", "b.ts", "c.ts"] {
-            std::fs::write(dir.path().join(name), "").unwrap();
+            std::fs::write(root.join(name), "").unwrap();
         }
         let mut budget = TraversalBudget::new();
         budget.count = 99_999;
-        let files = find_files_budget(dir.path(), "", false, &mut budget, "", 50_000).unwrap();
+        let files = find_files_budget(&root, "", false, &mut budget, "", 50_000).unwrap();
         assert_eq!(files.len(), 1);
         assert!(budget.exhausted());
         let mut timeout = TraversalBudget::new();
         timeout.started -= Duration::from_secs(11);
         assert!(
-            find_files_budget(dir.path(), "", false, &mut timeout, "", 50_000)
+            find_files_budget(&root, "", false, &mut timeout, "", 50_000)
                 .unwrap()
                 .is_empty()
         );
         assert!(timeout.exhausted());
         // Full-text search still surfaces the traversal error.
         assert!(walk_files_budget(
-            dir.path(),
+            &root,
             false,
             &AtomicBool::new(false),
             &mut timeout,
@@ -456,7 +460,7 @@ mod tests {
         )
         .is_err());
         assert_eq!(
-            find_files_roots(&[dir.path().to_path_buf()], "", false, 2)
+            find_files_roots(&[root], "", false, 2)
                 .unwrap()
                 .len(),
             2

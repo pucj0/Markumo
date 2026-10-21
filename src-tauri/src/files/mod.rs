@@ -1546,7 +1546,8 @@ mod grant_tests {
     fn closing_a_window_releases_documents_and_image_capabilities() {
         let directory = tempfile::tempdir().unwrap();
         let document = text_fixture(&directory, "doc.md", "# title");
-        let image_dir = directory.path().join("assets");
+        let root = directory.path().canonicalize().unwrap();
+        let image_dir = root.join("assets");
         fs::create_dir(&image_dir).unwrap();
         let mut files = service("window-a");
         let token = files.open_selected(document, None).unwrap().metadata.token;
@@ -1558,7 +1559,7 @@ mod grant_tests {
         assert!(files.take_dropped_directory(&input.token).is_ok());
 
         let second = files
-            .image_inputs(vec![directory.path().to_path_buf()])
+            .image_inputs(vec![root])
             .remove(0);
         files.release_owner("window-a");
         assert!(files.session_path(&token).is_err());
