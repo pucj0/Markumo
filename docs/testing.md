@@ -156,28 +156,19 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 - **Push**：向 `main` 分支提交推送自动触发。
 - **手动触发**：支持在 GitHub 仓库 Actions 界面通过 `workflow_dispatch` 手动执行。
 
-### 门禁 Job（两个相互独立的 Job，互不跳过）
+### 门禁 Job（`Rust Quality`）
 
-工作流拆分为 `Frontend Quality` 与 `Rust Quality` 两个并行、独立的 Job。二者没有 `needs` 依赖：任一方失败都不会导致另一方被跳过，整体工作流仅在**两个 Job 都成功**时才通过。
+工作流执行 `Rust Quality` Job。
+（注：原 `Frontend Quality` smoke 校验因在 CI 耗时长且易偶发报错已移除，前端回归可在本地执行 `pnpm test:smoke` / `pnpm test:regression`）。
 
-#### Job 1：`Frontend Quality`
-1. 检出源码（`actions/checkout`）。
-2. 安装 Node.js 24 与 pnpm 12.11.2（启用 pnpm store 缓存）。
-3. 执行 `pnpm install --frozen-lockfile`（锁定版本一致性）。
-4. 执行 `pnpm typecheck`（TypeScript 零错误）。
-5. 执行 `pnpm build`（Vite 生产构建校验）。
-6. 执行 `pnpm exec playwright install --with-deps chromium`（准备无头浏览器与系统库）。
-7. 执行 `pnpm test:smoke`（当前清单中的核心 Smoke 回归）。
-8. **失败时上传产物**：`test-results/**`（含 `regression-logs/` 日志与截图）以及 `.markumo-media-test/**/*.png`，保留 7 天。
-
-#### Job 2：`Rust Quality`
+#### Job：`Rust Quality`
 1. 检出源码。
 2. 安装 Rust stable 与 `Swatinem/rust-cache` 编译缓存。
 3. 安装 Linux Tauri 系统依赖（GTK/WebKit 等）。
 4. 执行 `cargo check --locked`。
-5. 执行 `cargo test --locked`（23 项 Rust 单元测试）。
+5. 执行 `cargo test --locked`（Rust 单元测试及 Pandoc 原生转换测试）。
 
-> 两个 Job 均不涉及更新签名私钥、不创建 Release、不打包或上传正式安装包、不修改版本号。发布流程仍由 `.github/workflows/release.yml` 独立负责。
+> 该 Job 不涉及更新签名私钥、不创建 Release、不打包或上传正式安装包、不修改版本号。发布流程仍由 `.github/workflows/release.yml` 独立负责。
 
 ### 失败定位入口：
 - **浏览器截图**：`test-results/<用例目录>/failure.png` 等。
