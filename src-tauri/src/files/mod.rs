@@ -1,6 +1,6 @@
 pub(crate) mod atomic;
 pub mod classfile;
-mod codec;
+pub(crate) mod codec;
 pub mod external;
 #[cfg(test)]
 mod external_tests;
@@ -326,7 +326,7 @@ pub(super) fn open_plain_read(path: &Path) -> Result<fs::File> {
     }
 }
 
-fn read_disk(path: &Path) -> Result<(Vec<u8>, String, bool)> {
+pub(crate) fn read_disk(path: &Path) -> Result<(Vec<u8>, String, bool)> {
     let resolved_path = checked_path(path, false)?;
     let path = resolved_path.as_path();
     let file = open_plain_read(path)?;

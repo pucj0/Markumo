@@ -41,7 +41,22 @@ export interface SearchQuery {
   is_regex: boolean
   max_results?: number
   include_ignored?: boolean
+  directory?: string | null
+  buffers?: { path: string; text: string; encoding?: string }[]
 }
+
+export interface ReplaceEdit {
+  from: number
+  to: number
+  line: number
+  column: number
+  before: string
+  insert: string
+  context: string
+}
+export interface ReplaceFile { path: string; version: string; buffer: boolean; edits: ReplaceEdit[] }
+export interface ReplacePreview { files: ReplaceFile[]; skipped: string[]; limited: boolean; canceled: boolean }
+export interface ReplaceApply { query: SearchQuery; replacement: string; path: string; version: string; selected: number[] }
 
 export interface SearchDonePayload {
   search_id: string
@@ -52,6 +67,9 @@ export interface SearchDonePayload {
 type usize = number
 
 export interface WorkspaceGateway {
+  previewReplace?(query: SearchQuery, replacement: string, targets: string[]): Promise<ReplacePreview>
+  applyReplace?(request: ReplaceApply): Promise<number>
+  validateReplace?(path: string, version: string, query: SearchQuery): Promise<void>
   isVisibleFile?(path: string): Promise<boolean>
   openWorkspaceDialog(add?: boolean): Promise<WorkspaceInfo | null>
   removeWorkspaceFolder(path: string): Promise<void>

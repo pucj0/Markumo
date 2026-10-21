@@ -6,7 +6,6 @@ import { normalizeKeybinding } from './normalizer'
 // 浏览器/系统硬性保留键（不能由应用随意重定义）
 export const reservedSystemKeys = new Set([
   'F5',
-  'Mod+Shift+R',
   'Mod+C',
   'Mod+V',
   'Mod+X',

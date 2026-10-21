@@ -234,6 +234,10 @@ const definitions: Omit<KeybindingCommand,'executeId'|'supported'|'contexts'|'us
     defaultBinding: 'Mod+Shift+F',
   },
 
+  {
+    id: 'workspace-replace', label: '工作区替换', category: 'search',
+    description: '展开工作区替换输入并预览跨文件修改', scope: 'workspace', defaultBinding: 'Mod+Shift+R',
+  },
   // --- 分栏类 (split) ---
   {
     id: 'split-editor',

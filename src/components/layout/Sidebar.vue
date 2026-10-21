@@ -84,6 +84,7 @@
               <input
                 ref="searchInputRef"
                 v-model="searchQueryText"
+                :disabled="workspace.replaceApplying"
                 type="text"
                 placeholder="搜索整个工作区 (回车或输入检索)…"
                 class="search-input"
@@ -92,6 +93,7 @@
               />
               <button
                 v-if="searchQueryText"
+                :disabled="workspace.replaceApplying"
                 class="clear-btn"
                 title="清除"
                 @click="clearSearch"
@@ -100,11 +102,22 @@
               </button>
             </div>
 
+            <button class="replace-toggle" :disabled="workspace.replaceApplying" :aria-expanded="workspace.replaceExpanded" @click="workspace.replaceExpanded = !workspace.replaceExpanded">
+              {{ workspace.replaceExpanded ? '▾' : '▸' }} 替换 (Ctrl+Shift+R)
+            </button>
+            <div v-if="workspace.replaceExpanded" class="replace-controls">
+              <input ref="replaceInputRef" v-model="workspace.replacementText" :disabled="workspace.replaceApplying" class="search-input" aria-label="替换为" placeholder="替换为（留空则删除）" @input="workspace.invalidateReplace()" />
+              <span v-if="workspace.isRegex" class="tip">捕获组：$1、${name}；$$ 表示 $。按行匹配。</span>
+              <button :disabled="workspace.replaceBusy || workspace.searching || !workspace.searchQuery || searchQueryText !== workspace.searchQuery" @click="workspace.previewReplace()">预览全部替换</button>
+            </div>
+            <input v-model="workspace.searchDirectory" :disabled="workspace.replaceApplying" class="search-input search-directory" aria-label="搜索目录范围" placeholder="搜索目录（绝对路径，留空为全部工作区）" @input="triggerSearchDebounced" @keydown.enter="triggerSearchNow" />
+
             <!-- 搜索修饰选项 -->
-            <div class="search-options">
+            <div class="search-options" :class="{ 'replace-locked': workspace.replaceApplying }">
               <button
                 class="opt-btn"
                 :class="{ on: workspace.isCaseSensitive }"
+                :disabled="workspace.replaceApplying"
                 title="区分大小写"
                 @click="workspace.isCaseSensitive = !workspace.isCaseSensitive; triggerSearchNow()"
               >
@@ -113,6 +126,7 @@
               <button
                 class="opt-btn"
                 :class="{ on: workspace.isWholeWord }"
+                :disabled="workspace.replaceApplying"
                 title="全词匹配"
                 @click="workspace.isWholeWord = !workspace.isWholeWord; triggerSearchNow()"
               >
@@ -121,6 +135,7 @@
               <button
                 class="opt-btn"
                 :class="{ on: workspace.isRegex }"
+                :disabled="workspace.replaceApplying"
                 title="正则表达式"
                 @click="workspace.isRegex = !workspace.isRegex; triggerSearchNow()"
               >
@@ -135,6 +150,34 @@
               >
                 取消
               </button>
+            </div>
+          </div>
+
+          <div v-if="workspace.replaceExpanded && (workspace.replaceMessage || workspace.replaceFiles.length)" class="replace-preview" aria-label="替换预览">
+            <p role="status">{{ workspace.replaceMessage }}</p>
+            <div class="replace-actions">
+              <button :disabled="workspace.replaceBusy" @click="workspace.selectReplacements(true)">全选</button>
+              <button :disabled="workspace.replaceBusy" @click="workspace.selectReplacements(false)">取消全选</button>
+              <button :disabled="workspace.replaceBusy || !workspace.replaceFiles.some(file => file.selected.size && !file.status)" @click="workspace.applyReplacements()">应用已选择的替换</button>
+              <button v-if="workspace.replaceBusy" @click="workspace.cancelReplace()">取消未执行部分</button>
+            </div>
+            <p v-if="workspace.replaceApplying">进度：{{ workspace.replaceProgress }} / {{ workspace.replaceFiles.filter(file => file.selected.size).length }} 文件</p>
+            <p class="tip">打开文件修改缓冲区，可 Undo/Redo，需保存；关闭文件逐个保存，无跨文件全局撤销。</p>
+            <div class="replace-preview-files">
+              <div v-for="file in workspace.replaceFiles" :key="file.path" class="replace-preview-file">
+                <div class="replace-file-header">
+                  <button :aria-expanded="file.expanded" @click="file.expanded = !file.expanded">{{ file.expanded ? '▾' : '▸' }}</button>
+                  <input type="checkbox" :aria-label="`选择文件 ${file.path}`" :disabled="workspace.replaceBusy || !!file.status" :checked="file.selected.size === file.edits.length" :indeterminate="file.selected.size > 0 && file.selected.size < file.edits.length" @change="workspace.selectReplacements(($event.target as HTMLInputElement).checked, file.path)" />
+                  <span :title="readablePath(file.path)">{{ readablePath(file.path).split(/[\\/]/).pop() }} · {{ file.edits.length }} 处</span>
+                </div>
+                <p v-if="file.status" role="status">{{ file.status }}</p>
+                <div v-if="file.expanded">
+                  <label v-for="(edit, index) in file.edits" :key="index" class="replace-match">
+                    <input type="checkbox" :disabled="workspace.replaceBusy || !!file.status" :checked="file.selected.has(index)" :aria-label="`选择 ${edit.line}:${edit.column}`" @change="workspace.toggleReplacement(file, index)" />
+                    <span class="replace-diff"><small>{{ edit.line }}:{{ edit.column }} · {{ edit.context }}</small><del>− {{ edit.before.slice(0, 500) || '∅（零宽）' }}{{ edit.before.length > 500 ? '…（显示前 500 字符）' : '' }}</del><ins>+ {{ edit.insert.slice(0, 500) || '∅（删除）' }}{{ edit.insert.length > 500 ? '…（显示前 500 字符）' : '' }}</ins></span>
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -167,6 +210,7 @@
                 <FileIcon :name="group.relativePath" />
                 <span class="group-file-name">{{ group.relativePath }}</span>
                 <span class="group-count">{{ group.matches.length }}</span>
+                <button v-if="workspace.replaceExpanded" :disabled="workspace.replaceBusy || workspace.searching || searchQueryText !== workspace.searchQuery" title="预览此文件全部替换" @click.stop="workspace.previewReplace(group.path)">替换</button>
               </div>
 
               <div v-if="group.isExpanded" class="group-matches">
@@ -178,6 +222,7 @@
                 >
                   <span class="match-line-num">{{ match.line_number }}</span>
                   <span class="match-text">{{ match.line_text.trim() }}</span>
+                  <button v-if="workspace.replaceExpanded" :disabled="workspace.replaceBusy || workspace.searching || searchQueryText !== workspace.searchQuery" title="预览替换此匹配" @click.stop="workspace.previewReplace(group.path, match)">替换</button>
                 </div>
               </div>
             </div>
@@ -281,6 +326,7 @@ const outlineItems = computed<OutlineItem[]>(() => {
 })
 
 const searchInputRef = ref<HTMLInputElement | null>(null)
+const replaceInputRef = ref<HTMLInputElement | null>(null)
 const operationDialog = ref<InstanceType<typeof WorkspaceOperationDialog> | null>(null)
 const contextMenu = ref<InstanceType<typeof ContextMenu> | null>(null)
 async function copyPath(path: string) {
@@ -575,6 +621,7 @@ async function handleRenameNode(node: WorkspaceNode) {
 }
 
 function triggerSearchDebounced() {
+  if (!props.workspace.replaceApplying) props.workspace.invalidateReplace()
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
   searchDebounceTimer = setTimeout(() => {
     void props.workspace.search(searchQueryText.value)
@@ -600,7 +647,12 @@ function focusSearchInput() {
 }
 
 defineExpose({ focusSearchInput })
-watch(() => props.activePanel, panel => { if (panel === 'search') focusSearchInput() }, { immediate: true })
+watch(() => [props.activePanel, props.workspace.searchFocusRevision], () => {
+  if (props.activePanel === 'search') nextTick(() => {
+    if (props.workspace.searchFocusReplace) replaceInputRef.value?.focus()
+    else searchInputRef.value?.focus()
+  })
+}, { immediate: true })
 
 // --- 拖拽调宽 ---
 let resizing = false
@@ -834,6 +886,20 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100%;
 }
+.replace-controls { display: grid; gap: 6px; }
+.replace-toggle { text-align: left; margin: 6px 0; }
+.search-directory { margin-top: 8px; width: 100%; box-sizing: border-box; }
+.replace-preview { flex: 0 1 auto; min-height: 90px; max-height: 55%; overflow: auto; padding: 8px; border-bottom: 1px solid var(--border-color); font-size: 12px; }
+.replace-preview p { margin: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.replace-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.replace-actions button, .replace-controls button { padding: 4px 6px; border: 1px solid var(--border-color); border-radius: 4px; }
+.replace-file-header { display: flex; align-items: center; gap: 5px; margin-top: 8px; }
+.replace-file-header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.replace-match { display: flex; align-items: flex-start; gap: 4px; padding: 5px 0; }
+.replace-diff { display: grid; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; font-family: monospace; }
+.replace-diff del { color: var(--text-primary); background: rgba(220, 60, 60, .16); text-decoration: none; }
+.replace-diff ins { color: var(--text-primary); background: rgba(40, 180, 80, .16); text-decoration: none; }
+.replace-locked { pointer-events: none; opacity: .5; }
 
 .search-input-wrapper {
   padding: 8px 10px;

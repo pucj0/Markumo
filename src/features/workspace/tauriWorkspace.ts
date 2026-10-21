@@ -5,6 +5,7 @@ import type {
   SearchDonePayload,
   SearchMatch,
   SearchQuery,
+  ReplacePreview,
   WorkspaceGateway,
   WorkspaceInfo,
   WorkspaceNode,
@@ -67,6 +68,9 @@ function subscribe<T>(name: string, listener: (payload: T) => void): () => void 
 }
 
 export const tauriWorkspace: WorkspaceGateway = {
+  previewReplace(query, replacement, targets) { return invoke<ReplacePreview>('preview_workspace_replace', { query, replacement, targets }) },
+  applyReplace(request) { return invoke<number>('apply_workspace_replace', { request }) },
+  validateReplace(path, version, query) { return invoke<void>('validate_workspace_replace', { path, version, query: { ...query, buffers: [] } }) },
   async isVisibleFile(path) { return invoke<boolean>('workspace_file_visible', { path }) },
   async openWorkspaceDialog(add = false): Promise<WorkspaceInfo | null> {
     const raw = await invoke<RawWorkspaceInfo | null>('open_workspace_dialog', { add })

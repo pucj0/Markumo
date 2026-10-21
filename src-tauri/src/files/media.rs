@@ -6,6 +6,9 @@ use std::io::{Seek, SeekFrom};
 
 pub const CHUNK_BYTES: usize = 256 * 1024;
 const HEADER_BYTES: u64 = 4096;
+pub(crate) fn is_media_content(bytes: &[u8]) -> bool {
+    signature(&bytes[..bytes.len().min(HEADER_BYTES as usize)]).is_some()
+}
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaMetadata {

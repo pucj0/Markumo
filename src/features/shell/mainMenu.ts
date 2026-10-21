@@ -25,7 +25,7 @@ export function mainMenu(state: MainMenuState): MenuGroup[] {
       submenu('recent-files','最近打开',recentFiles.map(file => cmd(recentFileCommand(file.path), file.name + (recentFiles.filter(other => other.name === file.name).length > 1 ? ` — ${readablePath(file.path).split(/[\\/]/).slice(-2,-1)[0]}` : '')))),
       submenu('workspace-menu','工作区',[cmd('open-workspace','打开文件夹…'),cmd('add-workspace','添加文件夹…'),
         submenu('recent-workspaces','最近工作区',recentWorkspaces.map(path => cmd(recentWorkspaceCommand(path),baseName(path)))),
-        sep('workspace-search-section'),cmd('workspace-search'),cmd('refresh-workspace')]),
+        sep('workspace-search-section'),cmd('workspace-search'),cmd('workspace-replace'),cmd('refresh-workspace')]),
       sep('save-section'),cmd('save','保存'),cmd('save-as','另存为…'),
       sep('import-section'),
       submenu('import-menu', '导入', [

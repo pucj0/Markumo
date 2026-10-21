@@ -1133,6 +1133,22 @@ export class DocumentManager {
     }
     return changes.length
   }
+
+  /** One isolated history entry against the exact previewed CodeMirror Text.
+   * Text identity also detects edit/undo cycles while native preview is running. */
+  applyWorkspaceReplacement(id: string, expected: import('@codemirror/state').Text, changes: { from: number; to: number; insert: string }[]): boolean {
+    const record = this.records.get(id)
+    if (!record || record.state.doc !== expected || this.isComposing || record.state.readOnly || record.meta.readOnly || record.meta.encoding === 'Hex') return false
+    let end = 0
+    for (const change of changes) {
+      if (!Number.isInteger(change.from) || !Number.isInteger(change.to) || change.from < end || change.to < change.from || change.to > expected.length) return false
+      end = change.to
+    }
+    if (!changes.length) return false
+    if (changes.every(change => expected.sliceString(change.from, change.to) === change.insert)) return true
+    this.dispatch(id, { changes, annotations: isolateHistory.of('full'), userEvent: 'input.replace.workspace' })
+    return true
+  }
   private accept(record: CachedDocument, state: EditorState, docChanged: boolean) {
     record.state = state
     if (docChanged) {

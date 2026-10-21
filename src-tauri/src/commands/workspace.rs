@@ -495,6 +495,80 @@ pub async fn cancel_workspace_search(
 }
 
 #[tauri::command]
+pub async fn preview_workspace_replace(
+    window: Window,
+    query: SearchQuery,
+    replacement: String,
+    targets: Vec<String>,
+    store: State<'_, WorkspaceStore>,
+    search_manager: State<'_, SearchManager>,
+) -> Result<crate::workspace::replace::ReplacePreview, String> {
+    let service = store.for_window(window.label())?;
+    let id = format!("{}:{}", window.label(), query.search_id);
+    let token = search_manager.create_token(&id);
+    let manager = search_manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let roots = service.lock().map_err(|e| e.to_string())?.roots();
+        let result = crate::workspace::replace::preview(
+            &roots,
+            &query,
+            &replacement,
+            &targets,
+            token.clone(),
+        );
+        manager.cleanup(&id, &token);
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn apply_workspace_replace(
+    window: Window,
+    request: crate::workspace::replace::ReplaceApply,
+    store: State<'_, WorkspaceStore>,
+    file_store: State<'_, FileStore>,
+) -> Result<usize, String> {
+    let service = store.for_window(window.label())?;
+    let files = file_store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Same lock order as workspace open/rename. Roots and file grants cannot
+        // change between authorization and the checked write.
+        let workspace = service.lock().map_err(|e| e.to_string())?;
+        let files = files.lock().map_err(|e| e.to_string())?;
+        crate::workspace::replace::apply_closed(&workspace.roots(), &request, &files)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn validate_workspace_replace(
+    window: Window,
+    path: String,
+    version: String,
+    query: SearchQuery,
+    store: State<'_, WorkspaceStore>,
+) -> Result<(), String> {
+    let service = store.for_window(window.label())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let workspace = service.lock().map_err(|e| e.to_string())?;
+        let path = crate::workspace::replace::allowed_path(
+            &workspace.roots(),
+            PathBuf::from(path).as_path(),
+            &query,
+        )?;
+        if crate::files::read_disk(&path).map_err(|e| e.to_string())?.1 != version {
+            return Err("磁盘版本已变化，请重新预览".into());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn reveal_in_explorer(
     window: Window,
     token: String,

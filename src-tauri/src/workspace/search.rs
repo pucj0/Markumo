@@ -36,6 +36,47 @@ pub struct SearchQuery {
     pub max_results: Option<usize>,
     #[serde(default)]
     pub include_ignored: bool,
+    #[serde(default)]
+    pub directory: Option<String>,
+    #[serde(default)]
+    pub buffers: Vec<SearchBuffer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchBuffer {
+    pub path: String,
+    pub text: String,
+    #[serde(default)]
+    pub encoding: Option<String>,
+}
+
+pub fn compile_query(query: &SearchQuery) -> Result<Regex, String> {
+    let mut pattern = if query.is_regex {
+        query.query.clone()
+    } else {
+        regex::escape(&query.query)
+    };
+    if query.is_whole_word {
+        pattern = format!(r"\b(?:{})\b", pattern);
+    }
+    RegexBuilder::new(&pattern)
+        .case_insensitive(!query.is_case_sensitive)
+        .size_limit(1024 * 1024)
+        .dfa_size_limit(2 * 1024 * 1024)
+        .build()
+        .map_err(|e| format!("正则表达式无效: {e}"))
+}
+
+pub fn in_directory(path: &Path, query: &SearchQuery) -> bool {
+    query
+        .directory
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .is_none_or(|directory| {
+            Path::new(directory)
+                .canonicalize()
+                .is_ok_and(|scope| path.starts_with(scope))
+        })
 }
 #[derive(Default, Clone)]
 pub struct SearchManager {
@@ -96,6 +137,7 @@ impl TraversalBudget {
 
 fn walk_files_budget(
     root: &Path,
+    scope: Option<&Path>,
     include_ignored: bool,
     token: &AtomicBool,
     budget: &mut TraversalBudget,
@@ -148,7 +190,9 @@ fn walk_files_budget(
                 continue;
             }
             if kind.is_dir() {
-                directories.push(path);
+                if scope.is_none_or(|scope| path.starts_with(scope) || scope.starts_with(&path)) {
+                    directories.push(path);
+                }
             } else if kind.is_file() && !visit(&path) {
                 return Ok(());
             }
@@ -214,6 +258,7 @@ fn find_files_budget(
     let mut results = Vec::new();
     let walked = walk_files_budget(
         root,
+        None,
         include_ignored,
         &AtomicBool::new(false),
         budget,
@@ -257,6 +302,9 @@ impl WorkspaceSearcher {
     where
         F: FnMut(Vec<SearchMatch>),
     {
+        if !query.query.is_empty() {
+            super::replace::validate_query(query)?;
+        }
         let max = query.max_results.unwrap_or(1000).clamp(1, 1000);
         let mut total = 0;
         let mut budget = TraversalBudget::new();
@@ -308,35 +356,43 @@ impl WorkspaceSearcher {
             return Ok(0);
         }
         let max_results = query.max_results.unwrap_or(1000).clamp(1, 1000);
-        let mut pattern = if query.is_regex {
-            query.query.clone()
-        } else {
-            regex::escape(&query.query)
-        };
-        if query.is_whole_word {
-            pattern = format!(r"\b(?:{})\b", pattern);
-        }
-        let regex = RegexBuilder::new(&pattern)
-            .case_insensitive(!query.is_case_sensitive)
-            .size_limit(1024 * 1024)
-            .build()
-            .map_err(|e| format!("正则表达式无效: {e}"))?;
+        let regex = compile_query(query)?;
+        let scope = query
+            .directory
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                Path::new(s)
+                    .canonicalize()
+                    .map_err(|e| format!("搜索目录不可用：{e}"))
+            })
+            .transpose()?;
         let mut total = 0;
         let mut batch = Vec::with_capacity(32);
-        walk_files_budget(root, query.include_ignored, &token, budget, |path| {
-            Self::search_file(
-                path,
-                root,
-                &regex,
-                query,
-                &token,
-                &mut total,
-                max_results,
-                &mut batch,
-                &mut on_batch,
-            );
-            total < max_results && !token.load(Ordering::Relaxed)
-        })?;
+        walk_files_budget(
+            root,
+            scope.as_deref(),
+            query.include_ignored,
+            &token,
+            budget,
+            |path| {
+                if scope.as_ref().is_some_and(|scope| !path.starts_with(scope)) {
+                    return true;
+                }
+                Self::search_file(
+                    path,
+                    root,
+                    &regex,
+                    query,
+                    &token,
+                    &mut total,
+                    max_results,
+                    &mut batch,
+                    &mut on_batch,
+                );
+                total < max_results && !token.load(Ordering::Relaxed)
+            },
+        )?;
         if !token.load(Ordering::Relaxed) && !batch.is_empty() {
             on_batch(batch);
         }
@@ -370,9 +426,16 @@ impl WorkspaceSearcher {
         {
             return;
         }
-        let text = match crate::files::decode_search_text(&bytes) {
-            Ok(t) => t,
-            Err(_) => return,
+        let buffer = query
+            .buffers
+            .iter()
+            .find(|buffer| Path::new(&buffer.path) == path);
+        let text = match buffer {
+            Some(buffer) => buffer.text.clone(),
+            None => match crate::files::decode_search_text(&bytes) {
+                Ok(text) => text,
+                Err(_) => return,
+            },
         };
         // Match CodeMirror's normalized LF line positions, including CR-only files.
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -453,18 +516,14 @@ mod tests {
         // Full-text search still surfaces the traversal error.
         assert!(walk_files_budget(
             &root,
+            None,
             false,
             &AtomicBool::new(false),
             &mut timeout,
-            |_| true
+            |_| { true }
         )
         .is_err());
-        assert_eq!(
-            find_files_roots(&[root], "", false, 2)
-                .unwrap()
-                .len(),
-            2
-        );
+        assert_eq!(find_files_roots(&[root], "", false, 2).unwrap().len(), 2);
         assert!(find_files_roots(&[dir.path().join("missing")], "", false, 50_000).is_err());
     }
 

@@ -1,3 +1,4 @@
+import { markRaw } from 'vue'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { FileController } from '../files/FileController'
 import { displayPathKey, readablePath } from '../shell/pathDisplay'
@@ -6,6 +7,7 @@ import type {
   SearchDonePayload,
   SearchMatch,
   SearchQuery,
+  ReplaceFile,
   WorkspaceGateway,
   WorkspaceInfo,
   WorkspaceNode,
@@ -63,6 +65,22 @@ export class WorkspaceController {
   isCaseSensitive = false
   isWholeWord = false
   isRegex = false
+  searchDirectory = ''
+  replaceExpanded = false
+  replacementText = ''
+  replaceFiles: (ReplaceFile & { selected: Set<number>; expanded: boolean; status: string })[] = []
+  replaceMessage = ''
+  replaceBusy = false
+  replaceApplying = false
+  replaceProgress = 0
+  searchFocusRevision = 0
+  searchFocusReplace = false
+  private replaceEpoch = 0
+  private replaceCancel = false
+  private replaceSearchId = ''
+  private replaceQuery: SearchQuery | null = null
+  private previewReplacement = ''
+  private replaceSnapshots = new Map<string, { id: string; token: string | undefined; text: NonNullable<ReturnType<DocumentManager['getState']>>['doc'] }>()
 
   private listeners = new Set<() => void>()
   private searchBatchUnsub: (() => void) | null = null
@@ -628,6 +646,7 @@ export class WorkspaceController {
       this.notify('请等待文件操作和输入完成。'); return false
     }
     this.operationBusy = true
+    this.invalidateReplace()
     this.fileController.workspaceBusy = true
     this.cancelOpens(); this.cancelReveal()
     return true
@@ -763,8 +782,132 @@ export class WorkspaceController {
 
   // --- 全文搜索管理 ---
 
-  async search(queryText: string) {
-    const q = queryText.trim()
+  focusWorkspaceSearch(replace = false) {
+    if (replace) this.replaceExpanded = true
+    this.searchFocusReplace = replace
+    this.searchFocusRevision++
+    this.emit()
+  }
+
+  invalidateReplace() {
+    this.replaceEpoch++
+    if (this.replaceSearchId) void this.gateway.cancelSearch(this.replaceSearchId).catch(() => {})
+    this.replaceSearchId = ''
+    this.replaceFiles = []
+    this.replaceMessage = ''
+    this.replaceSnapshots.clear()
+    this.replaceQuery = null
+    if (!this.replaceApplying) this.replaceBusy = false
+    this.emit()
+  }
+
+  private makeSearchQuery(id: string, text = this.searchQuery): SearchQuery {
+    return {
+      search_id: id, query: text, is_case_sensitive: this.isCaseSensitive,
+      is_whole_word: this.isWholeWord, is_regex: this.isRegex, max_results: 1000,
+      include_ignored: this.showIgnored, directory: this.searchDirectory || null,
+      buffers: this.documentManager.openedDocuments.filter(doc => doc.fileToken && !doc.readOnly && doc.encoding !== 'Hex' && (!doc.kind || doc.kind === 'text') && this.roots.some(root => this.isWithin(doc.path, root.rootPath)))
+        .filter(doc => !this.searchDirectory || this.isWithin(doc.path, this.searchDirectory))
+        .map(doc => ({ path: doc.path, text: this.documentManager.getText(doc.id) ?? '', encoding: doc.encoding })),
+    }
+  }
+
+  async previewReplace(path?: string, match?: SearchMatch) {
+    if (this.replaceApplying || !this.searchQuery || this.searching || this.documentManager.isComposing) return
+    if (!this.gateway.previewReplace) { this.notify('当前环境不支持工作区替换预览。'); return }
+    this.invalidateReplace()
+    const epoch = this.replaceEpoch
+    const query = this.makeSearchQuery(`replace-${Date.now()}-${++this.searchSequence}`)
+    const replacement = this.replacementText
+    const snapshots = new Map<string, { id: string; token: string | undefined; text: NonNullable<ReturnType<DocumentManager['getState']>>['doc'] }>()
+    for (const doc of this.documentManager.openedDocuments) {
+      const state = this.documentManager.getState(doc.id)
+      if (state) snapshots.set(displayPathKey(doc.path), { id: doc.id, token: doc.fileToken, text: markRaw(state.doc) })
+    }
+    this.replaceBusy = true; this.replaceSearchId = query.search_id; this.replaceMessage = '正在生成替换预览…'; this.emit()
+    try {
+      const preview = await this.gateway.previewReplace(query, replacement, path ? [path] : [])
+      if (epoch !== this.replaceEpoch || this.disposed) return
+      this.replaceQuery = query; this.previewReplacement = replacement; this.replaceSnapshots = snapshots
+      this.replaceFiles = preview.canceled ? [] : preview.files.map(file => ({ ...file, expanded: true, status: '',
+        selected: new Set(file.edits.flatMap((edit, index) => !match || (edit.line === match.line_number && edit.column === match.column_number) ? [index] : [])),
+      }))
+      const total = this.replaceFiles.reduce((sum, file) => sum + file.edits.length, 0)
+      this.replaceMessage = `${this.replaceFiles.length} 个文件，${total} 处匹配${preview.limited ? '；达到预览预算（最多 1000 处/32 MiB/10 秒），仅预览当前有界结果，请缩小范围' : ''}${preview.canceled ? '；已取消' : ''}${preview.skipped.length ? `；跳过 ${preview.skipped.length} 项：${preview.skipped.join('；')}` : ''}`
+    } catch (error) { if (epoch === this.replaceEpoch) this.replaceMessage = `预览失败：${String(error)}` }
+    finally { if (epoch === this.replaceEpoch) { this.replaceBusy = false; this.replaceSearchId = ''; this.emit() } }
+  }
+
+  selectReplacements(selected: boolean, path?: string) {
+    if (this.replaceBusy) return
+    for (const file of this.replaceFiles) if (!path || file.path === path) file.selected = new Set(selected ? file.edits.map((_, index) => index) : [])
+    this.emit()
+  }
+  toggleReplacement(file: typeof this.replaceFiles[number], index: number) {
+    if (this.replaceBusy) return
+    if (file.selected.has(index)) file.selected.delete(index); else file.selected.add(index)
+    this.emit()
+  }
+  cancelReplace() {
+    this.replaceCancel = true
+    if (!this.replaceApplying) { this.invalidateReplace(); this.replaceMessage = '预览已取消'; this.emit() }
+    else { this.replaceMessage = '正在取消：当前文件完成后停止后续文件'; this.emit() }
+  }
+
+  async applyReplacements() {
+    const query = this.replaceQuery
+    if (!query || this.replaceBusy || !this.gateway.applyReplace || this.operationBusy || this.fileController.activeOperationCount || this.documentManager.isComposing) return
+    // Inputs must still describe exactly the preview presented to the user.
+    const current = this.makeSearchQuery(query.search_id)
+    if (this.previewReplacement !== this.replacementText || ['query','directory','is_regex','is_whole_word','is_case_sensitive','include_ignored'].some(key => current[key as keyof SearchQuery] !== query[key as keyof SearchQuery])) {
+      this.invalidateReplace(); this.replaceMessage = '搜索或替换条件已变化，请重新预览'; return
+    }
+    const files = this.replaceFiles.filter(file => file.selected.size && !file.status)
+    if (!files.length) return
+    this.replaceBusy = true; this.replaceApplying = true; this.replaceCancel = false; this.replaceProgress = 0
+    this.operationBusy = true; this.fileController.workspaceBusy = true
+    let success = 0, failure = 0, canceled = 0
+    this.emit()
+    try {
+      for (const file of files) {
+        if (this.replaceCancel || this.disposed) { file.status = '已取消（未执行）'; canceled++; continue }
+        const selected = [...file.selected].sort((a,b) => a-b)
+        try {
+          const doc = this.documentManager.openedDocuments.find(doc => displayPathKey(doc.path) === displayPathKey(file.path))
+          if (file.buffer) {
+            const snapshot = this.replaceSnapshots.get(displayPathKey(file.path))
+            if (!snapshot || doc?.id !== snapshot.id || doc.fileToken !== snapshot.token || this.fileController.external.blocked(doc.id) || this.fileController.saving.has(doc.id)) throw new Error('打开文档的身份或状态已变化，请重新预览')
+            // Revalidate current workspace authorization/ignore rules and disk version.
+            if (!this.gateway.validateReplace) throw new Error('缺少替换授权校验')
+            await this.gateway.validateReplace(file.path, file.version, query)
+            if (this.replaceCancel || this.disposed) { file.status = '已取消（未执行）'; canceled++; continue }
+            const current = this.documentManager.metadata(doc.id)
+            if (!current || current.fileToken !== snapshot.token || displayPathKey(current.path) !== displayPathKey(file.path)) throw new Error('验证期间文档身份已变化，请重新预览')
+            if (!this.documentManager.applyWorkspaceReplacement(doc.id, snapshot.text, selected.map(index => file.edits[index]))) throw new Error('编辑缓冲区已变化或正在输入，请重新预览')
+            file.status = `已修改缓冲区 ${selected.length} 处（可撤销，待保存）`
+          } else {
+            if (doc) throw new Error('文件已打开，请重新预览后通过编辑器事务替换')
+            await this.gateway.applyReplace({ query: { ...query, buffers: [] }, replacement: this.previewReplacement, path: file.path, version: file.version, selected })
+            file.status = `已保存 ${selected.length} 处`
+          }
+          success++
+        } catch (error) { file.status = `失败：${String(error)}`; failure++ }
+        this.replaceProgress++; this.emit()
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+      }
+      this.replaceMessage = `完成：成功 ${success} 个文件，失败 ${failure} 个，取消 ${canceled} 个。打开文件待保存；关闭文件已分别保存。`
+    } finally {
+      this.replaceBusy = false; this.replaceApplying = false; this.operationBusy = false; this.fileController.workspaceBusy = false
+      this.replaceQuery = null; this.replaceSnapshots.clear(); this.emit()
+      // Keep the per-file report while refreshing search, including modified buffers.
+      if (!this.disposed) await this.search(this.searchQuery, true)
+    }
+  }
+
+  async search(queryText: string, keepReplaceReport = false) {
+    if (this.replaceApplying) return
+    if (!keepReplaceReport) this.invalidateReplace()
+    const q = queryText
     if (!q) {
       this.cancelSearch()
       this.searchResults = []
@@ -791,15 +934,7 @@ export class WorkspaceController {
     this.searchTotal = 0
     this.emit()
 
-    const query: SearchQuery = {
-      search_id: this.searchId,
-      query: q,
-      is_case_sensitive: this.isCaseSensitive,
-      is_whole_word: this.isWholeWord,
-      is_regex: this.isRegex,
-      max_results: 1000,
-      include_ignored: this.showIgnored,
-    }
+    const query = this.makeSearchQuery(this.searchId, q)
 
     try {
       await this.gateway.searchWorkspace(query)
@@ -959,6 +1094,7 @@ export class WorkspaceController {
   }
 
   destroy() {
+    this.cancelReplace()
     this.cancelOpens()
     this.cancelExpand();this.revealSequence++
     this.disposed = true
