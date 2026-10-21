@@ -12,6 +12,7 @@ import { LiveTableToolbar, type TableToolbarCommand } from './LiveTableToolbar'
 import { markdownSchema as s } from './MarkdownSchema'
 import { MarkdownSourceBridge, textPatch, type SourcePatch } from './MarkdownSourceBridge'
 import { mathBlockParts, mapMathSelection, mergeMathComposition, type MathSelection } from './MathSource'
+import { markdownTypographyStyle } from '../typography'
 import { InlineSourceView, inlineSourceRange } from './InlineSourceView'
 import { Decoration, DecorationSet } from 'prosemirror-view'
 import { CodeBlockView } from './CodeBlockView'
@@ -764,17 +765,7 @@ export class MarkdownEditorController implements LiveEditor {
     this.settings = settings
     this.dom.dataset.imageBorder = String(settings.imageBorder !== false)
     const style = this.dom.style
-    style.setProperty('--md-content-width', `${settings.width}px`)
-    style.setProperty('--md-font-size', `${settings.fontSize}px`)
-    style.setProperty('--md-line-height', String(settings.lineHeight))
-    style.setProperty(
-      '--md-font-family',
-      settings.fontFamily === 'system'
-        ? '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", system-ui, sans-serif'
-        : settings.fontFamily === 'serif'
-        ? 'Georgia, "Noto Serif CJK SC", "SimSun", serif'
-        : '"JetBrains Mono", "Cascadia Code", Consolas, monospace'
-    )
+    for (const [property, value] of Object.entries(markdownTypographyStyle(settings))) style.setProperty(property, value)
     for (const code of this.codeViews) code.typography(settings)
   }
 

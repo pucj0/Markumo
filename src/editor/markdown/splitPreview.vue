@@ -1,5 +1,5 @@
 <template>
-  <div class="split-preview-pane" :data-image-border="imageBorder !== false">
+  <div class="split-preview-pane" :style="markdownTypographyStyle(settings)" :data-code-numbers="settings.codeLineNumbers" :data-code-wrap="settings.codeWrap" :data-image-border="imageBorder !== false">
     <div
       ref="contentRef"
       class="split-preview-content markdown-body"
@@ -17,7 +17,9 @@
 import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import { openMarkdownLink } from './links'
 import { createMarkdownRenderer, type PreviewEnvironment } from './rendering'
-import { renderMath } from './wysiwyg/renderers'
+import { renderMath, renderDiagram } from './wysiwyg/renderers'
+import { defaultMarkdownTypography, type MarkdownTypography } from './wysiwyg/contracts'
+import { markdownTypographyStyle } from './typography'
 import { createMarkdownResources, mountMarkdownImage, type MarkdownResources } from './images'
 import { textClipboard } from '../../features/shell/clipboard'
 import { htmlForPreview, mountHtmlImages, type MountedImageHandle } from './html/SafeHtmlRenderer'
@@ -28,7 +30,10 @@ const props = defineProps<{
   resources?: MarkdownResources
   resourceKey?: string
   imageBorder?: boolean
+  typography?: MarkdownTypography
 }>()
+const defaults = defaultMarkdownTypography()
+const settings = computed(() => props.typography || defaults)
 const emit = defineEmits<{
   (e: 'scroll-line', line: number): void
   (e: 'edit-image', from: number, snapshot: string): void
@@ -52,9 +57,16 @@ watch(() => props.content, content => {
 let mountedImages: ReturnType<typeof mountMarkdownImage>[] = []
 let mountedHtmlImages: MountedImageHandle | undefined
 let hydrateGeneration = 0
+let themeObserver: MutationObserver | undefined
+let refreshDiagrams = () => {}
+if (typeof document !== 'undefined') {
+  themeObserver = new MutationObserver(() => refreshDiagrams())
+  themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] })
+}
 
 onUnmounted(() => {
   disposed = true
+  themeObserver?.disconnect()
   if (timer) clearTimeout(timer)
   for (const image of mountedImages) image.destroy()
   mountedImages = []
@@ -91,23 +103,38 @@ watch([renderedHtml, () => props.resources, () => props.resourceKey], async () =
   if (disposed || generation !== hydrateGeneration) return
 
   const slots = new Map(rendered.value.slots.map(slot => [slot.id, slot]))
+  const diagrams: { host: HTMLElement; source: string }[] = []
   for (const host of contentRef.value?.querySelectorAll<HTMLElement>('[data-md-render]') || []) {
     const slot = slots.get(host.dataset.mdRender || '')
     if (!slot) continue
+    if (slot.kind === 'code') continue
+    if (slot.kind === 'diagram') { const diagram = host.querySelector<HTMLElement>('.md-diagram'); if (diagram) diagrams.push({ host: diagram, source: slot.source }); continue }
     const current = () => !disposed && generation === hydrateGeneration && snapshot === props.content
     void renderMath(host, slot.source, slot.kind === 'math-block', current).catch(error => {
       if (host.isConnected && current()) { host.classList.add('md-render-error'); host.textContent = String(error instanceof Error ? error.message : error) }
     })
   }
+  let diagramGeneration = 0
+  refreshDiagrams = () => {
+    const version = ++diagramGeneration
+    for (const { host, source } of diagrams.slice(0, 16)) {
+      const current = () => !disposed && generation === hydrateGeneration && version === diagramGeneration && snapshot === props.content
+      void renderDiagram(host, source, current).catch(error => {
+        if (host.isConnected && current()) { host.classList.add('md-render-error'); host.textContent = `${error instanceof Error ? error.message : error}\n${source}` }
+      })
+    }
+    for (const { host } of diagrams.slice(16)) host.textContent = '图表达到每次预览 16 个的预算。'
+  }
+  refreshDiagrams()
 
   // 绑定代码块复制按钮
   for (const button of Array.from(contentRef.value?.querySelectorAll<HTMLButtonElement>('[data-md-copy]') || [])) {
     button.onmousedown = event => event.preventDefault()
     button.onclick = async () => {
       const fenceEl = button.closest('.md-preview-fence')
-      const code = fenceEl?.querySelector('code')?.textContent || ''
+      const code = slots.get((fenceEl as HTMLElement | null)?.dataset.mdRender || '')?.source ?? fenceEl?.querySelector('code')?.textContent ?? ''
       try {
-        await textClipboard.writeText(code.replace(/\n$/, ''))
+        await textClipboard.writeText(code)
         const originalHtml = button.innerHTML
         const checkIcon = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m5 12 4 4L19 6"/></svg>`
         button.innerHTML = checkIcon
@@ -237,9 +264,9 @@ defineExpose({ syncScroll })
   overflow-y: auto;
   padding: 16px 24px;
   color: var(--ink);
-  font-family: var(--font-sans);
-  font-size: var(--ui-font-size, 14px);
-  line-height: 1.65;
+  font-family: var(--md-font-family);
+  font-size: var(--md-font-size);
+  line-height: var(--md-line-height);
   box-sizing: border-box;
 }
 :deep(.md-math-output) { margin: 1em 0; max-width: 100%; overflow-x: auto; text-align: center; }
@@ -305,18 +332,18 @@ defineExpose({ syncScroll })
   border: 1px solid var(--line);
   border-radius: 4px;
   overflow: hidden;
-  margin: 1em 0;
+  margin: 1.2em 0;
 }
 
 :deep(.md-preview-fence pre) {
   margin: 0;
-  padding: 10px 14px;
+  padding: 10px 30px 6px 0;
   background: transparent;
   border: none;
   overflow-x: auto;
   font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 1.65;
+  font-size: var(--md-code-font-size);
+  line-height: var(--md-code-line-height);
   color: var(--text);
 }
 
@@ -326,7 +353,20 @@ defineExpose({ syncScroll })
   color: inherit;
   font-family: inherit;
   font-size: inherit;
+  display: block;
+  width: max-content;
+  min-width: 100%;
 }
+:deep(.md-code-line) { display: grid; grid-template-columns: max-content minmax(0, 1fr); line-height: inherit; }
+:deep(.md-code-number) { position: sticky; left: 0; padding: 0 5px 0 4px; color: var(--muted); background: var(--md-code-bg); font-size: 12px; line-height: inherit; white-space: pre; user-select: none; }
+:deep(.md-code-text) { padding: 0 14px; white-space: pre; min-width: 0; }
+:deep(.md-code-text:empty)::before { content: '\200b'; }
+.split-preview-pane[data-code-numbers="false"] :deep(.md-code-number) { display: none; }
+.split-preview-pane[data-code-numbers="false"] :deep(.md-code-line) { grid-template-columns: minmax(0, 1fr); }
+.split-preview-pane[data-code-wrap="true"] :deep(.md-preview-fence pre code) { width: 100%; min-width: 0; }
+.split-preview-pane[data-code-wrap="true"] :deep(.md-code-text) { white-space: pre-wrap; overflow-wrap: anywhere; }
+:deep(.md-diagram) { padding: 16px; overflow: auto; max-height: 600px; text-align: center; }
+:deep(.md-diagram svg) { max-width: 100%; height: auto; }
 
 /* 复制按钮：右上角 14px 图标，hover 时显现 */
 :deep(.md-preview-fence .md-code-copy) {
@@ -354,6 +394,7 @@ defineExpose({ syncScroll })
   opacity: 0.95;
   pointer-events: auto;
 }
+:deep(.md-preview-fence:focus-within .md-code-copy) { opacity: 1; pointer-events: auto; }
 
 :deep(.md-preview-fence .md-code-copy:hover) {
   opacity: 1;

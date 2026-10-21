@@ -1,0 +1,16 @@
+/* Shared reading surfaces; editor-only affordances stay in MarkdownTheme.css. */
+:is(.markdown-live, .split-preview-pane) {
+  --text: var(--ink);
+  --md-code-bg: var(--sidebar);
+  --md-code-font-size: 13px;
+  --md-code-line-height: 1.65;
+  --md-table-border: var(--line);
+  --md-heading-color: var(--bright);
+  --md-link-color: var(--accent);
+  --md-paragraph-spacing: .8em;
+}
+body.light :is(.markdown-live, .split-preview-pane) {
+  --text: #333; --bright: #333; --muted: #777; --line: #dfe2e5;
+  --md-heading-color: #333; --md-link-color: #4183c4;
+  --md-code-bg: #f8f8f8; --md-table-border: #dfe2e5;
+}

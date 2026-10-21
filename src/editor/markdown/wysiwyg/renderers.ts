@@ -4,7 +4,9 @@ export async function renderDiagram(host:HTMLElement,source:string,current:()=>b
   if(source.length>8000||source.split('\n').length>200)throw new Error('图表超过 8000 字符 / 200 行安全预算，请编辑源码。')
   if(/%%\{|^\s*---|@\{|<|https?:|url\s*\(|\b(?:click|href|callback|linkStyle|classDef|style)\b/im.test(source))throw new Error('图表中的配置、资源、样式、外链和回调未启用。')
   const request=serial.then(async()=>{
+    if(!host.isConnected||!current())return
     const [{default:mermaid},{default:purify}]=await Promise.all([import('mermaid'),import('dompurify')])
+    if(!host.isConnected||!current())return
     mermaid.initialize({startOnLoad:false,securityLevel:'strict',maxTextSize:8000,maxEdges:200,htmlLabels:false,flowchart:{htmlLabels:false},theme:document.body.classList.contains('light')?'default':'dark'})
     const id=`markumo-diagram-${++identity}`
     try{

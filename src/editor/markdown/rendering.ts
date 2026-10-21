@@ -7,7 +7,8 @@ import { imageDestination } from './images'
 import { markdownSemantics, markdownSyntaxExtensions } from './semantics'
 import { sanitizeHtml } from './html/SafeHtmlRenderer'
 import { installMarkdownMath, mathBlockParts } from './mathSemantics'
-export interface PreviewSlot { id: string; kind: 'math-inline' | 'math-block'; source: string }
+import { staticCodeLines } from './staticCode'
+export interface PreviewSlot { id: string; kind: 'math-inline' | 'math-block' | 'code' | 'diagram'; source: string }
 export interface PreviewEnvironment extends Record<PropertyKey, unknown> { slots?: PreviewSlot[]; slotPrefix?: string }
 export function previewSlot(env: PreviewEnvironment, kind: PreviewSlot['kind'], source: string) {
   env.slots ??= []
@@ -87,11 +88,23 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}) {
     if(token.meta?.inTable||typeof token.meta?.from!=='number')return md.utils.escapeHtml(`![${alt}](${source})`)
     return `<span class="md-image-slot" data-md-source="${md.utils.escapeHtml(source)}" data-md-alt="${md.utils.escapeHtml(alt)}" data-source-from="${token.meta.from}"></span>`
   }
-  const fence = md.renderer.rules.fence!
-  md.renderer.rules.fence = (tokens, index, options, env, self) => {
+  md.renderer.rules.fence = (tokens, index, options, env) => {
+    const token = tokens[index], code = token.content.replace(/\n$/, '')
+    const environment: PreviewEnvironment = env || {}
+    const diagram = /^mermaid(?:\s|$)/i.test(token.info)
+    const id = previewSlot(environment, diagram ? 'diagram' : 'code', code)
     const copyIcon = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 9h11v12H9z M5 15H3V3h12v2"/></svg>`
     const copyButton = `<button type="button" class="md-code-copy" data-md-copy title="复制代码" aria-label="复制代码">${copyIcon}</button>`
-    return `<div class="md-preview-fence md-code-surface">${copyButton}${fence(tokens, index, options, env, self)}</div>`
+    const line = token.map ? ` data-source-line="${token.map[0] + 1}"` : ''
+    if (diagram) return `<div class="md-preview-fence md-code-surface" data-md-render="${id}"${line}>${copyButton}<div class="md-diagram" role="img" aria-label="Mermaid 图表">正在渲染图表…</div></div>`
+    // Start/reuse the existing lazy language load without creating EditorViews.
+    options.highlight?.(code, token.info, '')
+    const support = languages.get(fenceLanguage(token.info))
+    const visible = code.slice(0, 128 * 1024).split('\n').slice(0, 5000).join('\n')
+    const spans = support && code.length <= 64 * 1024 ? syntaxSpans(visible, support) : []
+    const rows = staticCodeLines(visible, spans, md.utils.escapeHtml)
+    const warning = visible !== code ? '<small>代码预览达到 128 KiB / 5000 行预算；复制仍使用完整代码。</small>' : ''
+    return `<div class="md-preview-fence md-code-surface" data-md-render="${id}"${line}>${copyButton}<pre><code>${rows}</code></pre>${warning}</div>`
   }
   md.renderer.rules.html_block = (tokens, index) => sanitizeHtml(tokens[index].content)
   md.renderer.rules.html_inline = (tokens, index) => sanitizeHtml(tokens[index].content)

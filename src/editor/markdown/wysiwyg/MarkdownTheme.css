@@ -540,7 +540,7 @@ body.light .file-icon-gray { color: #6c7c92; }
 
 .markdown-live .md-code-block .cm-editor {
   height: auto !important;
-  font: 13px/1.65 var(--font-mono);
+  font: var(--md-code-font-size)/var(--md-code-line-height) var(--font-mono);
   color: var(--text);
   background: transparent;
   width: 100%;
@@ -549,6 +549,7 @@ body.light .file-icon-gray { color: #6c7c92; }
 .markdown-live .md-code-block .cm-scroller {
   overflow: auto;
   font-family: var(--font-mono);
+  line-height: var(--md-code-line-height);
 }
 
 .markdown-live .md-code-block .cm-gutters {
