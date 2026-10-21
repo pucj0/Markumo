@@ -74,11 +74,16 @@ Diff 使用已有 MIT 许可的 `@codemirror/merge`，无 Monaco、新编辑内�
 | 原生上限/租约/多窗口专项 | 通过 |
 | Rust `cargo check --locked` | 通过 |
 | Rust `cargo test --locked` | 145 通过、0 失败、1 项原有公网测试忽略 |
-| 前端类型检查 | 独立快照及当前共享工作目录均通过 |
-| 前端构建 | 独立快照通过，保留已有大 chunk / 模块外置提示 |
-| 32 项完整前端回归 | 隔离 Vite 缓存后运行中 |
+| 前端类型检查 | 独立快照及合并同期 Slash 功能后的 main（`2c2d721`）均通过 |
+| 前端构建 | 独立快照及合并后的 main 均通过，保留已有大 chunk / 模块外置提示 |
+| 32 项完整前端回归 | 32/32 通过，0 失败、0 跳过；含 61 组外部文件专项 |
+| 合并后的 main 外部专项 | 再次 61 组通过，事件指标 checks=5、reads=2、files=1 |
 
 本次执行期间，其他编辑正在添加 Markdown Slash 命令。共享工作目录的类型检查曾因此报未使用成员；这些改动没有被删除或纳入本次补丁。为验证独立交付内容，在忽略目录 `test-results/external-latest-review/verified-source` 导出基线和本次补丁，复用相同锁文件已安装的依赖，执行前端检查；这是验证产物，不是新分支或工作树。最终提交只包含下列外部文件相关改动。
+
+功能提交为 `a98262a45c4eaebbc73fdc84dfec2ee065b8d9cb`。9 个代码/测试文件的 Git 对象已逐一核对，与验证快照完全一致（`test-results/external-latest-review/source-match.log`）。同期 Slash 功能随后独立提交为 `2c2d721`，本次没有改写其历史；对合并后的 main 另外执行了类型检查、构建和 61 组外部专项。最终验收记录单独追加提交。
+
+首次完整回归在 Vite 重新预构建依赖时发生页面加载超时。将验证产物的 Vite 缓存与共享工作目录隔离后，完整重跑 32 项并全部通过，没有修改断言或放宽超时。最终日志位于 `test-results/external-latest-review/`：`snapshot-typecheck.log`、`snapshot-build.log`、`full-regression-final.log`、`cargo-check.log`、`cargo-test.log`、`integrated-typecheck.log`、`integrated-build.log`、`integrated-external.log`。快照使用 `pnpm --config.verifyDepsBeforeRun=false typecheck|build|test:regression` 复用已安装依赖；共享 main 使用正常的 `pnpm typecheck`、`pnpm build` 和 `node scripts/external-file-regression.mjs`。
 
 ## 本次文件清单
 
