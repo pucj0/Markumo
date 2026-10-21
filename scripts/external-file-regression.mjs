@@ -12,6 +12,7 @@ import {defaultSettings,settingsFrom} from '/src/features/shell/editorSettings.t
 import {DocumentManager} from '/src/editor/core/DocumentManager.ts'
 import {FileController} from '/src/features/files/FileController.ts'
 import {AutoSaveController} from '/src/features/files/AutoSaveController.ts'
+import {usesCaseInsensitivePaths} from '/src/features/files/pathKey.ts'
 import {diffWithinBudget} from '/src/features/files/ExternalFileChangeController.ts'
 import {RecoveryController} from '/src/features/recovery/RecoveryController.ts'
 import {EditorSelection} from '@codemirror/state'
@@ -20,7 +21,7 @@ import {createApp,h,nextTick} from 'vue'
 import Banner from '/src/components/layout/ExternalFileBanner.vue'
 import Dialogs from '/src/components/modals/ExternalFileDialogs.vue'
 import Diff from '/src/components/modals/ExternalFileDiff.vue'
-window.f={defaultSettings,settingsFrom,DocumentManager,FileController,AutoSaveController,RecoveryController,diffWithinBudget,EditorSelection,undoDepth,isolateHistory,createApp,h,nextTick,Banner,Dialogs,Diff}
+window.f={defaultSettings,settingsFrom,DocumentManager,FileController,AutoSaveController,RecoveryController,usesCaseInsensitivePaths,diffWithinBudget,EditorSelection,undoDepth,isolateHistory,createApp,h,nextTick,Banner,Dialogs,Diff}
 window.ok=(value,message='assertion failed')=>{if(!value)throw Error(message)}
 window.defer=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}}
 window.flushChecks=async t=>{clearTimeout(t.external.timer);t.external.timer=undefined;await t.external.drain()}
@@ -211,7 +212,7 @@ try {
  await page.waitForFunction(()=>window.race.reads===1)
  await page.evaluate(async()=>{const t=window.race;try{t.edit();t.readGate.resolve();await window.racePending;ok(t.manager.getText(t.id).includes('local'));ok(t.external.blocked(t.id))}finally{t.dispose()}})
  await test('11 save-as uses current buffer, preserves encoding/BOM, changes binding, retains later edits',async()=>{const t=make({encoding:'UTF-16LE',bom:true,eol:'Mixed'});try{t.edit();t.change();await t.external.check(t.id);t.target={token:'new',path:'E:/isolated/copy.txt',version:null};t.saveGate=defer();const pending=t.files.save(t.id,true);await Promise.resolve();t.edit('later');t.saveGate.resolve();ok(!await pending);ok(t.writes.length===1);ok(!t.writes[0].text.includes('later'));ok(t.writes[0].encoding==='UTF-16LE'&&t.writes[0].bom);ok(t.manager.metadata(t.id).dirty);ok(t.manager.metadata(t.id).fileToken==='new');ok(!t.external.blocked(t.id));ok(t.released.includes('token'))}finally{t.dispose()}})
- await test('12 save-as to original path rejected and temporary target capability released',async()=>{const t=make();try{t.edit();t.change();await t.external.check(t.id);t.target={token:'extra',path:'e:\\isolated\\NOTE.txt',version:t.disk.version};ok(!await t.files.save(t.id,true));ok(!t.writes.length);ok(t.released.includes('extra'));ok(t.external.blocked(t.id))}finally{t.dispose()}})
+ await test('12 save-as to original path rejected and temporary target capability released',async()=>{const t=make();try{t.edit();t.change();await t.external.check(t.id);const path=t.disk.path.replaceAll('/','\\');t.target={token:'extra',path:f.usesCaseInsensitivePaths()?path.toUpperCase():path,version:t.disk.version};ok(!await t.files.save(t.id,true));ok(!t.writes.length);ok(t.released.includes('extra'));ok(t.external.blocked(t.id))}finally{t.dispose()}})
  await test('13 autosave centrally pauses conflict through edits and disable/re-enable; unrelated files save',async()=>{const t=make();try{t.edit();t.change();await t.external.check(t.id);t.auto=new f.AutoSaveController(t.manager,t.files);t.auto.configure(true,0);t.edit('x');ok(await t.files.autoSave(t.id)==='skipped');t.auto.configure(false,0);t.auto.configure(true,0);ok(t.external.blocked(t.id));await t.external.requestReload(t.id);ok(await t.external.confirmReload());ok(!t.external.blocked(t.id));t.edit('after resolved');window.autoResume=t}catch(e){t.dispose();throw e}})
  await page.waitForFunction(()=>window.autoResume.writes.length===1&&!window.autoResume.manager.metadata(window.autoResume.id).dirty)
  await page.evaluate(()=>window.autoResume.dispose())
@@ -281,7 +282,7 @@ try {
   const t=make();try{await t.ready;t.edit(' local');const local=t.manager.getText(t.id);t.change('disk A');await t.external.check(t.id);await t.external.requestReload(t.id);const read=t.gateway.readExternal;t.gateway.readExternal=async(...args)=>{const snapshot=await read(...args);t.change('disk B after read');return snapshot};ok(!await t.external.confirmReload());ok(t.manager.getText(t.id)===local&&t.manager.metadata(t.id).dirty);ok([...t.transport.records.values()].some(r=>r.text===local));ok(t.external.blocked(t.id));await t.recovery.open();ok(t.recovery.records.value.length>0)}finally{t.dispose()}
  })
  await test('28 missing recovery protection fails closed; same-path Save As and blocked autosave never write the conflict file',async()=>{
-  const t=make();try{await t.ready;t.edit(' local');t.change('external');await t.external.check(t.id);t.external.setRecoveryCheckpoint(undefined);await t.external.requestReload(t.id);ok(!await t.external.confirmReload());t.target={token:'extra',path:'e:\\isolated\\NOTE.txt',version:t.disk.version};ok(!await t.files.save(t.id,true));ok(t.released.includes('extra'));ok(await t.files.autoSave(t.id)==='skipped');ok(t.writes.length===0&&t.manager.metadata(t.id).dirty)}finally{t.dispose()}
+  const t=make();try{await t.ready;t.edit(' local');t.change('external');await t.external.check(t.id);t.external.setRecoveryCheckpoint(undefined);await t.external.requestReload(t.id);ok(!await t.external.confirmReload());const path=t.disk.path.replaceAll('/','\\');t.target={token:'extra',path:f.usesCaseInsensitivePaths()?path.toUpperCase():path,version:t.disk.version};ok(!await t.files.save(t.id,true));ok(t.released.includes('extra'));ok(await t.files.autoSave(t.id)==='skipped');ok(t.writes.length===0&&t.manager.metadata(t.id).dirty)}finally{t.dispose()}
  })
  assert.deepEqual(errors,[])
  fs.writeFileSync(`${output}/results.json`,JSON.stringify({results,eventMetrics},null,2))

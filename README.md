@@ -4,7 +4,7 @@
 
 提供 Windows、Linux、macOS（Apple Silicon / Intel）版本，支持签名验证的应用内更新。
 
-当前版本：[1.0.4](https://github.com/pucj0/Markumo/releases/tag/v1.0.4) · 开源协议：[AGPL-3.0-only](LICENSE)。
+当前版本：[1.0.5](https://github.com/yuanmahome/Markumo/releases/tag/v1.0.5) · 开源协议：[AGPL-3.0-only](LICENSE)。
 
 ## 功能
 
@@ -22,7 +22,7 @@
 
 ## 安装与使用
 
-从仓库的 [Releases](https://github.com/pucj0/Markumo/releases/latest) 获取安装包，更新内容见 [1.0.4 更新日志](docs/releases/v1.0.4.md)，也可按下文自行构建。
+从仓库的 [Releases](https://github.com/yuanmahome/Markumo/releases/latest) 获取安装包，更新内容见 [1.0.5 更新日志](docs/releases/v1.0.5.md)，也可按下文自行构建。
 
 标题栏 GitHub 图标可打开项目，更新图标提供检查、下载、完整日志和安装入口。设置 → 更新中，自动检查默认开启，自动后台下载默认关闭；后台下载期间可以继续编辑，关闭更新面板也不会中断下载。安装和重启始终由用户确认。安装前请关闭其他 Markumo 窗口；当前窗口可选择保存全部未保存文档，任何保存取消或失败都会停止安装。自动发布与签名配置见 [发布说明](docs/releasing.md)。
 
