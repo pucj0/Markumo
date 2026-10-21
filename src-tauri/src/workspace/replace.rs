@@ -227,6 +227,63 @@ pub fn edits(
     Ok(edits)
 }
 
+fn preview_single_file(
+    roots: &[PathBuf],
+    target_str: &str,
+    query: &SearchQuery,
+    replacement: &str,
+    hit_limit: usize,
+    token: &AtomicBool,
+    size: &mut usize,
+) -> Result<Option<ReplaceFile>, String> {
+    let path = allowed_path(roots, Path::new(target_str), query)?;
+    let (bytes, version, read_only) = read_disk(&path).map_err(|e| e.to_string())?;
+    if crate::files::media::is_media_content(&bytes) {
+        return Err("跳过媒体内容（与扩展名无关）".into());
+    }
+    if read_only {
+        return Err("文件没有写入权限".into());
+    }
+    let buffer = query.buffers.iter().find(|b| {
+        let bp = Path::new(&b.path);
+        bp == path
+            || bp == Path::new(target_str)
+            || b.path
+                .replace('/', "\\")
+                .trim_start_matches(r"\\?\")
+                .eq_ignore_ascii_case(path.to_string_lossy().replace('/', "\\").trim_start_matches(r"\\?\"))
+    });
+    let (disk, encoding, bom) = codec::decode_with_path(
+        &bytes,
+        buffer.and_then(|b| b.encoding.as_deref()),
+        Some(&path),
+    )
+    .map_err(|e| e.to_string())?;
+    // Reject ambiguous/non-bijective legacy decoding before offering a replacement.
+    if codec::encode(&disk, &encoding, bom).map_err(|e| e.to_string())? != bytes {
+        return Err("源文件编码无法无损往返".into());
+    }
+    let text = buffer.map(|b| b.text.as_str()).unwrap_or(&disk);
+    let changes = edits(text, query, replacement, hit_limit, token)?;
+    *size += text.len()
+        + changes
+            .iter()
+            .map(|e| e.before.len() + e.insert.len() + e.context.len())
+            .sum::<usize>();
+    if *size > MAX_PREVIEW {
+        return Err("预览超过 32 MiB 预算，请缩小目录范围".into());
+    }
+    if changes.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(ReplaceFile {
+        path: target_str.to_string(),
+        version,
+        buffer: buffer.is_some(),
+        edits: changes,
+    }))
+}
+
 pub fn preview(
     roots: &[PathBuf],
     query: &SearchQuery,
@@ -239,15 +296,59 @@ pub fn preview(
     if replacement.len() > 16 * 1024 || targets.len() > MAX_MATCHES {
         return Err("替换请求超出预算".into());
     }
+    let max_results = query
+        .max_results
+        .unwrap_or(MAX_MATCHES)
+        .clamp(1, MAX_MATCHES);
+
+    if !targets.is_empty() {
+        let mut files = Vec::new();
+        let mut skipped = Vec::new();
+        let mut size = 0;
+        let mut total_matches = 0;
+        let mut limited = false;
+        let mut seen = HashSet::new();
+
+        for target in targets {
+            if token.load(Ordering::Relaxed) {
+                break;
+            }
+            if started.elapsed() > Duration::from_secs(10) || size > MAX_PREVIEW {
+                limited = true;
+                skipped.push("预览达到 10 秒/32 MiB 预算，剩余文件未处理；请缩小目录范围".into());
+                break;
+            }
+            if !seen.insert(target.clone()) {
+                continue;
+            }
+            let remaining = max_results.saturating_sub(total_matches);
+            if remaining == 0 {
+                limited = true;
+                break;
+            }
+            let file = preview_single_file(roots, target, query, replacement, remaining, &token, &mut size)?;
+            if let Some(file) = file {
+                if file.edits.len() >= remaining {
+                    limited = true;
+                }
+                total_matches += file.edits.len();
+                files.push(file);
+            }
+        }
+
+        return Ok(ReplacePreview {
+            files,
+            skipped,
+            limited,
+            canceled: token.load(Ordering::Relaxed),
+        });
+    }
+
     let mut hits = Vec::new();
     WorkspaceSearcher::execute_search_roots(roots, query, token.clone(), |batch| {
         hits.extend(batch)
     })?;
-    let mut limited = hits.len()
-        >= query
-            .max_results
-            .unwrap_or(MAX_MATCHES)
-            .clamp(1, MAX_MATCHES);
+    let mut limited = hits.len() >= max_results;
     let mut seen = HashSet::new();
     let mut hit_counts = HashMap::new();
     for hit in &hits {
@@ -265,60 +366,19 @@ pub fn preview(
             skipped.push("预览达到 10 秒/32 MiB 预算，剩余文件未处理；请缩小目录范围".into());
             break;
         }
-        if !seen.insert(hit.path.clone()) || (!targets.is_empty() && !targets.contains(&hit.path)) {
+        if !seen.insert(hit.path.clone()) {
             continue;
         }
-        let build = (|| -> Result<ReplaceFile, String> {
-            let path = allowed_path(roots, Path::new(&hit.path), query)?;
-            let (bytes, version, read_only) = read_disk(&path).map_err(|e| e.to_string())?;
-            if crate::files::media::is_media_content(&bytes) {
-                return Err("跳过媒体内容（与扩展名无关）".into());
-            }
-            if read_only {
-                return Err("文件没有写入权限".into());
-            }
-            let buffer = query.buffers.iter().find(|b| Path::new(&b.path) == path);
-            let (disk, encoding, bom) = codec::decode_with_path(
-                &bytes,
-                buffer.and_then(|b| b.encoding.as_deref()),
-                Some(&path),
-            )
-            .map_err(|e| e.to_string())?;
-            // Reject ambiguous/non-bijective legacy decoding before offering a replacement.
-            if codec::encode(&disk, &encoding, bom).map_err(|e| e.to_string())? != bytes {
-                return Err("源文件编码无法无损往返".into());
-            }
-            let text = buffer.map(|b| b.text.as_str()).unwrap_or(&disk);
-            let count = files
-                .iter()
-                .map(|f: &ReplaceFile| f.edits.len())
-                .sum::<usize>();
-            // Respect the result set cap, even when the last file has more matches.
-            let hit_count = query
-                .max_results
-                .unwrap_or(MAX_MATCHES)
-                .clamp(1, MAX_MATCHES)
-                .saturating_sub(count)
-                .min(hit_counts.get(&hit.path).copied().unwrap_or(0));
-            let changes = edits(text, query, replacement, hit_count, &token)?;
-            size += text.len()
-                + changes
-                    .iter()
-                    .map(|e| e.before.len() + e.insert.len() + e.context.len())
-                    .sum::<usize>();
-            if size > MAX_PREVIEW {
-                return Err("预览超过 32 MiB 预算，请缩小目录范围".into());
-            }
-            Ok(ReplaceFile {
-                path: hit.path.clone(),
-                version,
-                buffer: buffer.is_some(),
-                edits: changes,
-            })
-        })();
-        match build {
-            Ok(file) if !file.edits.is_empty() => files.push(file),
-            Ok(_) => {}
+        let count = files
+            .iter()
+            .map(|f: &ReplaceFile| f.edits.len())
+            .sum::<usize>();
+        let remaining = max_results
+            .saturating_sub(count)
+            .min(hit_counts.get(&hit.path).copied().unwrap_or(0));
+        match preview_single_file(roots, &hit.path, query, replacement, remaining, &token, &mut size) {
+            Ok(Some(file)) => files.push(file),
+            Ok(None) => {}
             Err(error) => skipped.push(format!("{}：{error}", hit.path)),
         }
     }
@@ -774,5 +834,125 @@ mod tests {
         let link = root.join("link.txt");
         std::os::unix::fs::symlink(path, &link).unwrap();
         assert!(allowed_path(&[root], &link, &query("foo")).is_err());
+    }
+
+    #[test]
+    fn single_target_preview_not_blocked_by_oversized_file() {
+        let (_dir, root, _path) = fixture();
+        // File A with > 1000 matches
+        let a_path = root.join("a_many.txt");
+        let a_content = "target_word\n".repeat(1005);
+        std::fs::write(&a_path, &a_content).unwrap();
+
+        // File B with 3 matches
+        let b_path = root.join("b_target.txt");
+        std::fs::write(&b_path, "target_word one\ntarget_word two\ntarget_word three\n").unwrap();
+
+        let q = query("target_word");
+
+        // Preview targeting only B must succeed and get all 3 matches without being blocked by A
+        let p = preview(
+            &[root.clone()],
+            &q,
+            "replaced",
+            &[b_path.to_string_lossy().into()],
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        assert_eq!(p.files.len(), 1);
+        assert_eq!(p.files[0].path, b_path.to_string_lossy());
+        assert_eq!(p.files[0].edits.len(), 3);
+        assert!(!p.limited);
+    }
+
+    #[test]
+    fn targeted_preview_target_exceeding_1000_matches_is_limited() {
+        let (_dir, root, _path) = fixture();
+        let b_path = root.join("b_many.txt");
+        let b_content = "word\n".repeat(1005);
+        std::fs::write(&b_path, &b_content).unwrap();
+
+        let q = query("word");
+        let p = preview(
+            &[root.clone()],
+            &q,
+            "replaced",
+            &[b_path.to_string_lossy().into()],
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        assert_eq!(p.files.len(), 1);
+        assert_eq!(p.files[0].edits.len(), 1000);
+        assert!(p.limited);
+    }
+
+    #[test]
+    fn targeted_preview_rejects_ignored_and_unauthorized_targets() {
+        let (_dir, root, _path) = fixture();
+        // 1. Target in ignored directory or matching .gitignore
+        let ignored_path = root.join("ignored.txt");
+        std::fs::write(&ignored_path, "search_match in ignored").unwrap();
+        std::fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
+
+        let q = query("search_match");
+        let res_ignored = preview(
+            &[root.clone()],
+            &q,
+            "replaced",
+            &[ignored_path.to_string_lossy().into()],
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert!(res_ignored.is_err(), "Target in ignored path must be rejected");
+
+        // 2. Target outside authorized workspace
+        let other_dir = tempfile::tempdir().unwrap();
+        let outside_path = other_dir.path().join("outside.txt");
+        std::fs::write(&outside_path, "search_match in outside").unwrap();
+
+        let res_outside = preview(
+            &[root.clone()],
+            &q,
+            "replaced",
+            &[outside_path.to_string_lossy().into()],
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert!(res_outside.is_err(), "Target outside roots must be rejected");
+    }
+
+    #[test]
+    fn apply_fails_when_file_version_changes_after_preview() {
+        let (_dir, root, _path) = fixture();
+        let target = root.join("target.txt");
+        std::fs::write(&target, "word 1\nword 2\n").unwrap();
+
+        let q = query("word");
+        let p = preview(
+            &[root.clone()],
+            &q,
+            "replaced",
+            &[target.to_string_lossy().into()],
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        assert_eq!(p.files.len(), 1);
+        let original_version = p.files[0].version.clone();
+
+        // Modify the target file on disk after preview (version changes)
+        std::fs::write(&target, "word 1 modified\nword 2\n").unwrap();
+
+        let req = ReplaceApply {
+            query: q,
+            replacement: "replaced".into(),
+            path: target.to_string_lossy().into(),
+            version: original_version,
+            selected: vec![0, 1],
+        };
+
+        let res = apply(&[root.clone()], &req);
+        assert!(res.is_err(), "Applying replacement when file version changed must fail");
+        assert!(res.unwrap_err().contains("版本"));
     }
 }

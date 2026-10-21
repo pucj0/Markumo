@@ -50,7 +50,7 @@ function make(vector=vectors[0], closed=false, count=1){
  const gateway=markRaw({getRecentWorkspaces:async()=>[],cancelSearch:async id=>cancelIds.push(id),searchWorkspace:async query=>{queries.push(query);return 0},validateReplace:async()=>{},
   previewReplace:async(query,replacement,targets)=>{
    if(hold)await hold;
-   return {files:Array.from({length:count},(_,i)=>({path:root+'/'+String.fromCharCode(97+i)+'.txt',version:'1',buffer:!closed,edits:vector.edits.map(([from,to,insert])=>({from,to,insert,line:1,column:from+1,before:vector.text.slice(from,to),context:vector.text.slice(0,180)}))})).filter(f=>!targets.length||targets.includes(f.path)),skipped:[],limited:count>=1000,canceled:false}
+   return {files:Array.from({length:count},(_,i)=>({path:root+'/'+String.fromCharCode(97+i)+'.txt',version:'1',buffer:query.buffers.some(b=>b.path===root+'/'+String.fromCharCode(97+i)+'.txt')||!closed,edits:vector.edits.map(([from,to,insert])=>({from,to,insert,line:1,column:from+1,before:vector.text.slice(from,to),context:vector.text.slice(0,180)}))})).filter(f=>!targets.length||targets.includes(f.path)),skipped:[],limited:count>=1000,canceled:false}
   },applyReplace:async request=>{applied.push(request);if(failure===request.path)throw Error('permission denied');return request.selected.length}});
  const workspace=reactive(new WorkspaceController(gateway,manager,files,message=>notifications.push(message),false));
  workspace.restoreSession([{rootPath:root,name:'fixture',entries:[]}]);workspace.searchQuery=vector.query;workspace.isRegex=vector.regex;workspace.isWholeWord=vector.whole;workspace.isCaseSensitive=vector.caseSensitive;workspace.replacementText=vector.replacement;
@@ -129,6 +129,69 @@ try {
   await test('file opened after preview cannot receive a closed-file disk write', async () => {
     const result=await page.evaluate(async()=>{const f=window.f.make(undefined,true);await f.workspace.previewReplace();f.files.accept(window.f.file('new buffer'));await f.workspace.applyReplacements();return {writes:f.applied.length,status:f.workspace.replaceFiles[0].status,text:f.manager.getText(f.manager.activeId)}})
     assert.equal(result.writes,0);assert.match(result.status,/文件已打开/);assert.equal(result.text,'new buffer')
+  })
+
+  await test('partial failure and cancel: file A succeeds, B fails, C unexecuted, status accurate, no false rollback, undo/redo intact', async () => {
+    const result = await page.evaluate(async () => {
+      const f = window.f.make(undefined, true, 3)
+      const w = f.workspace
+      const m = f.manager
+
+      // Open file A in editor buffer
+      const openedA = window.f.file('a A a', window.f.root + '/a.txt')
+      f.files.accept(openedA)
+      const idA = m.activeId
+
+      f.setFailure(window.f.root + '/b.txt')
+      await w.previewReplace()
+
+      w.selectReplacements(true, w.replaceFiles[0].path)
+      w.selectReplacements(true, w.replaceFiles[1].path)
+      w.selectReplacements(true, w.replaceFiles[2].path)
+
+      const origApply = w.gateway.applyReplace
+      w.gateway.applyReplace = async request => {
+        try {
+          return await origApply(request)
+        } catch (err) {
+          w.cancelReplace()
+          throw err
+        }
+      }
+
+      await w.applyReplacements()
+
+      const statusA = w.replaceFiles[0].status
+      const statusB = w.replaceFiles[1].status
+      const statusC = w.replaceFiles[2].status
+      const message = w.replaceMessage
+      const textAfter = m.getText(idA)
+
+      m.command('undo')
+      const textUndone = m.getText(idA)
+      m.command('redo')
+      const textRedone = m.getText(idA)
+
+      return {
+        statusA,
+        statusB,
+        statusC,
+        message,
+        textAfter,
+        textUndone,
+        textRedone,
+        applied: f.applied,
+      }
+    })
+
+    assert.match(result.statusA, /已修改缓冲区.*可撤销/)
+    assert.match(result.statusB, /失败.*permission/)
+    assert.match(result.statusC, /已取消（未执行）/)
+    assert.match(result.message, /成功 1 个文件，失败 1 个，取消 1 个/)
+    assert.ok(!result.message.includes('回滚'), 'Must not report false global rollback')
+    assert.equal(result.textAfter, '$1 $1 $1')
+    assert.equal(result.textUndone, 'a A a')
+    assert.equal(result.textRedone, '$1 $1 $1')
   })
 
   await test('Ctrl+Shift+F/R route through real app command registry and focus repeatedly', async () => {
