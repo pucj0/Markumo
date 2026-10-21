@@ -7,6 +7,7 @@ const output = 'test-results/external-files'
 fs.mkdirSync(output,{recursive:true})
 fs.writeFileSync(`${output}/index.html`, '<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><div id="fixture"></div><script type="module" src="./fixture.js"></script>')
 fs.writeFileSync(`${output}/fixture.js`, `
+import '/src/styles/reset.css'
 import '/src/styles/variables.css'
 import {defaultSettings,settingsFrom} from '/src/features/shell/editorSettings.ts'
 import {DocumentManager} from '/src/editor/core/DocumentManager.ts'
@@ -16,12 +17,13 @@ import {usesCaseInsensitivePaths} from '/src/features/files/pathKey.ts'
 import {diffWithinBudget} from '/src/features/files/ExternalFileChangeController.ts'
 import {RecoveryController} from '/src/features/recovery/RecoveryController.ts'
 import {EditorSelection} from '@codemirror/state'
+import {EditorView} from '@codemirror/view'
 import {undoDepth,isolateHistory} from '@codemirror/commands'
 import {createApp,h,nextTick} from 'vue'
 import Banner from '/src/components/layout/ExternalFileBanner.vue'
 import Dialogs from '/src/components/modals/ExternalFileDialogs.vue'
 import Diff from '/src/components/modals/ExternalFileDiff.vue'
-window.f={defaultSettings,settingsFrom,DocumentManager,FileController,AutoSaveController,RecoveryController,usesCaseInsensitivePaths,diffWithinBudget,EditorSelection,undoDepth,isolateHistory,createApp,h,nextTick,Banner,Dialogs,Diff}
+window.f={defaultSettings,settingsFrom,DocumentManager,FileController,AutoSaveController,RecoveryController,usesCaseInsensitivePaths,diffWithinBudget,EditorSelection,EditorView,undoDepth,isolateHistory,createApp,h,nextTick,Banner,Dialogs,Diff}
 window.ok=(value,message='assertion failed')=>{if(!value)throw Error(message)}
 window.defer=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}}
 window.flushChecks=async t=>{clearTimeout(t.external.timer);t.external.timer=undefined;await t.external.drain()}
@@ -69,6 +71,48 @@ try {
  await page.goto(`http://127.0.0.1:1491/${output}/index.html`)
  await page.waitForFunction(()=>window.make)
  const test=async(name,fn)=>{let timer;try{await Promise.race([page.evaluate(fn),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Timed out: '+name)),20000)})]);results.push(name);console.log('PASS '+name)}finally{clearTimeout(timer)}}
+ await test('busy checks park without polling and resume when the workspace operation ends',async()=>{
+   const t=make();try{t.files.workspaceBusy=true;t.change('after workspace operation');await t.external.check(t.id);ok(t.checks===0);ok(!t.external.timer,'busy checks must not create polling timers');t.files.workspaceBusy=false;await flushChecks(t);ok(t.manager.getText(t.id)==='after workspace operation');ok(!t.external.blocked(t.id))}finally{t.dispose()}
+ })
+ await test('a clean reload interrupted by a busy operation resumes safely without a new watcher hint',async()=>{
+   const t=make();try{t.change('deferred clean body');t.readGate=defer();const pending=t.external.check(t.id);while(!t.reads)await Promise.resolve();t.files.workspaceBusy=true;t.readGate.resolve();await pending;ok(t.manager.getText(t.id)!=='deferred clean body');ok(t.external.state(t.id).phase==='changed-clean');ok(!t.external.timer);t.files.workspaceBusy=false;await flushChecks(t);ok(t.manager.getText(t.id)==='deferred clean body');ok(!t.external.blocked(t.id))}finally{t.dispose()}
+ })
+ await test('disabling automatic reload while a read is pending retains the clean buffer and explicit conflict handling',async()=>{
+   const t=make();try{const before=t.manager.getText(t.id);t.change('disk opt-out');t.readGate=defer();const pending=t.external.check(t.id);while(!t.reads)await Promise.resolve();t.external.configure(false,false);t.readGate.resolve();await pending;ok(t.manager.getText(t.id)===before,'late disk read ignored auto-reload opt-out');ok(t.external.blocked(t.id));await t.external.check(t.id);ok(t.manager.getText(t.id)===before);await t.external.requestReload(t.id);ok(await t.external.confirmReload());ok(t.manager.getText(t.id)==='disk opt-out')}finally{t.dispose()}
+ })
+ await test('clean Source reload preserves line/column, mounted pane shells and unrelated focus',async()=>{
+   const t=make({text:'a\nsecond\nthird\n'});try{
+     const root=document.querySelector('#fixture'),a=document.createElement('div'),b=document.createElement('div'),button=document.createElement('button');root.append(a,b,button);
+     t.manager.mountPane(a,t.manager.activePane);const primary=t.manager.activePane;
+     t.manager.paneView(primary).dispatch({selection:{anchor:4}});
+     const other=t.manager.splitPane('right',primary,t.id);t.manager.mountPane(b,other);t.manager.paneView(other).dispatch({selection:{anchor:10}});
+     const first=t.manager.paneView(primary).dom,second=t.manager.paneView(other).dom;button.focus();const active=t.manager.activePane;
+     t.change('a much longer header\nsecond\nthird\n');await t.external.check(t.id);
+     const state=t.manager.getState(t.id),one=t.manager.paneView(primary).state.selection.main.head,two=t.manager.paneView(other).state.selection.main.head;
+     ok(one===state.doc.line(2).from+2,'first pane lost line/column');ok(two===state.doc.line(3).from+1,'second pane lost line/column');
+     ok(t.manager.paneView(primary).dom===first&&t.manager.paneView(other).dom===second,'source editor shells were recreated');ok(document.activeElement===button);ok(t.manager.activePane===active);ok(t.manager.openedDocuments.length===1);ok(f.undoDepth(state)===0)
+   }finally{t.dispose()}
+ })
+ await test('a transient clean read failure can recover on a fresh check without polling or notifications',async()=>{
+   const t=make();try{t.change('recovered clean disk');t.readGate=defer();const pending=t.external.check(t.id);while(!t.reads)await Promise.resolve();t.error={code:'io',message:'temporary read failure'};t.readGate.resolve();await pending;ok(t.external.state(t.id).phase==='unavailable');ok(!t.external.timer);ok(!t.notices.length);t.error=null;await t.external.check(t.id);ok(t.manager.getText(t.id)==='recovered clean disk');ok(!t.external.blocked(t.id))}finally{t.dispose()}
+ })
+ await test('Source auto-reload retains the scrolled viewport after asynchronous measurements',async()=>{
+   const text=Array.from({length:120},(_,n)=>'line '+n).join('\n'),t=make({text});try{const host=document.createElement('div');document.querySelector('#fixture').append(host);t.manager.mountPane(host,t.manager.activePane);const view=t.manager.activeEditorView;view.dom.style.height='120px';const frames=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));await frames();view.scrollDOM.scrollTop=240;await frames();const top=view.scrollDOM.scrollTop;ok(top>0);t.change(text.replace('line 0','a longer header'));await t.external.check(t.id);await frames();ok(Math.abs(view.scrollDOM.scrollTop-top)<2,'reload jumped the scrolled viewport: '+top+' -> '+view.scrollDOM.scrollTop);ok(t.manager.activeEditorView===view)}finally{t.dispose()}
+ })
+ await test('edits with undo or an explicit keep revoke a deferred clean reload permission',async()=>{
+   for(const action of ['edit-undo','keep']){const t=make();try{const before=t.manager.getText(t.id);t.change('deferred disk');t.readGate=defer();const pending=t.external.check(t.id);while(!t.reads)await Promise.resolve();t.files.workspaceBusy=true;t.readGate.resolve();await pending;if(action==='keep')t.external.keep(t.id);else{t.edit();t.manager.command('undo')}ok(t.manager.getText(t.id)===before);t.files.workspaceBusy=false;await flushChecks(t);ok(t.manager.getText(t.id)===before);ok(t.external.blocked(t.id),'ordinary rechecks cleared a confirmed conflict after user intervention')}finally{t.dispose()}}
+ })
+ await test('clean Markdown Live reload restores focus unless the user focuses another control during remount',async()=>{
+   for(const intervene of [false,true]){const t=make({text:'plain paragraph',extension:'md'});let stop;try{
+     const host=document.createElement('div');document.querySelector('#fixture').append(host);t.manager.setMarkdownMode(t.id,'live');t.manager.mountPane(host,t.manager.activePane);
+     while(!t.manager.liveReady(t.manager.activePane))await new Promise(resolve=>setTimeout(resolve,10));
+     t.manager.activeLiveEditor.focus();ok(host.contains(document.activeElement));const pane=t.manager.activePane,button=document.createElement('button');document.querySelector('#fixture').append(button);t.change('fresh paragraph');
+     if(intervene)stop=t.manager.subscribe(()=>{if(t.manager.metadata(t.id)?.lastDiskVersion===t.disk.version&&!t.manager.liveReady(pane))button.focus()});
+     await t.external.check(t.id);
+     while(!t.manager.liveReady(pane))await new Promise(resolve=>setTimeout(resolve,10));
+     ok(intervene?document.activeElement===button:host.contains(document.activeElement),'Live reload lost or stole keyboard focus');ok(t.manager.activePane===pane);ok(t.manager.getText(t.id)==='fresh paragraph')
+   }finally{stop?.();t.dispose()}}
+ })
  await test('P0 manual save during checking accepts native result and ignores late V1, including errors',async()=>{
    for(const reject of [false,true]) {const t=make();try {
      t.edit();const text=t.manager.getText(t.id),depth=f.undoDepth(t.manager.getState(t.id)),gate=defer();
@@ -228,7 +272,7 @@ try {
  await test('23 clean reload disabled setting keeps buffer and explicit reload remains available',async()=>{const t=make();try{t.external.configure(false,false);t.change('manual reload');await t.external.check(t.id);ok(t.manager.getText(t.id)!=='manual reload');ok(t.external.state(t.id).phase==='changed-clean');await t.external.requestReload(t.id);ok(await t.external.confirmReload());ok(t.manager.getText(t.id)==='manual reload')}finally{t.dispose()}})
  await test('24 unrelated documents save while a conflict stays blocked',async()=>{const t=make();try{t.edit();t.change();await t.external.check(t.id);t.files.accept({...t.disk,token:'other',path:'E:/other/second.txt',name:'second.txt',text:'safe'});const other=t.manager.activeId;t.manager.dispatch(other,{changes:{from:4,insert:' saved'}});ok(await t.files.autoSave(other)==='saved');ok(t.external.blocked(t.id));ok(t.writes[0].token==='other')}finally{t.dispose()}})
  await test('25 reload preserves reverse multi-cursor ranges in both mounted panes',async()=>{const t=make({text:'one\ntwo\nthree\n'});try{const root=document.querySelector('#fixture'),a=document.createElement('div'),b=document.createElement('div');a.style.height=b.style.height='200px';root.append(a,b);t.manager.mountPane(a,t.manager.activePane);t.manager.dispatch(t.id,{selection:f.EditorSelection.create([f.EditorSelection.range(5,1),f.EditorSelection.cursor(9)],1)});const other=t.manager.splitPane('right',t.manager.activePane,t.id);t.manager.mountPane(b,other);const before=t.manager.getState(t.id).selection.toJSON();t.change('one\ntwo\nthree\nfour\n');await t.external.check(t.id);const after=t.manager.getState(t.id).selection.toJSON();ok(JSON.stringify(after)===JSON.stringify(before),'multi-cursor selection changed');ok(root.querySelectorAll('.cm-content').length===2)}finally{t.dispose()}})
- await test('26 IME composition prevents disk overwrite and leaves buffer available',async()=>{const t=make();try{const host=document.createElement('div');document.querySelector('#fixture').append(host);t.manager.mountPane(host,t.manager.activePane);const content=host.querySelector('.cm-content');content.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:'中'}));ok(t.manager.isComposing,'IME guard not entered');t.change('external during IME');const before=t.manager.getText(t.id);await t.external.check(t.id);ok(t.manager.getText(t.id)===before);ok(await t.files.autoSave(t.id)==='skipped');content.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'中'}))}finally{t.dispose()}})
+ await test('26 IME composition parks without polling and resumes after composition ends',async()=>{const t=make();try{const host=document.createElement('div');document.querySelector('#fixture').append(host);t.manager.mountPane(host,t.manager.activePane);const content=host.querySelector('.cm-content');content.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:'中'}));ok(t.manager.isComposing,'IME guard not entered');t.change('external during IME');const before=t.manager.getText(t.id);await t.external.check(t.id);ok(t.manager.getText(t.id)===before);ok(!t.external.timer);ok(await t.files.autoSave(t.id)==='skipped');content.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'中'}));await Promise.resolve();ok(!t.manager.isComposing);ok(t.external.timer,'composition end did not wake the check queue');await flushChecks(t);ok(t.manager.getText(t.id)==='external during IME')}finally{t.dispose()}})
  await test('27 settings default on, migrate safely, preserve explicit opt-outs',()=>{const defaults=f.defaultSettings();ok(defaults.externalFileMonitoring&&defaults.autoReloadExternal);const settings=f.settingsFrom({...defaults,externalFileMonitoring:false,autoReloadExternal:false});ok(!settings.externalFileMonitoring&&!settings.autoReloadExternal)})
  await test('28 monitoring failures are visible and do not disable conditional saves',async()=>{const t=make();try{t.gateway.watchExternal=async()=>{throw Error('injected watcher failure')};t.external.configure(true);await t.external.start();ok(t.external.monitoringError.value.includes('injected watcher failure'));t.change();t.external.focus(99999);window.monitorFallback=t}catch(e){t.dispose();throw e}})
  await page.waitForFunction(()=>window.monitorFallback.manager.getText(window.monitorFallback.id)==='external')
@@ -245,9 +289,16 @@ try {
  await page.getByRole('region',{name:'文件差异比较'}).waitFor()
  assert.equal(await page.locator('.external-diff .cm-editor').count(),2)
  assert.equal(await page.locator('.external-diff [contenteditable=true]').count(),0)
+ assert.match(await page.locator('.external-diff .sources').textContent(),/磁盘文件.*当前编辑内容/)
  await page.screenshot({path:`${output}/conflict-diff-light.png`})
  await page.evaluate(()=>{document.body.classList.add('light')})
+ await page.waitForFunction(()=>document.querySelector('.external-diff')?.querySelectorAll('.cm-editor').length===2)
+ assert.equal(await page.locator('.external-diff').evaluate(element=>getComputedStyle(element).color),await page.locator('body').evaluate(element=>getComputedStyle(element).color),'Light diff labels must use the app text color')
  await page.screenshot({path:`${output}/conflict-diff-theme.png`})
+ await page.evaluate(async()=>{const t=window.ui,gap=Array.from({length:20},(_,n)=>'unchanged '+n).join('\n'),local='local first\n'+gap+'\nlocal middle\n'+gap+'\nlocal last\n',disk=local.replaceAll('local','disk');t.manager.dispatch(t.id,{changes:{from:0,to:t.manager.getState(t.id).doc.length,insert:local}});t.change(disk);await t.external.check(t.id);await t.external.compare(t.id);window.uiExpectedLast=disk.indexOf('disk last')})
+ await page.waitForFunction(()=>document.querySelector('.external-diff nav span')?.textContent.includes('3 处差异'))
+ await page.getByRole('button',{name:'上一个变化',exact:true}).click()
+ assert.equal(await page.evaluate(()=>f.EditorView.findFromDOM(document.querySelector('.external-diff .cm-editor')).state.selection.main.head),await page.evaluate(()=>window.uiExpectedLast),'first previous-difference navigation must select the last change')
  await page.getByRole('button',{name:'关闭比较并返回编辑器'}).click()
  await page.evaluate(()=>window.ui.dispose())
  await test('24 a failed recovery snapshot write blocks the destructive disk reload',async()=>{const t=make();const recovery=new f.RecoveryController(t.manager,t.files,{list:async()=>({records:[],warnings:[]}),read:async()=>{throw Error('unused')},save:async()=>{throw Error('injected snapshot write failure')},remove:async()=>{}},()=>{},{debounceMs:15});try{t.external.setRecoveryCheckpoint(id=>recovery.checkpointBeforeReload(id));await recovery.start();t.edit();t.change();await t.external.check(t.id);await t.external.requestReload(t.id);ok(!await t.external.confirmReload(),'failed checkpoint must not reload');ok(t.manager.getText(t.id).includes('local'),'dirty buffer was discarded');ok(t.manager.metadata(t.id).dirty);ok((recovery.lastError.value||'').includes('injected snapshot write failure'))}finally{recovery.dispose();t.dispose()}})

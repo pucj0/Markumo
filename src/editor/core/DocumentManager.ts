@@ -1,4 +1,4 @@
-import { Annotation, Compartment, EditorState, EditorSelection, Prec, Transaction, Text, type Extension, type StateEffect, type TransactionSpec } from '@codemirror/state'
+import { Annotation, ChangeSet, Compartment, EditorState, EditorSelection, Prec, Transaction, Text, type Extension, type StateEffect, type TransactionSpec } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { undo, redo, undoSelection, redoSelection, undoDepth, redoDepth, isolateHistory, deleteLine, copyLineDown, moveLineUp, moveLineDown, toggleComment } from '@codemirror/commands'
 import { findNext, findPrevious } from '@codemirror/search'
@@ -320,7 +320,22 @@ export class DocumentManager {
     for (const pane of this.layout.getAllLeafIds()) if (this.paneGroup(pane).activeId === id) this.captureScroll(pane)
     const placements = { ...record.panes }, originalMode = record.meta.mode
     const hadFocus = [...this.hosts.entries()].find(([pane, host]) => this.paneGroup(pane).activeId === id && host.contains(document.activeElement))?.[0]
-    for(const pane of this.layout.getAllLeafIds())if(this.paneGroup(pane).activeId===id)this.destroyView(pane)
+    // Source panes can keep their DOM shells and focus while receiving a fresh
+    // state/history. Live callbacks capture the old record and must be rebound.
+    const retainedViews = new Map<Pane, EditorView>()
+    const scrollSnapshots = new Map<Pane, ReturnType<EditorView['scrollSnapshot']>>()
+    for (const pane of this.layout.getAllLeafIds()) if (this.paneGroup(pane).activeId === id) {
+      if (this.liveViews.has(pane) || this.liveLoads.has(pane) || file.kind === 'image' || file.kind === 'pdf') this.destroyView(pane)
+      else {
+        const view = this.views.get(pane)
+        // Fresh-record initialization dispatches configuration effects. Until
+        // initialization is complete those effects must not target old states.
+        if (view) {
+          this.cancelPaneScroll(pane); scrollSnapshots.set(pane, view.scrollSnapshot())
+          retainedViews.set(pane, view); this.views.delete(pane)
+        }
+      }
+    }
     const seed: DocumentSeed = { id, name: file.name, path: file.path, text: file.kind === 'javaClass' ? classSummary(file.classInfo) : file.text,
       kind: file.kind === 'image' || file.kind === 'pdf' ? 'text' : file.kind || 'text', classInfo: file.kind === 'javaClass' ? file.classInfo : undefined, encoding: file.encoding }
     if (file.kind === 'image' || file.kind === 'pdf') {
@@ -328,16 +343,38 @@ export class DocumentManager {
       for (const pane of this.layout.getAllLeafIds()) if (this.paneGroup(pane).activeId === id) this.showActive(pane)
       this.notify(); return true
     }
-    const next = this.create(seed)
-    this.attachMetadata(next, file)
-    this.restoreFileMode(next)
-    next.meta.mode = originalMode
-    const preserveSelection = (selection: EditorSelection) => EditorSelection.create(selection.ranges.map(r => r.to <= next.state.doc.length ? r : EditorSelection.range(Math.min(r.anchor,next.state.doc.length),Math.min(r.head,next.state.doc.length))),selection.mainIndex)
-    next.state = next.state.update({ selection: preserveSelection(record.state.selection), annotations: Transaction.addToHistory.of(false) }).state
-    for (const [pane, position] of Object.entries(placements)) {
-      next.panes[pane] = { ...position, selection: preserveSelection(position.selection) }
+    try {
+      const next = this.create(seed)
+      this.attachMetadata(next, file)
+      this.restoreFileMode(next)
+      next.meta.mode = originalMode
+      const preservePosition = (position: number) => {
+        const line = record.state.doc.lineAt(position), target = next.state.doc.line(Math.min(line.number, next.state.doc.lines))
+        return target.from + Math.min(position - line.from, target.length)
+      }
+      const preserveSelection = (selection: EditorSelection) => EditorSelection.create(selection.ranges.map(r => EditorSelection.range(preservePosition(r.anchor), preservePosition(r.head))), selection.mainIndex)
+      next.state = next.state.update({ selection: preserveSelection(record.state.selection), annotations: Transaction.addToHistory.of(false) }).state
+      for (const [pane, position] of Object.entries(placements)) {
+        next.panes[pane] = { ...position, selection: preserveSelection(position.selection) }
+      }
+      for (const [pane, snapshot] of scrollSnapshots) {
+        const anchor = snapshot.value.range.head
+        // Map just the scroll reference to its new line/column. Text.slice
+        // shares the existing tree; this needs neither a full diff nor a copy.
+        const mapped = snapshot.map(ChangeSet.of({ from: 0, to: anchor, insert: next.state.doc.slice(0, preservePosition(anchor)) }, record.state.doc.length))
+        if (mapped) scrollSnapshots.set(pane, mapped)
+      }
+    } finally {
+      for (const [pane, view] of retainedViews) {
+        if (this.disposed) view.destroy()
+        else this.views.set(pane, view)
+      }
     }
-    for (const pane of this.layout.getAllLeafIds()) if (this.paneGroup(pane).activeId === id) this.showActive(pane)
+    if (this.disposed) return false
+    for (const pane of this.layout.getAllLeafIds()) if (this.paneGroup(pane).activeId === id) this.showActive(pane, hadFocus === pane)
+    // Let CodeMirror restore after its new height map is measured. A raw
+    // scrollTop write can be undone by its subsequent scroll-anchor adjustment.
+    for (const [pane, snapshot] of scrollSnapshots) this.views.get(pane)?.dispatch({ effects: snapshot, annotations: Transaction.addToHistory.of(false) })
     if (hadFocus) { this.views.get(hadFocus)?.focus(); this.liveViews.get(hadFocus)?.editor.focus() }
     this.notify()
     return true
@@ -580,7 +617,7 @@ export class DocumentManager {
       if (resolved === 'main') record.scroll = { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
     }
   }
-  private showActive(pane: Pane = this.activePane) {
+  private showActive(pane: Pane = this.activePane, restoreFocus = false) {
     const resolved = this.resolvePaneId(pane)
     let view = this.paneView(resolved)
     const targetId = this.paneGroup(resolved).activeId
@@ -620,6 +657,9 @@ export class DocumentManager {
         this.liveViews.set(resolved,{id:record.meta.id,editor})
         this.liveLoads.delete(resolved)
         const root=parent.querySelector('.markdown-live');if(root){root.scrollTop=saved.top;root.scrollLeft=saved.left}
+        // Import/remount completes asynchronously. Restore an interrupted focus
+        // only if the user has not focused a different pane or control meanwhile.
+        if (restoreFocus && this.activePane === resolved && document.activeElement === document.body) editor.focus()
         this.notify()
       }).catch(error=>{if(this.liveLoads.get(resolved)===load){this.liveLoads.delete(resolved);parent.querySelector('.markdown-live')?.remove();this.setMarkdownMode(record.meta.id, 'source', resolved);this.showActive(resolved);window.dispatchEvent(new CustomEvent('editor-notice',{detail:`Markdown Live 加载失败，已切到源码：${String(error)}`}))}})
       return
@@ -633,11 +673,12 @@ export class DocumentManager {
     }
     const shownView = view
     shownView.setState(record.state.update({ selection: record.panes[resolved].selection, annotations: Transaction.addToHistory.of(false) }).state)
+    const shownDocument = shownView.state.doc
     const scroll = { ...record.panes[resolved] }
     shownView.requestMeasure({
       read: () => scroll,
       write: saved => {
-        if (this.paneView(resolved) === shownView && this.paneGroup(resolved).activeId === targetId) {
+        if (this.paneView(resolved) === shownView && this.paneGroup(resolved).activeId === targetId && shownView.state.doc === shownDocument) {
           shownView.scrollDOM.scrollTop = saved.top
           shownView.scrollDOM.scrollLeft = saved.left
         }

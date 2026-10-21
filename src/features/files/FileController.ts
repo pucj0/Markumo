@@ -17,7 +17,13 @@ export class FileController {
   readonly external: ExternalFileChangeController
   readonly saving = new Set<string>()
   get activeOperationCount() { return this.saving.size + this.external.resolvingCount }
-  workspaceBusy = false
+  private workspaceOperation = false
+  get workspaceBusy() { return this.workspaceOperation }
+  set workspaceBusy(value: boolean) {
+    if (this.workspaceOperation === value) return
+    this.workspaceOperation = value
+    if (!value) this.external.resumeChecks()
+  }
   private disposed = false
   private automaticErrors = new Map<string, Set<string>>()
   private readonly stopRelease: () => void

@@ -35,6 +35,6 @@ const canSave = computed(() => doc.value?.kind !== 'javaClass' && doc.value?.kin
 const canCompare = computed(() => canSave.value && doc.value?.encoding !== 'Hex' && state.value?.phase !== 'deleted')
 </script>
 <style scoped>
-.external-banner{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;padding:7px 12px;background:var(--side);border-bottom:1px solid var(--line);color:var(--text);font-size:var(--ui-small-font-size)}
+.external-banner{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;padding:7px 12px;background:var(--sidebar);border-bottom:1px solid var(--line);color:var(--ink);font-size:var(--ui-small-font-size)}
 .explanation{display:flex;flex:1 1 230px;flex-direction:column;gap:3px}.explanation strong{color:var(--yellow)}.explanation span{color:var(--muted);overflow-wrap:anywhere}.actions{display:flex;flex-wrap:wrap;gap:5px}button{font:inherit;color:var(--text);background:var(--editor);border:1px solid var(--line);border-radius:4px;padding:4px 7px;cursor:pointer}button:disabled{opacity:.5;cursor:default}button:focus-visible{outline:2px solid var(--accent)}.summary{border:0;background:none;color:var(--yellow);text-align:left}
 </style>

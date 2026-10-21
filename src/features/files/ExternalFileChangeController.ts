@@ -10,7 +10,7 @@ export interface ExternalState {
   localRevision: number; saveRevision: number; checkedAt: number; phase: ExternalPhase; operation: 'check' | 'reload' | 'compare' | 'confirm' | null
   conflictValid: boolean; hidden: boolean; error?: string
 }
-interface Binding { state: ExternalState; text?: Text; sequence: number; cancelCheck?: () => void }
+interface Binding { state: ExternalState; text?: Text; sequence: number; cancelCheck?: () => void; autoReloadRevision?: number }
 export interface ReloadIntent { id: string; token: string; version: string; revision: number; dirty: boolean }
 export interface ExternalDiff { id: string; name: string; disk: string; local: string; diskVersion: string; revision: number; capturedAt: number; encoding: string; bom: boolean; eol: string; diskFormat: string }
 const errorCode = (e: unknown) => e && typeof e === 'object' && 'code' in e ? String(e.code) : 'io'
@@ -67,6 +67,7 @@ export class ExternalFileChangeController {
   configure(enabled: boolean, autoReload = true) {
     const changed = enabled !== this.enabled
     this.enabled = enabled; this.autoReload = autoReload
+    if (!autoReload) for (const b of this.bindings.values()) b.autoReloadRevision = undefined
     if (!enabled) this.monitoringError.value = null
     else if (this.listenerFailed) this.monitoringError.value = '实时事件订阅不可用，将在窗口获得焦点时检查。'
     if (changed) { this.signature = ''; this.reconcile(); if (enabled && this.started) this.checkAll() }
@@ -114,7 +115,7 @@ export class ExternalFileChangeController {
         this.bindings.set(doc.id, binding); changed = true
         if (this.enabled && this.started) this.queue(doc.id)
       } else {
-        if (binding.text !== text) { binding.text = text; binding.state.localRevision++; changed = true }
+        if (binding.text !== text) { binding.text = text; binding.state.localRevision++; binding.autoReloadRevision = undefined; changed = true }
         if (binding.state.knownVersion !== doc.lastDiskVersion) {
           // A save, reload or metadata acknowledgement has established a newer
           // baseline. Results captured against the old baseline cannot apply.
@@ -144,6 +145,9 @@ export class ExternalFileChangeController {
       })
     }
     if (changed) this.publish()
+    // Composition/lifecycle notifications also wake parked work when no text
+    // changed. Waiting for a new filesystem event can otherwise strand it.
+    this.schedule()
   }
   hint(hint: ExternalFileHint) {
     if (this.disposed || !this.enabled || hint.generation !== this.generation) return
@@ -160,13 +164,13 @@ export class ExternalFileChangeController {
   private schedule() {
     // Active operations wake the queue on completion. Do not poll unresolved
     // Promises or confirmation dialogs, even under a watcher hint storm.
-    const ready = [...this.queued].some(id => !this.bindings.get(id)?.state.operation && !this.files.saving.has(id))
+    const ready = [...this.queued].some(id => !this.bindings.get(id)?.state.operation && !this.busy(id))
     if (!this.disposed && ready && !this.timer && !this.running) this.timer = setTimeout(() => { this.timer = undefined; void this.drain() }, 180)
   }
   private async drain() {
     this.running = true
     try { for (const id of [...this.queued]) {
-      if (this.bindings.get(id)?.state.operation || this.files.saving.has(id)) continue
+      if (this.bindings.get(id)?.state.operation || this.busy(id)) continue
       this.queued.delete(id); await this.check(id)
     } }
     finally { this.running = false; this.schedule() }
@@ -217,11 +221,17 @@ export class ExternalFileChangeController {
       }
       b.state.conflictValid = true
       b.state.phase = doc.dirty ? 'conflict' : 'changed-clean'
-      if (this.autoReload && !hadConflict && !doc.dirty && revision === b.state.localRevision && !this.busy(id) && !b.state.hidden) {
+      if (this.autoReload && (!hadConflict || b.autoReloadRevision === revision) && !doc.dirty && revision === b.state.localRevision && !b.state.hidden) {
+        // This permission belongs only to an untouched clean buffer. A genuine
+        // dirty conflict, delete, edit/undo or explicit keep never gets it.
+        b.autoReloadRevision = revision
+        if (this.busy(id)) { this.queue(id); return }
         const file = await Promise.race([this.read(id, version), cancelled])
         if (file === null) return
         if (!this.current(id,b,sequence)) return
-        if (revision !== b.state.localRevision || this.manager.metadata(id)?.dirty || this.busy(id)) { b.state.phase = 'conflict'; return }
+        if (revision !== b.state.localRevision || this.manager.metadata(id)?.dirty) { b.autoReloadRevision = undefined; b.state.phase = this.restingPhase(b); return }
+        if (!this.autoReload || b.state.hidden) { b.autoReloadRevision = undefined; return }
+        if (this.busy(id)) { b.state.phase = 'changed-clean'; this.queue(id); return }
         if (this.manager.reloadFile(id, file)) { this.resolved(b, file); this.publish(); this.notify('文件已从磁盘重新加载') }
       }
     } catch (e) {
@@ -246,6 +256,7 @@ export class ExternalFileChangeController {
     return file
   }
   private resolved(b: Binding, file: OpenFile) {
+    b.autoReloadRevision = undefined
     b.state.phase = 'normal'; b.state.conflictValid = false; b.state.hidden = false; b.state.error = undefined
     b.state.knownVersion = file.version; b.state.detectedVersion = file.version
   }
@@ -273,6 +284,7 @@ export class ExternalFileChangeController {
       this.invalidateCheck(b)
       b.sequence++
       b.state.operation = null
+      b.autoReloadRevision = undefined
       b.state.phase = 'normal'; b.state.conflictValid = false; b.state.hidden = false; b.state.error = undefined
       b.state.knownVersion = doc.lastDiskVersion; b.state.detectedVersion = doc.lastDiskVersion
       b.state.saveRevision++
@@ -284,9 +296,11 @@ export class ExternalFileChangeController {
     if (this.enabled) this.queue(id)
   }
   saveFinished() { this.schedule() }
+  resumeChecks() { this.schedule() }
   private failed(b: Binding, e: unknown, saving = false) {
     const code = errorCode(e)
     if (code === 'deleted' || (saving && code === 'conflict')) {
+      b.autoReloadRevision = undefined
       b.state.conflictValid = true; b.state.hidden = false
       b.state.phase = code === 'deleted' ? 'deleted' : 'conflict'
     } else {
@@ -304,10 +318,11 @@ export class ExternalFileChangeController {
     this.publish()
     if (this.enabled) this.queue(id)
   }
-  keep(id: string, hidden = true) { const s = this.state(id); if (s && (!s.operation || !hidden)) { s.hidden = hidden; this.publish() } }
+  keep(id: string, hidden = true) { const b = this.bindings.get(id), s = b?.state; if (b && s && (!s.operation || !hidden)) { b.autoReloadRevision = undefined; s.hidden = hidden; this.publish() } }
   async compare(id: string) {
     const b = this.bindings.get(id), doc = this.manager.metadata(id)
     if (!b || !doc || b.state.operation || doc.kind === 'javaClass' || doc.kind === 'image' || doc.kind === 'pdf' || doc.encoding === 'Hex' || b.state.phase === 'deleted') return
+    b.autoReloadRevision = undefined
     const sequence = ++b.sequence
     b.state.operation = 'compare'; this.publish()
     try {
@@ -330,6 +345,7 @@ export class ExternalFileChangeController {
   async requestReload(id: string) {
     const b = this.bindings.get(id)
     if (!b || b.state.operation || this.busy(id)) { this.notify('请先完成输入法输入、保存或当前文件操作。'); return }
+    b.autoReloadRevision = undefined
     const sequence = ++b.sequence, revision = b.state.localRevision
     b.state.phase = 'resolving'; b.state.operation = 'reload'; this.publish()
     try {

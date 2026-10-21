@@ -745,7 +745,15 @@ impl FileService {
         lease: u64,
     ) -> Result<external::WatchStatus> {
         if tokens.len() > 1024 {
-            return fail("watch", "打开文件过多，实时监测未启用。");
+            if self.external_leases.get(&self.current_owner) != Some(&lease) {
+                return fail("watch", "此监测订阅已失效。");
+            }
+            // An older subscription must not survive a limit fallback with a
+            // stale generation, consuming native watches but delivering no hints.
+            if let Some(watcher) = &mut self.external_watcher {
+                watcher.release(&self.current_owner, None);
+            }
+            return fail("watch", "打开文件过多，已改用窗口焦点检查。");
         }
         let mut files = HashMap::new();
         for token in tokens {

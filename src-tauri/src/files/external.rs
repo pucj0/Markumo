@@ -117,6 +117,32 @@ impl Drop for ExternalWatcher {
 mod tests {
     use super::*;
     #[test]
+    fn watch_limit_releases_old_owner_resources_without_revoking_other_windows_or_newer_leases() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.txt");
+        std::fs::write(&path, "body").unwrap();
+        let mut service = crate::files::FileService::default();
+        service.external_watcher = Some(ExternalWatcher::with_sink(|_, _| {}).unwrap());
+        service.set_owner("first");
+        let first = service.open_selected(path.clone(), None).unwrap().metadata.token;
+        let stale = service.begin_external_watch();
+        let current = service.begin_external_watch();
+        service.watch_external(vec![first.clone()], 1, current).unwrap();
+        service.set_owner("second");
+        let second = service.open_selected(path, None).unwrap().metadata.token;
+        let second_lease = service.begin_external_watch();
+        service.watch_external(vec![second], 1, second_lease).unwrap();
+        service.set_owner("first");
+        assert!(service.watch_external(vec![first.clone(); 1025], 2, stale).is_err());
+        assert_eq!(service.external_watcher.as_ref().unwrap().targets.lock().unwrap().owners.len(), 2);
+        assert!(service.watch_external(vec![first; 1025], 3, current).is_err());
+        let watcher = service.external_watcher.as_ref().unwrap();
+        let targets = watcher.targets.lock().unwrap();
+        assert!(!targets.owners.contains_key("first"), "limit fallback retained stale owner subscriptions");
+        assert!(targets.owners.contains_key("second"));
+        assert_eq!(watcher.directories.len(), 1);
+    }
+    #[test]
     fn own_native_save_hints_reach_both_windows_with_shared_directory_and_new_baseline() {
         let dir = tempfile::tempdir().unwrap(); let path = dir.path().join("note.md");
         std::fs::write(&path, "old").unwrap();
