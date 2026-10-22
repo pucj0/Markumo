@@ -6,7 +6,7 @@ export interface MarkdownTypography { width:number; fontSize:number; fontFamily:
 export const defaultMarkdownTypography=():MarkdownTypography=>({width:860,fontSize:16,fontFamily:'system',lineHeight:1.6,codeLineNumbers:true,codeWrap:false,imageBorder:true})
 export interface MarkdownClipboardSettings { copyMarkdown: boolean; copyWholeLine: boolean }
 export const defaultMarkdownClipboard = (): MarkdownClipboardSettings => ({ copyMarkdown: false, copyWholeLine: false })
-export type MarkdownToolbarCommand = 'footnote' | 'link-reference' | 'math' | 'toc' | 'yaml'
+export type MarkdownToolbarCommand = 'footnote' | 'link-reference' | 'math' | 'toc' | 'yaml' | 'callout'
 export interface LiveToolbarState {
   heading: number
   bold: boolean

@@ -182,6 +182,24 @@ class SourceSlashPluginValue {
         return
       }
 
+      case 'callout-note':
+      case 'callout-tip':
+      case 'callout-important':
+      case 'callout-warning':
+      case 'callout-caution': {
+        const type = command.id.replace('callout-', '').toUpperCase()
+        const text = `> [!${type}]\n> `
+        const tr = state.update({
+          changes: { from, to, insert: text },
+          selection: { anchor: from + text.length },
+          annotations: isolateHistory.of('full'),
+          userEvent: 'input.callout',
+        })
+        view.dispatch(tr)
+        view.focus()
+        return
+      }
+
       case 'table': {
         const rows = Math.max(1, Math.min(8, tableDim?.rows ?? 3))
         const cols = Math.max(1, Math.min(8, tableDim?.columns ?? 3))

@@ -27,6 +27,7 @@ const tokens = { ...defaultMarkdownParser.tokens,
   fence:{block:'code_block',noCloseToken:true,getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({params:tok.info,fence:tok.markup})},
   bullet_list:{...defaultMarkdownParser.tokens.bullet_list,getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({bullet:tok.markup,tight:true})},
   list_item:{block:'list_item',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({checked:tok.meta?.checked ?? null})},
+  callout:{block:'callout',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({calloutType:tok.meta?.calloutType || 'NOTE',title:tok.meta?.title || ''})},
 }
 tokenizer.inline.ruler.before('escape','markumo_footnotes',(state,silent)=>{
   const note=/^\[\^([^\]\n]+)\]/.exec(state.src.slice(state.pos))
@@ -65,6 +66,64 @@ tokenizer.core.ruler.after('markumo_tasks','markumo_cells', state=>{
     if(token.type==='th_open'||token.type==='td_open')result.push(new state.Token('paragraph_open','p',1))
   }
   state.tokens=result
+})
+tokenizer.core.ruler.after('markumo_cells', 'markumo_callouts', state => {
+  const tokens = state.tokens
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].type !== 'blockquote_open') continue
+    let j = i + 1, nesting = 1, closeIdx = -1
+    let firstInline: (typeof tokens)[number] | null = null
+    let firstParaOpen = -1, firstParaClose = -1
+
+    while (j < tokens.length && nesting > 0) {
+      if (tokens[j].type === 'blockquote_open') nesting++
+      else if (tokens[j].type === 'blockquote_close') {
+        nesting--
+        if (nesting === 0) { closeIdx = j; break }
+      }
+      if (nesting === 1 && tokens[j].type === 'paragraph_open' && firstParaOpen === -1) firstParaOpen = j
+      if (nesting === 1 && tokens[j].type === 'inline' && !firstInline) firstInline = tokens[j]
+      if (nesting === 1 && tokens[j].type === 'paragraph_close' && firstParaClose === -1) firstParaClose = j
+      j++
+    }
+
+    if (!firstInline || closeIdx === -1) continue
+    const match = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:[ \t]+([^\n]*))?/i.exec(firstInline.content)
+    if (!match) continue
+
+    const calloutType = match[1].toUpperCase()
+    const title = match[2]?.trim() || ''
+
+    tokens[i].type = 'callout_open'
+    tokens[i].tag = 'div'
+    tokens[i].meta = { calloutType, title }
+
+    tokens[closeIdx].type = 'callout_close'
+    tokens[closeIdx].tag = 'div'
+
+    const fullMatchLen = match[0].length
+    firstInline.content = firstInline.content.slice(fullMatchLen).replace(/^\n+/, '')
+
+    if (firstInline.children && firstInline.children.length > 0 && firstInline.children[0].type === 'text') {
+      const childMatch = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:[ \t]+([^\n]*))?/i.exec(firstInline.children[0].content)
+      if (childMatch) {
+        firstInline.children[0].content = firstInline.children[0].content.slice(childMatch[0].length).replace(/^\n+/, '')
+        if (!firstInline.children[0].content && firstInline.children.length > 1) {
+          firstInline.children.shift()
+        }
+      }
+    }
+
+    if (!firstInline.content.trim()) {
+      if (firstParaClose !== -1 && closeIdx > firstParaClose + 1) {
+        tokens.splice(firstParaOpen, firstParaClose - firstParaOpen + 1)
+        closeIdx -= (firstParaClose - firstParaOpen + 1)
+      } else {
+        firstInline.content = ''
+        firstInline.children = []
+      }
+    }
+  }
 })
 // prosemirror-markdown still declares markdown-it 14 types; the shared runtime
 // is markdown-it 15. Only this official adapter boundary needs a type bridge.
@@ -121,7 +180,7 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
     let node:Node
     if(reused)node=reused.node
     else try {
-      const complex=raw || /(^|\n)(?:\[\^[^\]]+\]:| {0,3}\$\$|\[toc\]|:::+|>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\])/i.test(original)
+      const complex=raw || /(^|\n)(?:\[\^[^\]]+\]:| {0,3}\$\$|\[toc\]|:::+)/i.test(original)
       if(complex) node=s.nodes.protected_source.create({source:original,label,kind})
       else {
         node=markdownParser.parse(original,env).firstChild!

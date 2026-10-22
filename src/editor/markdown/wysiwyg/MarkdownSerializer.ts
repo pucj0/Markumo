@@ -10,6 +10,15 @@ export const markdownSerializer = new MarkdownSerializer({ ...defaultMarkdownSer
   html_block(state,node){state.write(node.attrs.source);state.closeBlock(node)},
   html_inline(state,node){state.write(node.attrs.source)},
   protected_source(state,node){state.write(node.attrs.source);state.closeBlock(node)},
+  callout(state, node) {
+    const type = (node.attrs.calloutType || 'NOTE').toUpperCase()
+    const title = node.attrs.title ? ` ${node.attrs.title}` : ''
+    state.wrapBlock('> ', null, node, () => {
+      state.write(`[!${type}]${title}\n`)
+      state.renderContent(node)
+    })
+    state.closeBlock(node)
+  },
   list_item(state,node){if(node.attrs.checked!==null)state.write(node.attrs.checked?'[x] ':'[ ] ');state.renderContent(node)},
   code_block(state,node){
     const char=node.attrs.fence?.[0]==='~'||String(node.attrs.params).includes('`')?'~':'`'

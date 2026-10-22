@@ -28,6 +28,32 @@ nodes.protected_source = {
   attrs: { sourceId: {default:null}, source: {default:''}, label: {default:'受保护源码'}, kind: {default:'unknown'} },
   toDOM: node => ['pre', {'data-protected-source':'true'}, node.attrs.source],
 }
+nodes.callout = {
+  group: 'block',
+  content: 'block+',
+  defining: true,
+  isolating: true,
+  attrs: {
+    sourceId: { default: null },
+    calloutType: { default: 'NOTE' },
+    title: { default: '' },
+  },
+  parseDOM: [{
+    tag: 'div[data-callout-type]',
+    getAttrs: dom => {
+      const el = dom as HTMLElement
+      return {
+        calloutType: el.getAttribute('data-callout-type') || 'NOTE',
+        title: el.getAttribute('data-callout-title') || '',
+      }
+    },
+  }],
+  toDOM: node => ['div', {
+    class: `md-callout md-callout-${String(node.attrs.calloutType).toLowerCase()}`,
+    'data-callout-type': node.attrs.calloutType,
+    'data-callout-title': node.attrs.title,
+  }, 0],
+}
 Object.assign(nodes, tableNodes({ tableGroup:'block', cellContent:'paragraph', cellAttributes:{
   align: {default:null, getFromDOM: dom => dom.style.textAlign || null, setDOMAttr: (value, attrs) => { if (value) attrs.style = `text-align:${value}` }},
 } }))

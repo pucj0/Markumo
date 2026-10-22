@@ -182,9 +182,15 @@ $$
   await test('YAML, footnotes, TOC, callouts, HTML and unknown extensions keep their own presentations/source access',async()=>{
     const source='---\ntitle: Keep\n---\n\n# Heading\n\n[toc]\n\n> [!NOTE]\n> Keep callout\n\n[^n]: footnote\n\n::: unknown\nKeep extension\n:::\n\n<div>safe HTML</div>'
     await reset(source)
-    const result=await page.evaluate(()=>({kinds:window.t.live.bridge.blocks.filter(b=>b.node.type.name==='protected_source').map(b=>b.node.attrs.kind),source:window.t.live.bridge.prepare(window.t.live.bridge.doc).source}))
-    assert.equal(result.source,source);for(const kind of ['yaml','toc','callout','footnote','extension'])assert.ok(result.kinds.includes(kind),kind)
-    assert.equal(await page.locator('.markdown-live .md-callout').count(),1)
+    const result=await page.evaluate(()=>({
+      kinds:window.t.live.bridge.blocks.filter(b=>b.node.type.name==='protected_source').map(b=>b.node.attrs.kind),
+      hasNativeCallout:window.t.live.bridge.blocks.some(b=>b.node.type.name==='callout'),
+      source:window.t.live.bridge.prepare(window.t.live.bridge.doc).source
+    }))
+    assert.equal(result.source,source)
+    assert.ok(result.hasNativeCallout, 'Callout must be upgraded to native structured node')
+    for(const kind of ['yaml','toc','footnote','extension'])assert.ok(result.kinds.includes(kind),kind)
+    assert.ok(await page.locator('.markdown-live :is(.md-callout-node, .md-callout)').count() >= 1)
     assert.equal(await page.locator('.markdown-live .md-html-preview').count(),1)
     assert.equal(await page.locator('.md-reference-definition').count(),0)
     assert.ok(await page.locator('.markdown-live .md-protected:not([hidden]) summary').count()>0)

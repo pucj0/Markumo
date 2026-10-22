@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const LOG_DIR = path.resolve(ROOT_DIR, 'test-results/regression-logs')
@@ -37,6 +37,7 @@ const SMOKE_TESTS = [
   'scripts/external-file-regression.mjs',
   'scripts/conversion-regression.mjs',
   'scripts/recovery-regression.mjs',
+  'scripts/callout-regression.mjs',
   'scripts/slash-commands-regression.mjs',
   'scripts/math-editor-regression.mjs',
   'scripts/typewriter-focus-regression.mjs',
@@ -316,7 +317,10 @@ function runSingleTest(scriptPath, timeoutMs = 180000) {
       } catch {}
     }
 
-    const child = spawn(process.execPath, [absPath], {
+    const snapshotArgs = process.env.MARKUMO_TEST_REF
+      ? ['--import', pathToFileURL(path.join(ROOT_DIR, 'scripts/regression-snapshot-register.mjs')).href]
+      : []
+    const child = spawn(process.execPath, [...snapshotArgs, absPath], {
       cwd: ROOT_DIR,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -502,6 +506,7 @@ async function main() {
     process.exit(1)
   }
   console.log(`[ENV] Browser: ${envCheck.browser} (${envCheck.type})`)
+  if (process.env.MARKUMO_TEST_REF) console.log(`[ENV] Read-only source snapshot: ${process.env.MARKUMO_TEST_REF}; test-host HMR disabled`)
   console.log(`[INFO] Running ${testsToRun.length} test(s) serially (timeout: ${timeoutMs / 1000}s)...\n`)
 
   const results = []

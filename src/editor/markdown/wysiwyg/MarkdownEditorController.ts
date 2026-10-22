@@ -17,6 +17,7 @@ import { markdownTypographyStyle } from '../typography'
 import { InlineSourceView, inlineSourceRange } from './InlineSourceView'
 import { Decoration, DecorationSet } from 'prosemirror-view'
 import { CodeBlockView } from './CodeBlockView'
+import { CalloutNodeView } from './CalloutNodeView'
 import { LiveImageView } from './LiveImageView'
 import { ImagePreview } from './ImagePreview'
 import { FenceAutocomplete } from './FenceAutocomplete'
@@ -427,6 +428,7 @@ export class MarkdownEditorController implements LiveEditor {
       }),
       nodeViews: {
         table: node => new TableView(node, 60),
+        callout: (node, view, getPos) => new CalloutNodeView(node, view, getPos, () => !!this.options.readOnly?.()),
         code_block: (node, view, getPos) => {
           const code = new CodeBlockView(
             node,
@@ -1065,6 +1067,7 @@ export class MarkdownEditorController implements LiveEditor {
     if (command === 'link-reference') { this.insertReference(false); return true }
     if (command === 'math') { this.insertBlock('$$\nx^2\n$$'); return true }
     if (command === 'toc') { this.insertBlock('[TOC]'); return true }
+    if (command === 'callout') return this.insertCallout('NOTE')
     if (command === 'yaml') {
       if (this.bridge.blocks[0]?.node.attrs.label === 'YAML Front Matter') return false
       this.insertBlock('---\ntitle: ""\n---', 'start')
@@ -1081,6 +1084,16 @@ export class MarkdownEditorController implements LiveEditor {
     const body = Array.from({ length: rows - 1 }, () => s.nodes.table_row.create(null, Array.from({ length: columns }, () => cell(false))))
     const table = s.nodes.table.create(null, [header, ...body])
     this.view.dispatch(this.view.state.tr.replaceSelectionWith(table).setMeta('isolated', true).scrollIntoView())
+    return true
+  }
+
+  insertCallout(calloutType: 'NOTE' | 'TIP' | 'IMPORTANT' | 'WARNING' | 'CAUTION' = 'NOTE', title = ''): boolean {
+    if (this.options.readOnly?.() || this.composing) return false
+    const para = s.nodes.paragraph.create()
+    const callout = s.nodes.callout.create({ calloutType, title }, [para])
+    const tr = this.view.state.tr.replaceSelectionWith(callout).setMeta('isolated', true).scrollIntoView()
+    this.view.dispatch(tr)
+    this.focus()
     return true
   }
 

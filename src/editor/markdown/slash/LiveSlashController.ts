@@ -194,6 +194,33 @@ export class LiveSlashController {
         return
       }
 
+      case 'callout-note':
+      case 'callout-tip':
+      case 'callout-important':
+      case 'callout-warning':
+      case 'callout-caution': {
+        const type = command.id.replace('callout-', '').toUpperCase()
+        let tr = view.state.tr.delete(from, to)
+        const mapped = tr.mapping.map(from)
+        const $pos = tr.doc.resolve(mapped)
+        const parent = $pos.parent
+        const para = s.nodes.paragraph.create()
+        const calloutNode = s.nodes.callout.create({ calloutType: type, title: '' }, [para])
+        let targetPos: number
+        if (parent.content.size === 0) {
+          targetPos = $pos.before($pos.depth)
+          tr = tr.replaceWith(targetPos, $pos.after($pos.depth), calloutNode)
+        } else {
+          targetPos = $pos.after($pos.depth)
+          tr = tr.insert(targetPos, calloutNode)
+        }
+        tr = tr.setSelection(TextSelection.create(tr.doc, targetPos + 2))
+        tr.setMeta('isolated', true).scrollIntoView()
+        view.dispatch(tr)
+        view.focus()
+        return
+      }
+
       case 'code-block': {
         let tr = view.state.tr.delete(from, to)
         const mapped = tr.mapping.map(from)

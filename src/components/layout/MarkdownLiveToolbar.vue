@@ -365,6 +365,7 @@ const moreInsertActions = [
   { command: 'link-reference' as MarkdownToolbarCommand, icon: 'link', label: '链接引用' },
   { command: 'math' as MarkdownToolbarCommand, icon: 'sigma', label: '公式块' },
   { command: 'toc' as MarkdownToolbarCommand, icon: 'outline', label: '内容目录' },
+  { command: 'callout' as MarkdownToolbarCommand, icon: 'quote', label: '提示块 (Callout)' },
   { command: 'yaml' as MarkdownToolbarCommand, icon: 'heading', label: 'YAML Front Matter' },
 ]
 const widthPresets = [640, 760, 860, 1020, 1200]
