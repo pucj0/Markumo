@@ -17,7 +17,7 @@ export function useModal() {
   function close() {
     if (!visible.value) return
     visible.value = false
-    if (previousFocus?.isConnected) previousFocus.focus()
+    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
     previousFocus = null
   }
 

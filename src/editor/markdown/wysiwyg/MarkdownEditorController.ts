@@ -77,6 +77,7 @@ export class MarkdownEditorController implements LiveEditor {
   private compositionActive = false
   private onCompositionStart = () => {
     this.compositionActive = true
+    cancelSmoothScroll(this.dom)
     this.fenceAutocomplete?.hide()
     this.slashController?.close()
     queueMicrotask(() => { if (!this.disposed) this.options.compositionChanged?.() })
@@ -87,7 +88,9 @@ export class MarkdownEditorController implements LiveEditor {
   private disposed = false
   private typewriterEnabled = false
   private typewriterFollowing = true
+  private typewriterKeyboardAlign = false
   private typewriterAlignScheduled = false
+  private typewriterAlignFrame = 0
   private typewriterResizeObserver?: ResizeObserver
   private typewriterCleanup?: () => void
   // A newly focused surface invalidates deferred focus restoration by the old one.
@@ -123,6 +126,7 @@ export class MarkdownEditorController implements LiveEditor {
   private onCompositionEnd = () => {
     this.compositionActive = false
     this.typewriterFollowing = true
+    this.typewriterKeyboardAlign = true
     this.scheduleTypewriterAlign()
     setTimeout(() => {
       if (!this.disposed) this.options.compositionChanged?.()
@@ -528,30 +532,51 @@ export class MarkdownEditorController implements LiveEditor {
       }
     })
 
-        const onTypewriterWheel = () => {
+    if (this.typewriterEnabled) this.installTypewriterListeners(mount)
+
+    this.typography(options.typography)
+    this.reveal(options.head)
+    this.updateTools()
+    if (this.typewriterEnabled) this.scheduleTypewriterAlign()
+  }
+
+  private installTypewriterListeners(mount: HTMLElement) {
+    if (this.typewriterCleanup) return
+    const onTypewriterWheel = () => {
       cancelSmoothScroll(this.dom)
       this.typewriterFollowing = false
+      this.typewriterKeyboardAlign = false
     }
     const onTypewriterScroll = () => {
       if (isSmoothScrolling(this.dom)) return
+      // ProseMirror may reveal an offscreen caret as part of native input.
+      // Keep that scroll from cancelling the alignment requested by the key.
+      if (this.typewriterKeyboardAlign) { this.scheduleTypewriterAlign(); return }
       this.typewriterFollowing = false
     }
     const onTypewriterKeydown = (event: KeyboardEvent) => {
       if (event.key === 'PageUp' || event.key === 'PageDown') {
         cancelSmoothScroll(this.dom)
         this.typewriterFollowing = false
+        this.typewriterKeyboardAlign = false
         return
       }
       if (!event.altKey && !event.ctrlKey && !event.metaKey) {
         this.typewriterFollowing = true
+        this.typewriterKeyboardAlign = true
       } else if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
         this.typewriterFollowing = true
+        this.typewriterKeyboardAlign = true
       }
     }
     const onTypewriterPointerDown = (event: PointerEvent) => {
       if ((event.target instanceof HTMLElement && this.view.dom.contains(event.target)) || (event.target as HTMLElement)?.closest?.('.cm-editor')) {
         this.typewriterFollowing = true
         queueMicrotask(() => this.scheduleTypewriterAlign())
+      } else {
+        cancelSmoothScroll(this.dom)
+        this.typewriterFollowing = false
+        this.typewriterKeyboardAlign = false
       }
     }
 
@@ -575,13 +600,8 @@ export class MarkdownEditorController implements LiveEditor {
       this.dom.removeEventListener('keydown', onTypewriterKeydown, true)
       this.dom.removeEventListener('pointerdown', onTypewriterPointerDown)
       this.typewriterResizeObserver?.disconnect()
-    }
-
-    this.typography(options.typography)
-    this.reveal(options.head)
-    this.updateTools()
-    if (this.typewriterEnabled) {
-      this.scheduleTypewriterAlign()
+      this.typewriterResizeObserver = undefined
+      this.typewriterCleanup = undefined
     }
   }
 
@@ -616,7 +636,8 @@ export class MarkdownEditorController implements LiveEditor {
     if (!this.typewriterEnabled || !this.typewriterFollowing || this.compositionActive || !this.isPaneActive() || this.disposed) return
     if (this.typewriterAlignScheduled) return
     this.typewriterAlignScheduled = true
-    requestAnimationFrame(() => {
+    this.typewriterAlignFrame = requestAnimationFrame(() => {
+      this.typewriterAlignFrame = 0
       this.typewriterAlignScheduled = false
       this.performTypewriterAlign()
     })
@@ -627,6 +648,7 @@ export class MarkdownEditorController implements LiveEditor {
     const coords = this.getActiveCaretCoords()
     if (!coords) return
     const calc = calculateTypewriterScroll(this.dom, coords)
+    this.typewriterKeyboardAlign = false
     if (!calc.needed) return
     smoothScrollTo(
       this.dom,
@@ -643,10 +665,16 @@ export class MarkdownEditorController implements LiveEditor {
     this.typewriterEnabled = enabled
     this.dom.classList.toggle('typewriter-mode', enabled)
     if (enabled) {
+      this.installTypewriterListeners(this.dom.parentElement!)
       this.typewriterFollowing = true
       this.scheduleTypewriterAlign()
     } else {
       cancelSmoothScroll(this.dom)
+      cancelAnimationFrame(this.typewriterAlignFrame)
+      this.typewriterAlignFrame = 0
+      this.typewriterAlignScheduled = false
+      this.typewriterKeyboardAlign = false
+      this.typewriterCleanup?.()
     }
   }
 
@@ -2131,6 +2159,7 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   destroy() {
+    cancelAnimationFrame(this.typewriterAlignFrame)
     cancelSmoothScroll(this.dom)
     this.typewriterCleanup?.()
     this.contextMenu.close()

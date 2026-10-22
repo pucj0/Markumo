@@ -46,13 +46,28 @@ import {
   getPresetBindings,
 } from '/src/features/shell/keybindings/index.ts'
 import { mainMenu } from '/src/features/shell/mainMenu.ts'
+import { isSmoothScrolling } from '/src/editor/core/smoothScroll.ts'
 import '/src/styles/reset.css'
 import '/src/styles/variables.css'
 import '/src/styles/main.css'
 
+// Count actual registrations by target, callback and capture mode for cleanup checks.
+const listeners = new WeakMap()
+const add = EventTarget.prototype.addEventListener, remove = EventTarget.prototype.removeEventListener
+for (const [name, original] of [['addEventListener', add], ['removeEventListener', remove]]) {
+  EventTarget.prototype[name] = function(type, callback, options) {
+    const capture = typeof options === 'boolean' ? options : !!options?.capture
+    let entries = listeners.get(this)
+    if (!entries) listeners.set(this, entries = new Map())
+    const key = type + ':' + capture
+    if (!entries.has(key)) entries.set(key, new Set())
+    if (name === 'addEventListener') entries.get(key).add(callback)
+    else entries.get(key).delete(callback)
+    return original.call(this, type, callback, options)
+  }
+}
 const manager = new DocumentManager([], async () => [])
 const revision = ref(0)
-const focusMode = ref(false)
 manager.subscribe(() => revision.value++)
 
 createApp({
@@ -63,14 +78,12 @@ createApp({
       node: manager.layout.root,
       revision: revision.value,
       desktop: false,
-      focusMode: focusMode.value,
     })
   },
 }).mount('#app')
 
 window.f = {
   manager,
-  focusMode,
   CM,
   CMState,
   EditorSelection,
@@ -85,6 +98,8 @@ window.f = {
   commandDefinition,
   getPresetBindings,
   mainMenu,
+  isSmoothScrolling,
+  listenerCount: target => [...(listeners.get(target)?.values() || [])].reduce((sum, entries) => sum + entries.size, 0),
   cm: () => manager.activeEditorView,
   live: () => manager.activeLiveEditor,
   reset(source, ext = 'md', mode = 'live') {
@@ -106,6 +121,7 @@ const results = []
 try {
   browser = await chromium.launch({
     headless: true,
+    ignoreDefaultArgs: ['--hide-scrollbars'],
     ...(process.env.MARKUMO_CHROME ? { executablePath: process.env.MARKUMO_CHROME } : {}),
   })
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } })
@@ -125,6 +141,19 @@ try {
     results.push(name)
     console.log('PASS ' + name)
   }
+  const cdp = await page.context().newCDPSession(page)
+  const settled = () => page.waitForTimeout(650)
+  const caretOffset = () => page.evaluate(() => {
+    const cm = window.f.cm(), live = window.f.live()
+    const host = cm?.scrollDOM || live.dom
+    // Read editor coordinates directly, independently of the production helper.
+    const nestedRoot = document.activeElement?.closest('.cm-editor')
+    const nested = !cm && nestedRoot ? window.f.CM.findFromDOM(nestedRoot) : null
+    const caret = cm ? cm.coordsAtPos(cm.state.selection.main.head)
+      : nested ? nested.coordsAtPos(nested.state.selection.main.head)
+      : live.view.coordsAtPos(live.view.state.selection.head)
+    return (caret.top + caret.bottom) / 2 - host.getBoundingClientRect().top - host.getBoundingClientRect().height * window.f.TYPEWRITER_RATIO
+  })
 
   // --- 1. Unit Tests for calculateTypewriterScroll & Algorithms ---
   await test('unit: calculateTypewriterScroll centering, deadband and scroll bounds', async () => {
@@ -247,28 +276,17 @@ try {
   // Regression B: Manual Mouse Wheel Interrupt in CodeMirror
   await test('CodeMirror Source: mouse wheel pauses auto-centering until subsequent input', async () => {
     // Scroll manually via wheel
-    await page.locator('.cm-scroller').evaluate(el => {
-      el.dispatchEvent(new WheelEvent('wheel', { deltaY: -150, bubbles: true }))
-      el.scrollTop = 50
-    })
-    await page.waitForTimeout(200)
-
-    const scrollAfterWheel = await page.locator('.cm-scroller').evaluate(el => el.scrollTop)
-    assert.equal(scrollAfterWheel, 50, 'Manual scroll must pause auto-center without forcing view back')
-
-    // Subsequent typing resumes typewriter following
-    await page.evaluate(() => {
-      const view = window.f.cm()
-      const pos = view.state.doc.line(40).from
-      view.dispatch({ changes: { from: pos, insert: 'Typing ' } })
-    })
-    await page.waitForTimeout(400)
-    const scrollAfterTyping = await page.locator('.cm-scroller').evaluate(el => el.scrollTop)
-    assert.ok(scrollAfterTyping > 100, 'Subsequent typing must resume typewriter centering')
+    const scroller = page.locator('.cm-scroller')
+    await scroller.hover();await page.mouse.wheel(0, -150);await page.waitForTimeout(150)
+    const manual = await scroller.evaluate(el => el.scrollTop)
+    await settled()
+    assert.equal(await scroller.evaluate(el => el.scrollTop), manual, 'Real wheel position stays put')
+    await page.keyboard.type('Typing ');await settled()
+    assert.ok(Math.abs(await caretOffset()) <= 20, 'Real keyboard input resumes caret alignment')
   })
 
   // Regression C: Continuous 100 lines input & rapid line insertions without oscillation
-  await test('Continuous Input: 100 lines typed continuously maintains steady vertical center without jitter', async () => {
+  await test('Programmatic edits: 100 line insertions maintain bounded vertical alignment', async () => {
     await page.evaluate(() => {
       const id = window.f.reset('', 'md', 'source')
       window.f.manager.setTypewriterMode(true)
@@ -323,45 +341,66 @@ try {
 
   // Regression E: Nested Embedded CodeBlock in Live Editor
   await test('Markdown Live: embedded CodeBlock focuses actual caret without fighting outer container', async () => {
-    const codeDoc = '# Header\n\n```javascript\nfunction test() {\n  const x = 1;\n  const y = 2;\n  return x + y;\n}\n```\n\nTail paragraph.'
+    const codeDoc = Array.from({length:20},(_,i)=>`Intro ${i}`).join('\n\n')+'\n\n```javascript\n'+Array.from({length:65},(_,i)=>`const value${i} = ${i};`).join('\n')+'\n```\n\nTail paragraph.'
     await page.evaluate(codeDoc => {
       window.f.reset(codeDoc, 'md', 'live')
       window.f.manager.setTypewriterMode(true)
     }, codeDoc)
 
     await page.waitForSelector('.markdown-live .md-code-block .cm-editor')
-    // Click inside embedded CodeMirror
-    await page.locator('.markdown-live .md-code-block .cm-content').click()
-    await page.waitForTimeout(200)
-
-    const isInsideCM = await page.evaluate(() => {
-      return document.activeElement?.closest('.cm-editor') !== null
-    })
-    assert.equal(isInsideCM, true, 'Focus must reside in embedded CodeMirror')
+    await page.locator('.markdown-live .md-code-block .cm-line').first().click()
+    await page.keyboard.press('Control+End');await page.keyboard.type(' // actual input');await settled()
+    assert.equal(await page.evaluate(()=>!!document.activeElement?.closest('.cm-editor')),true)
+    assert.ok(Math.abs(await caretOffset()) <= 20, 'Outer Live scroller centers the embedded CM caret, not the block top')
   })
 
   // Regression F: IME Composition Guard
-  await test('Markdown Live: IME composition suspends scroll and resumes smoothly on compositionend', async () => {
-    await page.evaluate(() => {
-      const root = document.querySelector('.markdown-live')
-      root.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
-    })
+  for (const mode of ['source','live']) {
+    await test(`${mode}: browser IME, real wheel and scrollbar drag suspend follow; keyboard resumes`, async () => {
+      await page.evaluate(mode => {window.f.reset(Array.from({length:100},(_,i)=>`Paragraph ${i} with text.`).join('\n\n'),'md',mode);window.f.manager.setTypewriterMode(true)},mode)
+      const host = page.locator(mode==='source'?'.cm-scroller':'.markdown-live')
+      await host.waitFor()
+      await page.evaluate(()=>{
+        const cm=window.f.cm(),live=window.f.live()
+        if(cm){cm.dispatch({selection:window.f.EditorSelection.cursor(cm.state.doc.line(81).from)});cm.focus()}
+        else {live.view.dispatch(live.view.state.tr.setSelection(window.f.TextSelection.create(live.view.state.doc,1000)));live.focus()}
+      })
+      await settled()
+      await host.hover();await page.mouse.wheel(0,120);await page.waitForTimeout(180)
+      const before=await host.evaluate(el=>el.scrollTop)
+      await cdp.send('Input.imeSetComposition',{text:'中',selectionStart:1,selectionEnd:1})
+      await cdp.send('Input.imeSetComposition',{text:'中文',selectionStart:2,selectionEnd:2})
+      await page.waitForTimeout(200)
+      assert.equal(await page.evaluate(()=>window.f.cm()?.composing||window.f.live()?.composing),true,'Browser actually entered IME composition')
+      assert.ok(Math.abs(await host.evaluate(el=>el.scrollTop)-before)<=2,'Chinese composition must not steal scroll')
+      await cdp.send('Input.insertText',{text:'中文'});await settled()
+      await page.keyboard.type('x');await settled()
+      assert.ok(Math.abs(await caretOffset())<=20,'Keyboard after IME aligns caret')
+      assert.ok(await page.evaluate(()=>window.f.manager.getText(window.f.manager.activeId).includes('中文')),'Chinese text committed through browser input')
 
-    // Dispatch text change while composing
-    await page.evaluate(() => {
-      const live = window.f.live()
-      live.view.dispatch(live.view.state.tr.insertText('测试输入'))
+      // A native scrollbar, with a stable gutter so Chromium exposes a draggable thumb.
+      await page.addStyleTag({content:'.cm-scroller,.markdown-live{scrollbar-width:auto!important;scrollbar-gutter:stable} .cm-scroller::-webkit-scrollbar,.markdown-live::-webkit-scrollbar{width:16px}'})
+      await settled()
+      const bar=await host.evaluate(el=>{const r=el.getBoundingClientRect(),track=el.clientHeight-32,height=Math.max(17,track*el.clientHeight/el.scrollHeight);return {x:r.left+el.clientWidth+8,y:r.top+16+(track-height)*el.scrollTop/(el.scrollHeight-el.clientHeight)+height/2,top:el.scrollTop,width:r.width,clientWidth:el.clientWidth,scrollHeight:el.scrollHeight}})
+      await page.screenshot({path:`${output}/scrollbar-${mode}.png`})
+      await page.mouse.move(bar.x,bar.y);await page.mouse.down();await page.mouse.move(bar.x,bar.y+90,{steps:12})
+      await page.waitForTimeout(150)
+      const dragged=await host.evaluate(el=>el.scrollTop)
+      assert.ok(Math.abs(dragged-bar.top)>40,`Native scrollbar drag changes scroll coordinate: ${JSON.stringify({bar,dragged})}`)
+      await settled()
+      assert.equal(await host.evaluate(el=>el.scrollTop),dragged,'No recenter while thumb held')
+      await page.mouse.up();await settled()
+      assert.equal(await host.evaluate(el=>el.scrollTop),dragged,'No recenter after thumb release')
+      // Chromium focuses the native scrollbar's scroller. Return editing focus
+      // without changing the selection or scroll, then send real key events.
+      await host.evaluate(el=>el.querySelector('[contenteditable="true"]').focus({preventScroll:true}))
+      await settled()
+      assert.equal(await host.evaluate(el=>el.scrollTop),dragged,'Focus alone does not resume follow')
+      await page.keyboard.type('y');await settled()
+      const offset=await caretOffset()
+      assert.ok(Math.abs(offset)<=20,`Real typing resumes after scrollbar drag: ${JSON.stringify(await page.evaluate(offset=>({offset,focus:document.activeElement?.outerHTML.slice(0,150),top:(window.f.cm()?.scrollDOM||window.f.live().dom).scrollTop,text:window.f.manager.getText(window.f.manager.activeId).includes('中文xy')}),offset))}`)
     })
-    await page.waitForTimeout(150)
-
-    // End composition
-    await page.evaluate(() => {
-      const root = document.querySelector('.markdown-live')
-      root.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
-    })
-    await page.waitForTimeout(400)
-    assert.ok(true, 'IME composition completed safely')
-  })
+  }
 
   // Regression G: Special Contents: Large Tables, Math, Diagrams, HTML & Blank Document
   await test('Special Content: tables, math formulas, mermaid and blank documents handle centering gracefully', async () => {
@@ -418,67 +457,61 @@ ${Array.from({ length: 30 }, (_, i) => `Paragraph ${i + 1} with trailing text.`)
     assert.ok(richScroll > 200, `Special content document must center end of document, got: ${richScroll}`)
   })
 
-  // Regression H: F8 Focus Mode & Multi-Mode Independence
-  await test('F8 Focus Mode: hides non-essential workspace UI, preserves selection, independent of typewriter', async () => {
-    // 1. Initial: focusMode = false, typewriter = false with a javaClass file showing breadcrumb
-    await page.evaluate(() => {
-      window.f.manager.setTypewriterMode(false)
-      window.f.focusMode.value = false
-      const id = window.f.manager.createUntitled('txt')
-      const rec = window.f.manager.metadata(id)
-      if (rec) rec.kind = 'javaClass'
-      const rawRec = window.f.manager.records?.get(id) || window.f.manager['records']?.get(id)
-      if (rawRec) rawRec.meta.kind = 'javaClass'
-      window.f.manager.notify()
+  for (const mode of ['source','live']) {
+    await test(`${mode}: disabling during animation releases listeners, pending frames and scroll`, async () => {
+      await page.evaluate(mode=>{window.f.manager.setTypewriterMode(false);window.f.reset(Array.from({length:100},(_,i)=>`Cleanup paragraph ${i}`).join('\n\n'),'md',mode)},mode)
+      await page.waitForSelector(mode==='source'?'.cm-editor':'.markdown-live');await settled()
+      const baseline=await page.evaluate(()=>{const host=window.f.cm()?.scrollDOM||window.f.live().dom;return {host:window.f.listenerCount(host),window:window.f.listenerCount(window)}})
+      await page.evaluate(()=>{
+        window.f.manager.setTypewriterMode(true)
+        const cm=window.f.cm(),live=window.f.live()
+        if(cm){cm.focus();cm.dispatch({selection:window.f.EditorSelection.cursor(cm.state.doc.line(160).from)})}
+        else {live.focus();live.view.dispatch(live.view.state.tr.setSelection(window.f.TextSelection.create(live.view.state.doc,2000)))}
+      })
+      await page.waitForFunction(()=>window.f.isSmoothScrolling(window.f.cm()?.scrollDOM||window.f.live().dom))
+      const disabled=await page.evaluate(()=>{
+        window.f.manager.setTypewriterMode(false)
+        const host=window.f.cm()?.scrollDOM||window.f.live().dom
+        return {host:window.f.listenerCount(host),window:window.f.listenerCount(window),animating:window.f.isSmoothScrolling(host),frame:window.f.live()?.typewriterAlignFrame||0}
+      })
+      assert.deepEqual(disabled,{...baseline,animating:false,frame:0},'Actual registrations return to disabled baseline')
+      await settled()
+      const top=await page.evaluate(()=>(window.f.cm()?.scrollDOM||window.f.live().dom).scrollTop)
+      await settled()
+      assert.equal(await page.evaluate(()=>(window.f.cm()?.scrollDOM||window.f.live().dom).scrollTop),top,'No stale animation after disable')
     })
-    await page.waitForTimeout(100)
-    assert.equal(await page.locator('.readonly-kind').count(), 1, 'Breadcrumb visible when not in focus mode')
+  }
 
-    // 2. Enable F8 Focus Mode
-    await page.evaluate(() => {
-      window.f.focusMode.value = true
+  for (const mode of ['source','live']) {
+    await test(`${mode}: switching split panes scrolls only the active editor`, async () => {
+      await page.evaluate(mode=>{
+        const m=window.f.manager;m.setTypewriterMode(false)
+        const id=window.f.reset(Array.from({length:150},(_,i)=>`Split paragraph ${i}`).join('\n\n'),'md',mode)
+        window.f.other=m.splitPane('right','main',id);m.setMarkdownMode(id,mode,window.f.other)
+      },mode)
+      await page.waitForFunction(mode=>mode==='source'?document.querySelectorAll('.cm-editor').length===2:document.querySelectorAll('.markdown-live').length===2,mode)
+      await settled()
+      await page.evaluate(()=>{window.f.manager.focusPane('main');window.f.manager.setTypewriterMode(true)})
+      await settled()
+      const scrolls=()=>page.evaluate(()=>window.f.manager.layout.getAllLeafIds().map(id=>{const m=window.f.manager;return (m.paneView(id)?.scrollDOM||m.liveViews.get(id).editor.dom).scrollTop}))
+      const before=await scrolls()
+      await page.keyboard.press('Control+End');await page.keyboard.type('active main');await settled()
+      const first=await scrolls()
+      assert.ok(first[0]>before[0]+100);assert.equal(first[1],before[1],'Inactive pane ignores edits propagated from main')
+      // Activate the other pane with a real click, then type through the keyboard.
+      await page.locator(`[data-pane-id="${await page.evaluate(()=>window.f.other)}"] ${mode==='source'?'.cm-content':'.md-document'}`).click({position:{x:50,y:80}})
+      await page.keyboard.press('Control+End');await page.keyboard.type('active right');await settled()
+      const second=await scrolls()
+      assert.equal(second[0],first[0],'Previous pane does not scroll after activation switches')
+      assert.ok(second[1]>first[1]+100)
+      await page.evaluate(()=>{const m=window.f.manager;m.setTypewriterMode(false);m.closePane(window.f.other);m.focusPane('main')})
+      await settled()
     })
-    await page.waitForTimeout(100)
-    assert.equal(await page.locator('.readonly-kind').count(), 0, 'Breadcrumb hidden in focus mode')
-
-    // 3. Enable typewriter mode alongside focus mode
-    await page.evaluate(() => {
-      window.f.manager.setTypewriterMode(true)
-    })
-    const isBothActive = await page.evaluate(() => {
-      return window.f.focusMode.value === true && window.f.manager.getTypewriterMode() === true
-    })
-    assert.equal(isBothActive, true, 'Both Focus Mode and Typewriter Mode can be active simultaneously')
-
-    // 4. Exit Focus Mode
-    await page.evaluate(() => {
-      window.f.focusMode.value = false
-    })
-    await page.waitForTimeout(100)
-    assert.equal(await page.locator('.readonly-kind').count(), 1, 'Breadcrumb restored upon exiting focus mode')
-    assert.equal(await page.evaluate(() => window.f.manager.getTypewriterMode()), true, 'Typewriter mode remains active after exiting focus mode')
-  })
-
-  // Regression I: Toggling Typewriter Off Cleans Up Classes & Padding
-  await test('Typewriter Mode: turning off cleans up classes, listener bounds and smooth scroll', async () => {
-    await page.evaluate(() => {
-      window.f.reset('# Header\n\nLive test for cleanup', 'md', 'live')
-      window.f.manager.setTypewriterMode(true)
-    })
-    await page.waitForSelector('.markdown-live.typewriter-mode')
-
-    await page.evaluate(() => {
-      window.f.manager.setTypewriterMode(false)
-    })
-    await page.waitForTimeout(200)
-
-    const liveHasClass = await page.locator('.markdown-live').evaluate(el => el.classList.contains('typewriter-mode'))
-    assert.equal(liveHasClass, false, 'typewriter-mode class removed from live editor')
-  })
+  }
 
   assert.equal(errors.length, 0, `Browser errors encountered: ${errors.join(', ')}`)
   console.log('======================================================================')
-  console.log(`PASS All ${results.length} Typewriter and Focus Mode regression tests passed!`)
+  console.log(`PASS All ${results.length} Typewriter regression groups passed!`)
   console.log('======================================================================')
 } finally {
   await browser?.close()

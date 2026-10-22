@@ -143,6 +143,11 @@ export function computeTargetViewportCoords(
     return { vx: 0, vy: 0 }
   }
 
+  if (target.fitMode === 'rect' && target.rawLeft !== undefined && target.rawBottom !== undefined && target.rawRight !== undefined && target.rawTop !== undefined) {
+    const rect = [...viewport.convertToViewportPoint(target.rawLeft, target.rawBottom), ...viewport.convertToViewportPoint(target.rawRight, target.rawTop)]
+    return { vx: Math.max(0, Math.min(viewport.width, Math.min(rect[0], rect[2]))), vy: Math.max(0, Math.min(viewport.height, Math.min(rect[1], rect[3]))) }
+  }
+
   // Both coordinates provided (e.g. XYZ or FitR top-left)
   if (target.rawLeft !== undefined && target.rawTop !== undefined) {
     const pt = viewport.convertToViewportPoint(target.rawLeft, target.rawTop)

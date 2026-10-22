@@ -165,7 +165,7 @@ const visiblePages=computed(()=>{
   return out
 })
 const zoomOptions=computed(()=>[...new Set([.25,.5,.75,1,1.25,1.5,2,3,4,5,scale.value])].sort((a,b)=>a-b))
-const zoomValue=computed(()=>view.fit==='manual'?String(scale.value):view.fit)
+const zoomValue=computed(()=>view.fit==='width'||view.fit==='page'?view.fit:String(scale.value))
 const searchOpen=ref(!!view.pdfSearchOpen),query=ref(view.query),activeQuery=ref(''),searchInput=ref<HTMLInputElement>()
 const searching=ref(false),searchError=ref(''),capped=ref(false),scanned=ref(0),matchRequest=ref(0)
 const searchComplete=ref(false)
@@ -216,7 +216,13 @@ function positionAt(anchor:ReaderAnchor){
   void nextTick(()=>{
     if(disposed||current!==positionEpoch)return
     restoreAnchor(anchor)
-    anchorFrame=requestAnimationFrame(()=>{if(current===positionEpoch)pendingAnchor=undefined})
+    anchorFrame=requestAnimationFrame(()=>{
+      if(current!==positionEpoch||disposed)return
+      restoreAnchor(anchor)
+      // ResizeObserver runs after animation callbacks. Retain the anchor through
+      // that delivery so scrollbar size changes cannot recenter the target.
+      anchorFrame=requestAnimationFrame(()=>{if(current===positionEpoch)pendingAnchor=undefined})
+    })
   })
 }
 function changeScale(value:number,anchor=pendingAnchor||captureAnchor()){
@@ -228,7 +234,7 @@ function changeScale(value:number,anchor=pendingAnchor||captureAnchor()){
 function updateFit(anchor?:ReaderAnchor){
   const host=viewport.value;if(!pdf.value||!host?.clientWidth||view.fit==='manual')return
   const size=dimensions(page.value),width=(host.clientWidth-PADDING*2)/size.width,height=(host.clientHeight-PADDING*2)/size.height
-  const next=Math.max(.05,Math.min(5,view.fit==='width'?width:Math.min(width,height)))
+  const next=Math.max(.05,Math.min(5,view.fit==='width'?width:view.fit==='height'?height:Math.min(width,height)))
   if(Math.abs(next-scale.value)>.001)changeScale(next,anchor||pendingAnchor||captureAnchor())
 }
 function setFit(mode:string){
@@ -240,6 +246,7 @@ function zoom(factor:number,point?:{x:number;y:number}){const anchor=point?captu
 function chooseZoom(value:string){if(value==='width'||value==='page')setFit(value);else{view.fit='manual';changeScale(Number(value))}}
 function jump(value:number){
   if(!pdf.value||!Number.isFinite(value))return
+  ++navSequence
   explicitJumpSeq.value++
   const number=Math.max(1,Math.min(total.value,Math.round(value))),anchor=captureAnchor()
   page.value=number;view.page=number
@@ -284,14 +291,19 @@ function startResizeNav(event:PointerEvent){
 }
 async function handleNavigateDest(dest:any){
   if(!pdf.value)return
+  const documentProxy=pdf.value
   const currentNav=++navSequence
-  const fromPage=page.value
+  ++positionEpoch;pendingAnchor=undefined;cancelAnimationFrame(anchorFrame)
   try{
-    const target=await resolvePdfDestination(pdf.value,dest)
+    const target=await resolvePdfDestination(documentProxy,dest)
     if(disposed||currentNav!==navSequence||!target)return
+    const targetPageProxy=await documentProxy.getPage(target.pageNumber)
+    if(disposed||currentNav!==navSequence||pdf.value!==documentProxy)return
+    const box=targetPageProxy.getViewport({scale:1})
+    sizes.set(target.pageNumber,{width:box.width,height:box.height})
+    const totalRotation=(targetPageProxy.rotate+view.rotation)%360
+    const unitViewport=targetPageProxy.getViewport({scale:1,rotation:totalRotation})
     explicitJumpSeq.value++
-
-    const isCrossPage=fromPage!==target.pageNumber
 
     if(target.zoom!==undefined&&target.zoom>0){
       const safeZoom=Math.max(0.05,Math.min(5,target.zoom))
@@ -299,25 +311,22 @@ async function handleNavigateDest(dest:any){
       scale.value=safeZoom
       view.scale=safeZoom
     }else if(target.fitMode&&viewport.value?.clientWidth){
-      view.fit=target.fitMode
+      // Rect fitting is a one-off scale; resize must not fit the entire page.
+      view.fit=target.fitMode==='rect'?'manual':target.fitMode
       const host=viewport.value
-      const size=dimensions(target.pageNumber)
-      const w=(host.clientWidth-PADDING*2)/size.width
-      const h=(host.clientHeight-PADDING*2)/size.height
-      const next=Math.max(0.05,Math.min(5,target.fitMode==='width'?w:Math.min(w,h)))
+      let width=unitViewport.width,height=unitViewport.height
+      if(target.fitMode==='rect'&&target.rawLeft!==undefined&&target.rawBottom!==undefined&&target.rawRight!==undefined&&target.rawTop!==undefined){
+        const rect=[...unitViewport.convertToViewportPoint(target.rawLeft,target.rawBottom),...unitViewport.convertToViewportPoint(target.rawRight,target.rawTop)]
+        width=Math.abs(rect[2]-rect[0]);height=Math.abs(rect[3]-rect[1])
+      }
+      const w=(host.clientWidth-PADDING*2)/width
+      const h=(host.clientHeight-PADDING*2)/height
+      const fit=target.fitMode==='width'?w:target.fitMode==='height'?h:Math.min(w,h)
+      const next=Number.isFinite(fit)&&fit>0?Math.max(0.05,Math.min(5,fit)):scale.value
       scale.value=next
       view.scale=next
     }
 
-    const targetPageProxy=await pdf.value.getPage(target.pageNumber)
-    if(disposed||currentNav!==navSequence)return
-
-    const box=targetPageProxy.getViewport({scale:1})
-    if(!sizes.has(target.pageNumber)){
-      sizes.set(target.pageNumber,{width:box.width,height:box.height})
-    }
-
-    const totalRotation=(targetPageProxy.rotate+view.rotation)%360
     const vp=targetPageProxy.getViewport({scale:scale.value,rotation:totalRotation})
     const {vx,vy}=computeTargetViewportCoords(vp,target)
 
@@ -346,15 +355,13 @@ async function handleNavigateDest(dest:any){
 
       host.scrollTo({top:clampedY,left:clampedX})
       syncPosition()
+      // Keep the destination as the resize anchor while new scrollbars/layout settle.
+      positionAt({page:target.pageNumber,x:(vx??0)/pageWidth(target.pageNumber),y:(vy??0)/pageHeight(target.pageNumber),clientX:0,clientY:0})
     }
 
-    if(!view.continuous&&isCrossPage){
-      await nextTick()
-      if(disposed||currentNav!==navSequence)return
-      executeScroll()
-    }else{
-      executeScroll()
-    }
+    // Scale, page size and virtual content bounds must reach the DOM first.
+    await nextTick()
+    executeScroll()
   }catch(e){console.warn('Failed to resolve destination',e)}
 }
 function handleNamedAction(action:string){
@@ -372,6 +379,7 @@ function openUrl(url:string){
 }
 function toggleContinuous(){const anchor=captureAnchor();view.continuous=!view.continuous;if(anchor){page.value=anchor.page;positionAt(anchor)}}
 function rotate(){
+  ++navSequence
   const anchor=captureAnchor();view.rotation=(view.rotation+90)%360
   if(anchor){const x=anchor.x;anchor.x=1-anchor.y;anchor.y=x;positionAt(anchor);updateFit(anchor)}
 }

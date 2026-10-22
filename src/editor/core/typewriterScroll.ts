@@ -60,7 +60,6 @@ class TypewriterPluginValue {
   following = true
   composing = false
   private destroyed = false
-  private activeThemeApplied = false
   private cleanupListeners: () => void
 
   constructor(private readonly view: EditorView) {
@@ -93,11 +92,15 @@ class TypewriterPluginValue {
       // Content clicks resume following; scrollbar drag does not
       if (view.contentDOM.contains(event.target as Node)) {
         this.following = true
+      } else {
+        cancelSmoothScroll(scroller)
+        this.following = false
       }
     }
 
     const onCompStart = () => {
       this.composing = true
+      cancelSmoothScroll(scroller)
     }
 
     const onCompEnd = () => {
@@ -123,6 +126,12 @@ class TypewriterPluginValue {
     }
 
     this.updateClasses()
+    // setState may destroy the previous plugin after constructing this one.
+    queueMicrotask(() => {
+      if (this.destroyed) return
+      this.updateClasses()
+      this.requestAlign()
+    })
     if (this.isActive()) {
       this.requestAlign()
     }
@@ -141,18 +150,12 @@ class TypewriterPluginValue {
   }
 
   private updateClasses() {
-    const active = this.isActive()
-    if (active !== this.activeThemeApplied) {
-      this.activeThemeApplied = active
-      this.view.dom.classList.toggle('cm-typewriter-mode', active)
-    }
+    // Keep padding stable when a pane loses focus; only following is active-pane scoped.
+    this.view.dom.classList.toggle('cm-typewriter-mode', !this.destroyed && this.config().enabled)
   }
 
   update(update: ViewUpdate) {
     this.updateClasses()
-    if (update.docChanged) {
-      this.following = true
-    }
     const shouldCheck =
       update.docChanged ||
       update.selectionSet ||
@@ -202,6 +205,7 @@ class TypewriterPluginValue {
 const typewriterPlugin = ViewPlugin.fromClass(TypewriterPluginValue)
 
 export function typewriterExtension(config: TypewriterConfig): Extension {
+  if (!config.enabled) return []
   return [
     typewriterFacet.of(config),
     typewriterTheme,

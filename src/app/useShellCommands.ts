@@ -72,6 +72,7 @@ export interface ShellCommandsHost {
   openPalette: (category?: 'action' | 'file' | 'all') => void
   toggleSidebar: () => void
   toggleFocus: () => void
+  exitFocus: () => void
   toggleTypewriter: () => void
   toggleTheme: () => void
   setMode: (mode: AppMode) => void
@@ -177,7 +178,7 @@ export function useShellCommands(host: ShellCommandsHost) {
       { id: 'paste', title: '粘贴', detail: shortcutLabel('Mod+V'), category: 'action', disabled: !host.activeDoc.value || host.activeDoc.value.kind === 'javaClass', action: () => { void clipboardAction('paste') } },
       { id: 'select-all', title: '全选', detail: shortcutLabel('Mod+A'), category: 'action', disabled: !host.activeDoc.value, action: () => { void clipboardAction('select-all') } },
       { id: 'wrap', title: '自动换行', detail: '', category: 'action', action: () => { host.wordWrap.value = !host.wordWrap.value } },
-      { id: 'explorer', title: '资源管理器', detail: '', category: 'action', action: () => { host.focusMode.value = false; host.appMode.value = 'workspace'; host.sidebarPanel.value = 'files'; host.sidebarVisible.value = true } },
+      { id: 'explorer', title: '资源管理器', detail: '', category: 'action', action: () => { host.exitFocus(); host.appMode.value = 'workspace'; host.sidebarPanel.value = 'files'; host.sidebarVisible.value = true } },
       // One palette entry per command: the id and label come from the command
       // catalog, so the palette, the menus and the shortcut settings cannot
       // drift apart or list the same action twice under different ids.
@@ -604,7 +605,7 @@ export function useShellCommands(host: ShellCommandsHost) {
     if (host.manager.activeLiveEditor?.shortcut(event)) return
     if (event.key === 'Escape' && host.focusMode.value && !document.querySelector('.cm-search, .cm-tooltip')) {
       event.preventDefault()
-      host.toggleFocus()
+      host.exitFocus()
     }
   }
 

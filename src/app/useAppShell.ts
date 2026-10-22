@@ -127,7 +127,6 @@ export function useAppShell() {
     revision,
     getActiveDoc: () => activeDoc.value,
   })
-
   // Only a rendered workspace content panel occupies the left dock. The rail
   // and the outline itself never feed back into sidebar preferences.
   const leftSidebarOccupied = computed(() => !focusMode.value && appMode.value === 'workspace' && sidebarVisible.value && (sidebarPanel.value === 'files' || sidebarPanel.value === 'search'))
@@ -714,29 +713,43 @@ export function useAppShell() {
     }
   }
 
-  function toggleFocus() {
+  function preserveFocusLayout(change: () => void) {
     const activePane = manager.activePane
-    if (!focusMode.value) {
+    const focused = document.activeElement instanceof HTMLElement && document.activeElement.closest('.editor-host')
+      ? document.activeElement : null
+    const positions = Array.from(document.querySelectorAll<HTMLElement>('.cm-scroller, .markdown-live, .split-preview-content'))
+      .map(element => ({ element, top: element.scrollTop, left: element.scrollLeft }))
+    change()
+    void nextTick(() => {
+      manager.focusPane(activePane, false)
+      // PM focus also synchronizes its DOM selection/observer. Native focus on
+      // the prose root alone can trigger a delayed scrollToSelection after a modal.
+      if (!manager.isComposing && manager.activeLiveEditor && (!focused || focused.matches('.md-prose'))) manager.activeLiveEditor.focus()
+      else if (focused?.isConnected) focused.focus({ preventScroll: true })
+      else if (!manager.isComposing) {
+        manager.activeEditorView?.focus()
+      }
+      for (const { element, top, left } of positions) element.scrollTo({ top, left })
+    })
+  }
+
+  function exitFocus() {
+    if (!focusMode.value) return
+    preserveFocusLayout(() => {
+      focusMode.value = false
+      if (savedSidebarVisible.value !== null) sidebarVisible.value = savedSidebarVisible.value
+      savedSidebarVisible.value = null
+      toast('已退出专注模式')
+    })
+  }
+
+  function toggleFocus() {
+    if (focusMode.value) { exitFocus(); return }
+    preserveFocusLayout(() => {
       savedSidebarVisible.value = sidebarVisible.value
       sidebarVisible.value = false
       focusMode.value = true
       toast('专注模式 · Esc 退出')
-    } else {
-      focusMode.value = false
-      if (savedSidebarVisible.value !== null) {
-        sidebarVisible.value = savedSidebarVisible.value
-        savedSidebarVisible.value = null
-      }
-      toast('已退出专注模式')
-    }
-    void nextTick(() => {
-      manager.focusPane(activePane, false)
-      const live = manager.activeLiveEditor
-      if (live && !live.composing) {
-        live.focus()
-      } else {
-        manager.activeEditorView?.focus()
-      }
     })
   }
 
@@ -1079,6 +1092,7 @@ export function useAppShell() {
     openPalette,
     toggleSidebar,
     toggleFocus,
+    exitFocus,
     toggleTypewriter,
     toggleTheme: preferences.toggleTheme,
     setMode,
