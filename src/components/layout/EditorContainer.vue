@@ -72,7 +72,8 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import SplitLayoutNode from './SplitLayoutNode.vue'
 import OutlineView from './OutlineView.vue'
-import { extractOutline, type OutlineItem } from '../../editor/outline/outlineService'
+import { isMarkdownOutline, type OutlineItem } from '../../editor/outline/outlineService'
+import { useDocumentOutline } from '../../editor/outline/useDocumentOutline'
 import type { EditorDocument } from '../../types'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { FileController } from '../../features/files/FileController'
@@ -204,22 +205,13 @@ function handleOpenWorkspaceFile(payload: { path: string; name: string; paneId: 
 }
 
 const isMarkdownDoc = computed(() => {
-  return (!props.doc?.kind || props.doc.kind === 'text') && /\.(md|markdown)$/i.test(props.doc?.name || '')
+  return (!props.doc?.kind || props.doc.kind === 'text') && isMarkdownOutline(props.doc)
 })
 
-const outlineItems = computed<OutlineItem[]>(() => {
-  if (!props.doc || !props.showOutline || props.focusMode) return []
-  const state = props.manager.getState(props.doc.id)
-  revision.value
-  return extractOutline(props.doc, state)
-})
-const outlineNotice = computed(() => {
-  if (props.doc?.languageStatus === 'loading') return '正在加载语言解析器…'
-  if (props.doc && (props.manager.getState(props.doc.id)?.doc.length || 0) > 1024 * 1024) return '文档较大，大纲已暂停。'
-  if (outlineItems.value.length >= 1000) return '大纲最多显示前 1000 项。'
-  if (props.doc && ['Plain Text','CSV','Log','INI','TOML','JSONC'].includes(props.doc.language)) return '当前语言未提供结构大纲。'
-  return ''
-})
+const structure=useDocumentOutline(()=>props.manager,()=>props.doc,()=>docked.value)
+const outlineItems=computed(()=>structure.value.items)
+const outlineNotice=computed(()=>structure.value.notice)
+
 function handleSelectOutline(item: OutlineItem) {
   if (props.doc) props.manager.revealOutline(props.doc.id, item)
 }

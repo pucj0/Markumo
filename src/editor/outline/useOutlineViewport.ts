@@ -31,6 +31,16 @@ export function useOutlineViewport(manager: () => DocumentManager | undefined, d
       observer?.disconnect(); observedPane = pane
       if (pane) observer?.observe(pane)
     }
+    const symbols=items()
+    if(symbols.some(item=>item.kind!=='heading')){
+      const position=current.activeEditorView?.state.selection.main.head
+      let active:OutlineItem|undefined
+      if(position!==undefined)for(const item of symbols){
+        if((item.scopeFrom??item.from??0)<=position && position<(item.to??0) && (!active||item.level>active.level))active=item
+      }
+      activeId.value=active?.id??null
+      return
+    }
     const position = readingMode === 'caret' ? lastSelection?.head ?? null : current.outlineViewportPosition(), state = current.getState(id)
     if (position === null || !state) { activeId.value = null; return }
     let active: string | null = null

@@ -1,0 +1,16 @@
+export const symbolIconPaths:Readonly<Record<string,string>>={
+  'symbol-class':'M4 4h16v16H4ZM15 8H9v8h6',
+  'symbol-interface':'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM9 8h6m-3 0v8m-3 0h6',
+  'symbol-enum':'M5 4h14v16H5ZM9 8h6m-6 4h5m-5 4h6',
+  'symbol-function':'M15 4h-3l-2 16H7m0-10h9m0 4 4 6m0-6-4 6',
+  'symbol-method':'m12 3 9 9-9 9-9-9ZM8 15V9l4 4 4-4v6',
+  'symbol-constructor':'m12 3 9 9-9 9-9-9ZM8 12h8m-4-4v8',
+  'symbol-struct':'M4 4h16v16H4ZM4 12h16M12 4v16',
+  'symbol-trait':'M4 4h16v9l-8 8-8-8ZM8 8h8m-4 0v8',
+  'symbol-impl':'M4 5h16v14H4ZM8 9l3 3-3 3m5 0h3',
+  'symbol-type':'M4 6h16M12 6v14M8 20h8',
+  'symbol-field':'m12 5 7 7-7 7-7-7Z',
+  'symbol-member':'M6 6h12v12H6Z',
+  'symbol-object':'M8 4H5v16h3m8-16h3v16h-3M10 9h4m-4 6h4',
+  'symbol-namespace':'M3 7V4h7l3 3h8v13H3Z',
+}

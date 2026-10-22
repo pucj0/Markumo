@@ -1,9 +1,11 @@
-import { syntaxTree } from '@codemirror/language'
+import { syntaxTree, syntaxTreeAvailable } from '@codemirror/language'
 import type { EditorState, Text } from '@codemirror/state'
 import type { EditorDocument } from '../../types'
 import { htmlLanguage } from '@codemirror/lang-html'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
+import { codeAdapters, extractCodeSymbols } from './codeAdapters'
+import { resolveLanguage } from '../languages'
 
 const inlineMarkdown=new MarkdownIt({html:false,linkify:false})
 // A Live pane has no CodeMirror viewport to advance its incremental parser.
@@ -25,9 +27,13 @@ export interface OutlineItem {
   id: string; name: string; level: number; lineNumber: number
   from?:number; to?:number
   labelHtml?:string
-  kind?: 'heading' | 'function' | 'class' | 'interface' | 'struct' | 'enum' | 'type'
+  kind?: 'heading' | 'function' | 'method' | 'constructor' | 'class' | 'interface' | 'struct' | 'enum' | 'trait' | 'impl' | 'type' | 'field' | 'member' | 'namespace' | 'object'
+  parentId?:string; scopeFrom?:number; detail?:string
 }
-const cache = new WeakMap<Text, { tree: ReturnType<typeof syntaxTree>; markdown: boolean; items: OutlineItem[] }>()
+export interface OutlineResult { items:OutlineItem[]; notice:string }
+const cache = new WeakMap<Text, Map<string,{tree:ReturnType<typeof syntaxTree>;result:OutlineResult}>>()
+export const MAX_CODE_OUTLINE_SIZE = 256 * 1024
+export const isMarkdownOutline=(doc:EditorDocument|null)=>!!doc && (doc.language==='Markdown' || (!doc.language && /\.(md|markdown)$/i.test(doc.name)))
 function markdownOutline(text: Text): OutlineItem[] {
   const tokens = outlineMarkdown.parse(text.toString(), {}), items: OutlineItem[] = []
   for (let index = 0; index < tokens.length && items.length < 1000; index++) {
@@ -56,26 +62,30 @@ function markdownOutline(text: Text): OutlineItem[] {
   return items
 }
 export function extractOutline(doc: EditorDocument | null, state: EditorState | undefined): OutlineItem[] {
-  if (!doc || !state || doc.languageStatus !== 'ready' || state.doc.length > 1024 * 1024) return []
-  const markdown = /\.(md|markdown)$/i.test(doc.name), tree = syntaxTree(state), text = state.doc
-  const cached = cache.get(text)
-  if (cached?.markdown === markdown && (markdown || cached.tree === tree)) return cached.items
-  if (markdown) {
-    const items=markdownOutline(text)
-    cache.set(text,{tree,markdown,items})
-    return items
+  return outlineResult(doc,state).items
+}
+
+export function outlineResult(doc:EditorDocument|null,state:EditorState|undefined):OutlineResult {
+  const empty=(notice=''):OutlineResult=>({items:[],notice})
+  if(!doc||!state)return empty()
+  if(doc.languageStatus!=='ready')return empty(doc.languageStatus==='error'?'语言解析器不可用。':'正在加载语言解析器…')
+  const markdown=isMarkdownOutline(doc),text=state.doc,tree=syntaxTree(state),key=markdown?'markdown':doc.language
+  if(text.length>(markdown?1024*1024:MAX_CODE_OUTLINE_SIZE))return empty('文档较大，大纲已暂停。')
+  if(!markdown){
+    const language=resolveLanguage(doc.language||'Plain Text')
+    if(!language||language.parser==='none')return empty('纯文本不提供代码结构。')
+    if(language.parser==='stream')return empty('当前语言仅提供词法高亮，无法可靠提取结构。')
+    if(!codeAdapters[doc.language])return empty('当前解析器尚未提供结构适配。')
+    if(tree.length<text.length || !syntaxTreeAvailable(state,text.length))return empty('语法解析尚未完成，暂不显示代码结构。')
   }
-  const items: OutlineItem[] = []
-  tree.iterate({ enter(node) {
-    if (items.length >= 1000) return false
-    if (/^(FunctionDeclaration|FunctionDefinition|MethodDeclaration|ClassDeclaration|ClassDefinition|InterfaceDeclaration|TypeAliasDeclaration|StructItem|EnumItem|FunctionItem|FnItem|TraitItem)$/.test(node.name)) {
-      const nameNode = node.node.getChild('VariableDefinition') || node.node.getChild('VariableName') || node.node.getChild('TypeName') || node.node.getChild('Identifier') || node.node.getChild('PropertyDefinition') || node.node.getChild('Name')
-      if (nameNode) {
-        const kind: OutlineItem['kind'] = /Class/.test(node.name) ? 'class' : /Interface|Trait/.test(node.name) ? 'interface' : /Struct/.test(node.name) ? 'struct' : /Enum/.test(node.name) ? 'enum' : /TypeAlias/.test(node.name) ? 'type' : 'function'
-        items.push({ id: `sym-${node.from}`, name: text.sliceString(nameNode.from, nameNode.to), level: 1, lineNumber: text.lineAt(node.from).number, kind })
-      }
-    }
-  } })
-  cache.set(text, { tree, markdown, items })
-  return items
+  const cached=cache.get(text)?.get(key)
+  if(cached && (markdown||cached.tree===tree))return cached.result
+  let result:OutlineResult
+  if(markdown){const items=markdownOutline(text);result={items,notice:items.length>=1000?'大纲最多显示前 1000 项。':''}}
+  else{
+    const parsed=extractCodeSymbols(tree,text,doc.language)
+    result={items:parsed.items,notice:parsed.limited?'结构提取达到预算，已截断（最多 1000 项 / 50000 节点 / 30ms）。':parsed.incomplete?'代码含未完成的语法，仅展示可确认的声明。':''}
+  }
+  let entries=cache.get(text);if(!entries)cache.set(text,entries=new Map())
+  entries.set(key,{tree,result});return result
 }
