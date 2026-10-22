@@ -329,6 +329,32 @@ try {
     assert.equal(await page.evaluate(() => window.f.source()), source, 'rendering never mutates the source')
   })
 
+  await test('18. a Source round trip keeps one URL, one range and one target', async () => {
+    const source = '文本 https://yuanmahome.cn/originalDetail?id=2113188155363074049 结束'
+    await page.evaluate(src => window.f.reset(src, false), source)
+    const live = await snapshot()
+
+    await page.evaluate(() => window.f.manager.setMarkdownMode(window.f.id, 'source'))
+    await page.waitForFunction(() => !!document.querySelector('.cm-editor'))
+    await page.waitForTimeout(120)
+    const sourceMode = await page.evaluate(() => {
+      const view = window.f.CMView.findFromDOM(document.querySelector('.cm-editor'))
+      const text = view.state.doc.toString()
+      return { text, occurrences: text.split('https://').length - 1 }
+    })
+    assert.equal(sourceMode.text, source, 'Source mode shows the file exactly, with no re-escaping')
+    assert.equal(sourceMode.occurrences, 1, 'the URL is not duplicated by the round trip')
+
+    await page.evaluate(() => window.f.manager.setMarkdownMode(window.f.id, 'live'))
+    await page.waitForFunction(() => !!window.f?.ready())
+    const back = await snapshot()
+    assert.equal(back.source, source, 'the source is unchanged after switching back')
+    assert.equal(back.anchors.length, 1, 'still exactly one link')
+    assert.equal(back.anchors[0].text, live.anchors[0].text, 'the painted range is identical after a round trip')
+    assert.equal(back.anchors[0].href, live.anchors[0].href, 'the destination survives the round trip')
+    assert.equal(back.anchors[0].autolink, 'bare', 'and it is still spelled as a bare URL')
+  })
+
   console.log('========================================')
   console.log(`All ${results.length} bare URL editing tests passed successfully!`)
   console.log('========================================')
