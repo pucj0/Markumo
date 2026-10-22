@@ -80,6 +80,7 @@ export interface RecoveryDiff {
   recoveryText: string
   diskText: string | null
   error?: string
+  diffSource?: 'disk' | 'session' | 'none'
 }
 export interface RecoveryGateway {
   list(): Promise<RecoveryList>

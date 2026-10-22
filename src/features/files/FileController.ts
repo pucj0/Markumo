@@ -1,5 +1,14 @@
 import type { DocumentManager } from '../../editor/core/DocumentManager'
-import type { Encoding, FileOpenEncoding, FileGateway, OpenBatch, OpenFile } from './contracts'
+import type {
+  Encoding,
+  FileOpenEncoding,
+  FileGateway,
+  OpenBatch,
+  OpenFile,
+  SaveDiagnosticStatus,
+  SaveExecutionResult,
+  SaveTarget,
+} from './contracts'
 import { sameFilePath } from './pathKey'
 import { isMedia } from './media'
 import { ExternalFileChangeController } from './ExternalFileChangeController'
@@ -65,28 +74,60 @@ export class FileController {
     try { this.accept(await this.gateway.openRecent(path, encoding), preview) }
     catch (error) { this.notify(fileError(error)) }
   }
-  async save(id: string, saveAs = false, encoding?: Encoding, bom?: boolean) {
-    return await this.performSave(id, saveAs, encoding, bom, false) === 'saved'
+  async save(id: string, saveAs = false, encoding?: Encoding, bom?: boolean): Promise<boolean> {
+    const result = await this.performSave(id, saveAs, encoding, bom, false)
+    return result.code === 'saved'
   }
-  async autoSave(id: string) {
+  async saveDetailed(id: string, saveAs = false, encoding?: Encoding, bom?: boolean): Promise<SaveExecutionResult> {
+    return this.performSave(id, saveAs, encoding, bom, false)
+  }
+  async autoSave(id: string): Promise<'saved' | 'changed' | 'failed' | 'skipped'> {
     const doc = this.manager.metadata(id)
     if (!doc?.fileToken || doc.kind === 'javaClass' || !doc.dirty || doc.readOnly || this.manager.isComposing || this.workspaceBusy || this.saving.has(id) || this.external.checking(id)) return 'skipped' as const
-    return this.performSave(id, false, undefined, undefined, true)
+    const result = await this.performSave(id, false, undefined, undefined, true)
+    if (result.code === 'saved') return 'saved'
+    if (result.code === 'changed') return 'changed'
+    if (['failed', 'permission', 'conflict', 'already_open', 'target_unavailable', 'read_only'].includes(result.code)) return 'failed'
+    return 'skipped'
   }
-  private async performSave(id: string, saveAs: boolean, encoding: Encoding | undefined, bom: boolean | undefined, automatic: boolean): Promise<'saved' | 'changed' | 'failed' | 'skipped'> {
+  private async performSave(id: string, saveAs: boolean, encoding: Encoding | undefined, bom: boolean | undefined, automatic: boolean): Promise<SaveExecutionResult> {
+    const doc = this.manager.metadata(id)
+    if (!doc) {
+      return { code: 'failed', success: false, message: '文档不存在或已关闭' }
+    }
     if (this.external.resolving(id) || (!saveAs && this.external.blocked(id))) {
       if (!automatic) this.external.keep(id, false)
-      return 'skipped'
+      return { code: 'blocked', success: false, message: '原文件存在外部变化冲突，已阻止直接保存；请先处理外部变化或另存为新文件。' }
     }
-    if (isMedia(this.manager.metadata(id))) return 'skipped'
-    if (this.manager.metadata(id)?.kind === 'javaClass') { if (!automatic) this.notify('ClassFile 仅供只读查看，不能作为文本保存或另存为。'); return 'skipped' }
-    if (this.manager.metadata(id)?.encoding === 'Hex' && encoding && encoding !== 'Hex') {
-      this.notify('字节编辑内容请直接保存或另存为；不能把十六进制显示文字作为原文件的文本编码保存。'); return 'skipped'
+    if (isMedia(doc)) {
+      return { code: 'read_only', success: false, message: '媒体文件仅供查看，不能保存为文本。' }
     }
-    if (this.workspaceBusy) { if (!automatic) this.notify('工作区文件操作进行中，请稍后保存。'); return 'skipped' }
-    if (this.disposed || this.saving.has(id)) return 'skipped'
+    if (doc.kind === 'javaClass') {
+      if (!automatic) this.notify('ClassFile 仅供只读查看，不能作为文本保存或另存为。')
+      return { code: 'read_only', success: false, message: 'ClassFile 仅供只读查看，不能作为文本保存或另存为。' }
+    }
+    if (doc.encoding === 'Hex' && encoding && encoding !== 'Hex') {
+      const msg = '字节编辑内容请直接保存或另存为；不能把十六进制显示文字作为原文件的文本编码保存。'
+      this.notify(msg)
+      return { code: 'failed', success: false, message: msg }
+    }
+    if (doc.readOnly && !saveAs && doc.fileToken) {
+      const msg = '原文件为只读模式，已阻止直接保存；请使用另存为。'
+      if (!automatic) this.notify(msg)
+      return { code: 'permission', success: false, message: msg }
+    }
+    if (this.workspaceBusy) {
+      if (!automatic) this.notify('工作区文件操作进行中，请稍后保存。')
+      return { code: 'busy', success: false, message: '工作区文件操作进行中，请稍后保存。' }
+    }
+    if (this.disposed || this.saving.has(id)) {
+      return { code: 'busy', success: false, message: '保存正在进行中，请稍后。' }
+    }
     const snapshot = this.manager.saveSnapshot(id)
-    if (!snapshot) { if (!automatic) this.notify('请先完成输入法输入，再保存。'); return 'skipped' }
+    if (!snapshot) {
+      if (!automatic) this.notify('请先完成输入法输入，再保存。')
+      return { code: 'composing', success: false, message: '请先完成输入法输入，再保存。' }
+    }
     this.saving.add(id)
     const saveFailed = this.external.saveStarted(id)
     let targetToken: string | undefined
@@ -95,21 +136,37 @@ export class FileController {
       let token = source.fileToken
       let version = source.lastDiskVersion
       if (!token || saveAs) {
-        const target = await this.gateway.saveTarget(token ?? null, source.name)
-        if (!target) return 'skipped'
+        let target: SaveTarget | null
+        try {
+          target = await this.gateway.saveTarget(token ?? null, source.name)
+        } catch (dialogError) {
+          const errMsg = fileError(dialogError)
+          if (!automatic) this.notify(`无法打开保存窗口：${errMsg}`)
+          return { code: 'target_unavailable', success: false, message: errMsg }
+        }
+        if (!target) {
+          return { code: 'cancelled', success: false, message: '已取消保存，未保存修改与恢复快照仍保留。' }
+        }
         targetToken = target.token
-        if (this.disposed) return 'skipped'
+        if (this.disposed) {
+          return { code: 'failed', success: false, message: '操作已终止。' }
+        }
         if (source.fileToken && sameFilePath(target.path, source.path)) {
-          this.notify('另存为不能覆盖原文件，请选择其他文件名；原文件仍受版本保护。')
-          return 'skipped'
+          const msg = '另存为不能覆盖当前打开的原文件，请选择其他文件名；原文件仍受版本保护。'
+          this.notify(msg)
+          return { code: 'conflict', success: false, message: msg }
         }
         token = target.token
         version = target.version
       }
       const targetEncoding = encoding || source.encoding as Encoding
       const targetBom = bom !== undefined ? bom : (encoding ? false : source.bom)
-      if (this.disposed || !this.manager.metadata(id) || this.manager.metadata(id)?.fileToken !== source.fileToken) return 'skipped'
-      if (!saveAs && this.external.blocked(id)) return 'skipped'
+      if (this.disposed || !this.manager.metadata(id) || this.manager.metadata(id)?.fileToken !== source.fileToken) {
+        return { code: 'failed', success: false, message: '保存期间文档状态已改变。' }
+      }
+      if (!saveAs && this.external.blocked(id)) {
+        return { code: 'blocked', success: false, message: '检测到外部修改冲突，已阻止写入。' }
+      }
       const result = await this.gateway.save(token!, snapshot.text, version, targetEncoding, targetBom)
       targetToken = undefined
       const accepted = snapshot.complete(result)
@@ -118,22 +175,43 @@ export class FileController {
       if (accepted) this.external.saved(id)
       if (accepted) this.automaticErrors.delete(id)
       if (accepted && source.fileToken && source.fileToken !== result.token) await this.gateway.release(source.fileToken).catch(() => {})
-      if (!accepted) await this.gateway.release(result.token).catch(() => {})
+      if (!accepted) {
+        await this.gateway.release(result.token).catch(() => {})
+        return { code: 'failed', success: false, message: '保存完成处理未被接受。' }
+      }
       if (accepted) await Promise.resolve().then(() => this.saved?.(id)).catch(error => this.notify(fileError(error)))
       if (accepted && result.warning) this.notify(result.warning)
-      return !accepted ? 'skipped' : this.manager.metadata(id)?.dirty ? 'changed' : 'saved'
+
+      const isStillDirty = !!this.manager.metadata(id)?.dirty
+      if (isStillDirty) {
+        return { code: 'changed', success: true, message: '已成功写入磁盘，但保存期间有新的编辑，仍保留未保存状态。' }
+      }
+      return { code: 'saved', success: true, message: '文件已成功保存。' }
     } catch (error) {
       if (!saveAs) saveFailed(error)
-      const signature = `${source.fileToken}|${fileError(error)}`
+      const errStr = fileError(error)
+      const signature = `${source.fileToken}|${errStr}`
+
+      let diagnosticCode: SaveDiagnosticStatus = 'failed'
+      if (errStr.includes('already_open') || errStr.includes('其他标签打开')) {
+        diagnosticCode = 'already_open'
+      } else if (errStr.includes('conflict') || errStr.includes('变化或被删除') || errStr.includes('外部修改') || errStr.includes('版本')) {
+        diagnosticCode = 'conflict'
+      } else if (errStr.includes('permission') || errStr.includes('只读') || errStr.includes('拒绝访问') || errStr.includes('PermissionDenied') || errStr.includes('Access is denied')) {
+        diagnosticCode = 'permission'
+      } else if (errStr.includes('scope') || errStr.includes('路径') || errStr.includes('目标不可用')) {
+        diagnosticCode = 'target_unavailable'
+      }
+
       if (!automatic || !this.automaticErrors.get(id)?.has(signature)) {
         if (automatic) {
           const errors = this.automaticErrors.get(id) ?? new Set<string>()
           errors.add(signature); this.automaticErrors.set(id, errors)
         }
         const prefix = !automatic ? '' : this.external.blocked(id) ? '自动保存已暂停：' : '自动保存失败，将有限重试；持续失败后暂停：'
-        this.notify(`${prefix}${fileError(error)}\n内容仍保留；可重试或使用另存为保存到其他文件。`)
+        this.notify(`${prefix}${errStr}\n内容仍保留；可重试或使用另存为保存到其他文件。`)
       }
-      return 'failed'
+      return { code: diagnosticCode, success: false, message: errStr }
     } finally {
       if (targetToken && targetToken !== source.fileToken) await this.gateway.release(targetToken).catch(() => {})
       this.saving.delete(id)

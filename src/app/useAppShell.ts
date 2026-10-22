@@ -508,9 +508,37 @@ export function useAppShell() {
     if (fileBusy.value) return false
     fileBusy.value = true
     try {
-      const saved = await files.save(id, saveAs, encoding)
+      const result = await files.saveDetailed(id, saveAs, encoding)
       await refreshRecent()
-      return saved
+      if (result.code === 'saved') {
+        toast('文件已成功保存')
+        return true
+      }
+      if (result.code === 'changed') {
+        toast('已保存至磁盘，但检测到有新编辑，仍保留未保存修改')
+        return true
+      }
+      if (result.code === 'cancelled') {
+        toast('已取消保存，未保存修改仍保留')
+        return false
+      }
+      if (result.code === 'conflict') {
+        toast(`保存失败：${result.message || '文件已被外部更改，已阻止覆盖；请使用另存为'}`)
+        return false
+      }
+      if (result.code === 'permission') {
+        toast(`保存失败：${result.message || '文件只读或无写入权限；请使用另存为'}`)
+        return false
+      }
+      if (result.code === 'already_open') {
+        toast(`保存失败：${result.message || '目标文件已在其他标签打开，请选择其他文件名'}`)
+        return false
+      }
+      if (!result.success) {
+        toast(`保存失败：${result.message || '操作未完成，内容与恢复快照仍保留；可重试或另存为'}`)
+        return false
+      }
+      return true
     } finally {
       fileBusy.value = false
       void drainPending()

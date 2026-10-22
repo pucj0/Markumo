@@ -43,16 +43,18 @@ try {
     const failed = files.save(id); calls[1].reject(Error('injected disk conflict'))
     const failure = { saved: await failed, text: m.getText(id), depth: f.undoDepth(m.getState(id)), dirty: m.metadata(id).dirty }
     m.command('undo'); const undone = m.getText(id)
-    const cancelled = await files.save(id, true)
+    const cancelDetail = await files.saveDetailed(id, true)
+    const cancelled = cancelDetail.code === 'cancelled'
     files.dispose(); m.dispose()
-    return { duringSave, before, depth, failure, undone, cancelled, notices, released }
+    return { duringSave, before, depth, failure, undone, cancelled, cancelCode: cancelDetail.code, notices, released }
   })
   assert.deepEqual(result.duringSave, { rapid: false, auto: 'skipped', close: 'saving', saved: false, count: 1,
     diskText: 'Original saved snapshot', expectedVersion: 'v1', currentText: 'Original saved snapshot newer input',
     dirty: true, version: 'v2', active: true, saving: 0 })
   assert.deepEqual(result.failure, { saved: false, text: result.before, depth: result.depth, dirty: true })
   assert.equal(result.undone, 'Original saved snapshot')
-  assert.equal(result.cancelled, false)
+  assert.equal(result.cancelled, true)
+  assert.equal(result.cancelCode, 'cancelled')
   assert(result.notices.some(message => message.includes('injected disk conflict')))
   console.log('PASS async save snapshot, later input/dirty/version, rapid save, close guard, document switch, failure undo and cancelled save-as')
   await page.evaluate(() => {

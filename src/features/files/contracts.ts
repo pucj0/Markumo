@@ -26,6 +26,26 @@ export interface MediaOpenFile extends FileMetadata { kind: 'image' | 'pdf'; tex
 export type OpenFile = TextOpenFile | JavaClassOpenFile | MediaOpenFile
 export interface OpenBatch { files: OpenFile[]; errors: string[] }
 export interface SaveTarget { token: string; path: string; version: string | null }
+
+export type SaveDiagnosticStatus =
+  | 'saved'
+  | 'changed'
+  | 'cancelled'
+  | 'conflict'
+  | 'permission'
+  | 'already_open'
+  | 'target_unavailable'
+  | 'busy'
+  | 'composing'
+  | 'blocked'
+  | 'read_only'
+  | 'failed'
+
+export interface SaveExecutionResult {
+  code: SaveDiagnosticStatus
+  success: boolean
+  message?: string
+}
 export interface Preferences {
   recent: { path: string; name: string }[]
   layout: { mode: 'single' | 'workspace'; sidebarVisible: boolean; sidebarWidth: number }

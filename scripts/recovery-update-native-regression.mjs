@@ -124,6 +124,7 @@ try {
   snapshotPath = path.join(profile, 'recovery', `${a.id}.json`)
   await page.keyboard.insertText('second B\n')
   await exact(textB, a.id)
+  await wait(200)
   await page.keyboard.insertText('third C\n')
   await exact(textC, a.id)
   // Real external conflict + real RecoveryService checkpoint. A previously
@@ -168,7 +169,7 @@ try {
   page = await launch()
   await page.locator('.recovery-dialog').waitFor()
   await exact(textC, a.id)
-  await page.getByRole('button', { name: '暂不处理', exact: true }).click()
+  await page.getByRole('button', { name: /稍后处理|暂不处理/ }).first().click()
   await replaceEditor(page, diskB)
   await page.keyboard.press('Control+s')
   await until(() => fs.readFileSync(original, 'utf8') === diskB, 'real original file save B')
@@ -206,7 +207,7 @@ try {
   report.phases.push({ nativeRestoreFailure: true, preservedBytes: true, pathlessDraft: true })
   await page.screenshot({ path: path.join(root, 'native-restore-write-failed.png') })
   fs.chmodSync(snapshotPath, 0o666)
-  await page.getByRole('button', { name: '暂不处理', exact: true }).click()
+  await page.getByRole('button', { name: /稍后处理|暂不处理/ }).first().click()
   await page.locator('.cm-content').last().click()
   await page.keyboard.press('Control+End')
   await page.keyboard.insertText('continued D\n')
@@ -218,10 +219,58 @@ try {
   page = await launch()
   await page.locator('.recovery-row').waitFor()
   await exact(textD, a.id)
-  await page.locator('.recovery-row').getByRole('button', { name: '丢弃', exact: true }).click()
+  await page.locator('.recovery-row').getByRole('button', { name: /删除恢复稿|丢弃/ }).first().click()
+  const confirmBtn = page.locator('.btn-danger-confirm')
+  if (await confirmBtn.count()) {
+    await confirmBtn.first().click()
+  }
   await until(() => !fs.existsSync(snapshotPath), 'explicit discard removes physical snapshot')
   assert.equal(fs.readFileSync(original, 'utf8'), diskB)
   await crash()
+
+  // Scenario 1: Original file clean, edited with textE, snapshot written with valid diskVersion.
+  // Force crash, restart, baseline matches, click "打开恢复稿", dialog detaches, focus transferred.
+  // Press Control+s, original file written on disk, dirty state cleared, snapshot automatically cleaned up!
+  seedSession()
+  page = await launch()
+  await page.locator('.cm-content').first().waitFor()
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.press('Control+End')
+  const textE = diskB + 'extra E\n'
+  await page.keyboard.insertText('extra E\n')
+  const recordE = await until(() => records().find(r => r.text === textE), 'snapshot E written')
+  assert.equal(recordE.path, path.toNamespacedPath(fs.realpathSync.native(original)))
+  await wait(500)
+  await crash()
+
+  // Restart after crash:
+  page = await launch()
+  await page.locator('.recovery-dialog').waitFor()
+  const rowE = page.locator('.recovery-row').first()
+  assert(await rowE.innerText().then(t => t.includes('原文件存在') || t.includes('原文件完整')), 'must recognize original file')
+  await rowE.getByRole('button', { name: /打开恢复稿|恢复/ }).first().click()
+  await page.locator('.recovery-dialog').waitFor({ state: 'detached', timeout: 10000 })
+  await until(async () => {
+    return await page.evaluate(expected => {
+      const { manager } = document.querySelector('#app').__vue_app__._instance.setupState
+      return manager.activeDocument?.dirty && manager.activeDocument?.fileToken && manager.getText(manager.activeId) === expected
+    }, textE)
+  }, 'original document restored with token and dirty')
+
+  // Direct Control+s save
+  await page.keyboard.press('Control+s')
+  await until(() => fs.readFileSync(original, 'utf8') === textE, 'original file updated via Control+s')
+  await until(async () => {
+    return await page.evaluate(() => {
+      const { manager } = document.querySelector('#app').__vue_app__._instance.setupState
+      return !manager.activeDocument?.dirty
+    })
+  }, 'document is clean after save')
+  await until(() => records().length === 0, 'snapshot cleanly removed after successful save')
+  report.phases.push({ restoredSaveLoopDirectControlS: true, diskUpdated: true, snapshotCleaned: true })
+  await page.screenshot({ path: path.join(root, 'restored-saved-clean.png') })
+  await crash()
+
   seedSession()
   page = await launch()
   await page.evaluate(async () => { await document.querySelector('#app').__vue_app__._instance.setupState.openRecovery() })
@@ -229,6 +278,7 @@ try {
   assert.equal(records().length, 0)
   assert.deepEqual(report.errors, [])
   report.passed = true
+  report.completedAt = new Date().toISOString()
   report.completedAt = new Date().toISOString()
 } catch (error) {
   report.failure = String(error.stack || error)

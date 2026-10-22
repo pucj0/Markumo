@@ -240,15 +240,53 @@ export class RecoveryController {
     this.busy.value = true
     try {
       const body = await this.gateway.read(record.id)
-      // Compare with the document already in this session. After a session
-      // restore this is the current disk content; never open an arbitrary path
-      // from a recovery record just to build a diff.
+      let diskText: string | null = null
+      let diffSource: 'disk' | 'session' | 'none' = 'none'
+      let error: string | undefined
+
       const current = record.path
         ? this.manager.openedDocuments.find(doc => doc.path && sameFilePath(doc.path, record.path!))
         : undefined
-      const diskText = current ? this.manager.getText(current.id) ?? null : null
-      const error = record.path && !current ? '原文件未在当前会话打开，无法比较' : undefined
-      this.diff.value = { id: record.id, name: record.name, path: record.path, recoveryText: body.text, diskText, error }
+
+      if (current) {
+        const baseline = this.manager.getBaselineText(current.id)
+        if (current.dirty && baseline !== null) {
+          diskText = baseline
+          diffSource = 'disk'
+        } else {
+          diskText = this.manager.getText(current.id) ?? ''
+          diffSource = current.dirty ? 'session' : 'disk'
+        }
+      } else if (record.path && record.diskExists) {
+        try {
+          const file = await this.files.gateway.openRecent(record.path, body.encoding as FileOpenEncoding)
+          diskText = file.text
+          diffSource = 'disk'
+          if (file.token) {
+            void this.files.gateway.release(file.token).catch(() => {})
+          }
+        } catch {
+          diffSource = 'none'
+          error = '原文件未在当前会话打开，仅展示恢复稿内容'
+        }
+      } else if (!record.path) {
+        diffSource = 'none'
+        diskText = null
+      } else {
+        diffSource = 'none'
+        diskText = null
+        error = '原文件在磁盘上不存在或已被删除'
+      }
+
+      this.diff.value = {
+        id: record.id,
+        name: record.name,
+        path: record.path,
+        recoveryText: body.text,
+        diskText,
+        error,
+        diffSource,
+      }
     } catch (error) {
       this.lastError.value = `读取恢复快照失败：${String(error)}`
       this.notify(this.lastError.value)
@@ -274,33 +312,54 @@ export class RecoveryController {
       const body = await this.gateway.read(record.id)
       let docId: string | null = null
       let opened: EditorDocument | undefined
+      let isRestoredToOriginal = false
+
       if (body.path && record.diskExists) {
-        // Acquire the current file capability/version first. This explicitly
-        // does not write anything; the recovery body is applied only afterwards.
-        await this.files.recent(body.path, body.encoding as FileOpenEncoding)
         opened = this.manager.openedDocuments.find(doc => doc.path && sameFilePath(doc.path, body.path!))
+        if (!opened) {
+          try {
+            await this.files.recent(body.path, body.encoding as FileOpenEncoding)
+            opened = this.manager.openedDocuments.find(doc => doc.path && sameFilePath(doc.path, body.path!))
+          } catch {
+            opened = undefined
+          }
+        }
       }
-      if (this.disposed || this.manager.isComposing || (this.files.saving?.size ?? 0) || this.files.workspaceBusy) throw Error('恢复期间文件操作状态已变化，请重试')
-      const reusable = opened && !opened.dirty && !this.claims.has(opened.id) &&
+
+      if (this.disposed || this.manager.isComposing || (this.files.saving?.size ?? 0) || this.files.workspaceBusy) {
+        throw Error('恢复期间文件操作状态已变化，请重试')
+      }
+
+      const reusable = !!(opened && !opened.dirty && !this.claims.has(opened.id) &&
         body.diskVersion !== null && body.diskVersion === opened.lastDiskVersion &&
-        opened.kind !== 'javaClass' && opened.encoding !== 'Hex' && !isMedia(opened)
+        opened.kind !== 'javaClass' && opened.encoding !== 'Hex' && !isMedia(opened))
+
       if (reusable && this.manager.restoreRecoveredText(opened!.id, body.text, (body.mode || undefined) as MarkdownMode | undefined)) {
         docId = opened!.id
-      } else if (opened && opened.dirty) {
-        // Never overwrite edits made after startup with an older recovery body.
-        docId = this.createDraft(body)
+        isRestoredToOriginal = true
       } else {
         docId = this.createDraft(body)
+        isRestoredToOriginal = false
       }
+
       if (!docId) throw Error('无法创建恢复文档')
       this.applyPlacements(docId, body.panes.length ? body.panes : [{ pane: 'main', mode: body.mode || undefined }])
+
       if (this.manager.metadata(docId)) {
-        // Explicit recovery: only now does the record become this document's
-        // recovery identity. Never share a record between two live documents.
         const owned = [...this.claims.entries()].some(([documentId, claim]) => documentId !== docId && claim.recordId === body.id)
         if (!owned) this.claims.set(docId, { recordId: body.id, kind: 'recovered', version: body.version })
-        return await this.persistRestored(docId)
+        const persisted = await this.persistRestored(docId)
+        if (!persisted) return false
       }
+
+      if (isRestoredToOriginal) {
+        this.notify('已恢复未保存修改，可保存至原文件 (Ctrl+S)')
+      } else {
+        this.notify('已打开恢复副本，请选择保存位置 (Ctrl+S 另存为)')
+      }
+
+      this.visible.value = false
+
       return true
     } catch (error) {
       this.lastError.value = `恢复文档失败：${String(error)}`
@@ -323,17 +382,19 @@ export class RecoveryController {
     }
     const recordId = this.claims.get(documentId)?.recordId
     this.records.value = this.records.value.filter(record => record.id !== recordId)
-    this.visible.value = this.records.value.length > 0
     this.diff.value = null
     return true
   }
 
   async restoreAll() {
     let failures = 0
-    for (const record of [...this.records.value]) {
+    const records = [...this.records.value]
+    for (const record of records) {
       if (!(await this.restore(record))) failures++
     }
+    this.visible.value = false
     if (failures) this.notify(`${failures} 个恢复文档未能打开；原恢复快照仍保留，可重试。`)
+    else if (records.length) this.notify(`已全部打开 ${records.length} 个恢复文档，请核对后保存`)
   }
 
   dispose() {
@@ -452,7 +513,7 @@ export class RecoveryController {
   private applyPlacements(documentId: string, panes: RecoveryPane[]) {
     const leaves = this.manager.layout.getAllLeafIds()
     const primary = leaves[0] || 'main'
-    this.manager.open(documentId, false, primary, false)
+    this.manager.open(documentId, false, primary, true)
     const extra = panes.find(pane => pane.pane !== 'main')
     if (extra) {
       let target = leaves.find(id => id !== primary)
@@ -467,7 +528,7 @@ export class RecoveryController {
       if (this.manager.layout.getPane(placement.pane)) this.manager.setMarkdownMode(documentId, placement.mode, placement.pane)
     }
     this.manager.pin(documentId)
-    this.manager.focusPane(primary, false)
+    this.manager.focusPane(primary, true)
   }
 
   private generation(documentId: string) {

@@ -527,6 +527,109 @@ try {
       out.queuedEditAfterFailure = true
     }
 
+    // Save loop closure 1: original file restored safely, Ctrl+S saves directly and releases snapshot.
+    {
+      const transport = new RecoveryTransport()
+      const rid = '11'.repeat(16)
+      transport.records.set(rid, { schemaVersion: 1, id: rid, name: 'note.txt', path: 'E:/fixture/note.txt', text: 'recovered content',
+        encoding: 'UTF-8', bom: false, eol: 'LF', mode: null, panes: [], updatedAt: Date.now(), charCount: 17,
+        checksum: 'x', diskVersion: 'v1', diskSize: 9, diskModifiedNs: null, diskExists: true })
+      transport.versions.set(rid, 'seed-11')
+      const { manager, files, controller } = setup({ file: { diskText: 'old text', version: 'v1' } }, transport)
+      try {
+        files.accept({ ...fileMeta, text: 'old text' })
+        await controller.start()
+        ok(await controller.restore(controller.records.value.find(r => r.id === rid)), 'restore failed')
+        const activeDoc = manager.activeDocument
+        ok(activeDoc?.path === 'E:/fixture/note.txt', 'restored document did not bind original path')
+        ok(activeDoc?.dirty, 'restored document must be marked dirty')
+        // Perform direct save (Ctrl+S equivalent)
+        const saveRes = await files.saveDetailed(activeDoc.id)
+        ok(saveRes.code === 'saved' && saveRes.success, 'direct save failed')
+        ok(!manager.metadata(activeDoc.id)?.dirty, 'document must not be dirty after save')
+        await sleep(30)
+        ok(transport.removed.includes(rid), 'recovery snapshot was not released after successful save')
+        out.saveLoopOriginal = { saved: true, dirtyAfter: !!manager.metadata(activeDoc.id)?.dirty, snapshotCleaned: transport.removed.includes(rid) }
+      } finally { controller.dispose(); files.dispose(); manager.dispose() }
+    }
+
+    // Save loop closure 2: draft cancellation preserves recovery, Save As binds new path and 2nd save doesn't prompt dialog.
+    {
+      const transport = new RecoveryTransport()
+      const rid = '22'.repeat(16)
+      transport.records.set(rid, { schemaVersion: 1, id: rid, name: 'draft.txt', path: null, text: 'draft content',
+        encoding: 'UTF-8', bom: false, eol: 'LF', mode: null, panes: [], updatedAt: Date.now(), charCount: 13,
+        checksum: 'x', diskVersion: null, diskSize: null, diskModifiedNs: null })
+      transport.versions.set(rid, 'seed-22')
+      let targetPrompts = 0
+      const customGateway = {
+        release: async () => {},
+        saveTarget: async () => {
+          targetPrompts++
+          return targetPrompts === 1 ? null : ({ token: 'new-tok', path: 'E:/fixture/new-file.txt', version: null })
+        },
+        save: async (token, text, version, encoding, bom) => ({
+          ...fileMeta, token, path: 'E:/fixture/new-file.txt', name: 'new-file.txt', text, version: 'v1'
+        }),
+        openRecent: async () => fileMeta,
+        preferences: async () => ({ recent: [], layout: { mode: 'single', sidebarVisible: false, sidebarWidth: 240 } }),
+      }
+      const manager = new f.DocumentManager([], async () => [])
+      const files = new f.FileController(manager, customGateway, () => {})
+      const controller = new f.RecoveryController(manager, files, transport, () => {}, { debounceMs: 15 })
+      files.setSavedHandler(id => controller.onSaved(id))
+      try {
+        await controller.start()
+        ok(await controller.restore(controller.records.value.find(r => r.id === rid)), 'draft restore failed')
+        const draftDoc = manager.activeDocument
+        ok(draftDoc?.id.startsWith('recovered-'), 'recovered draft missing')
+        ok(draftDoc?.dirty, 'draft must be dirty')
+
+        // First save attempt: user cancels Save As dialog
+        const cancelRes = await files.saveDetailed(draftDoc.id)
+        ok(cancelRes.code === 'cancelled', 'save should report cancelled')
+        ok(manager.metadata(draftDoc.id)?.dirty, 'cancelling save must retain dirty status')
+        ok(transport.records.has(rid), 'cancelling save must retain recovery snapshot')
+
+        // Second save attempt: user chooses path and saves
+        const saveRes = await files.saveDetailed(draftDoc.id)
+        ok(saveRes.code === 'saved', 'saving with chosen target failed')
+        const updatedMeta = manager.metadata(draftDoc.id)
+        ok(!updatedMeta?.dirty, 'document must be clean after successful save')
+        ok(updatedMeta?.path === 'E:/fixture/new-file.txt', 'document must bind new path')
+        ok(updatedMeta?.fileToken === 'new-tok', 'document must bind new token')
+        await sleep(30)
+        ok(transport.removed.includes(rid), 'recovery snapshot must be cleaned after Save As success')
+
+        // Third save attempt: second Ctrl+S saves directly to bound file without prompting dialog again!
+        const promptsBefore = targetPrompts
+        const directRes = await files.saveDetailed(draftDoc.id)
+        ok(directRes.code === 'saved', 'second direct save failed')
+        ok(targetPrompts === promptsBefore, 'second save must not reopen Save As dialog')
+        out.saveLoopDraft = { cancelledRetained: true, savedBound: true, noRepeatDialog: true }
+      } finally { controller.dispose(); files.dispose(); manager.dispose() }
+    }
+
+    // Diff testing: empty file diff, correct add/remove sign and diffSource tracking
+    {
+      const transport = new RecoveryTransport()
+      const rid = '33'.repeat(16)
+      transport.records.set(rid, { schemaVersion: 1, id: rid, name: 'empty-test.txt', path: 'E:/fixture/empty-test.txt', text: 'new line 1\nnew line 2',
+        encoding: 'UTF-8', bom: false, eol: 'LF', mode: null, panes: [], updatedAt: Date.now(), charCount: 20,
+        checksum: 'x', diskVersion: 'v1', diskSize: 0, diskModifiedNs: null, diskExists: true })
+      const { manager, files, controller } = setup({ file: { diskText: '', version: 'v1' } }, transport)
+      try {
+        files.accept({ ...fileMeta, path: 'E:/fixture/empty-test.txt', text: '' })
+        await controller.start()
+        await controller.showDiff(controller.records.value[0])
+        const diff = controller.diff.value
+        ok(diff, 'diff missing')
+        ok(diff.diskText === '', 'empty disk file must not be treated as null')
+        ok(diff.diffSource === 'disk', 'clean opened file must report disk source')
+        out.diffEmpty = { diskTextNotNull: diff.diskText !== null, diffSource: diff.diffSource }
+      } finally { controller.dispose(); files.dispose(); manager.dispose() }
+    }
+
     // RecoveryDialog renders independently; close must not imply deletion.
     {
       const records = [{ id: 'd'.repeat(32), name: 'recover.md', path: 'E:/fixture/recover.md', updatedAt: Date.now(), charCount: 12,
@@ -536,7 +639,7 @@ try {
       app.mount('#app')
       await f.nextTick()
       const text = document.querySelector('.recovery-dialog')?.textContent || ''
-      const closeButton = [...document.querySelectorAll('.recovery-dialog button')].find(button => button.textContent?.includes('暂不处理'))
+      const closeButton = [...document.querySelectorAll('.recovery-dialog button')].find(button => button.textContent?.includes('稍后处理') || button.textContent?.includes('暂不处理'))
       closeButton?.click()
       out.dialog = { rendered: text.includes('recover.md'), close: closed, disk: text.includes('磁盘内容已变化') }
       app.unmount()
@@ -571,6 +674,9 @@ try {
   assert(result.failure.error.includes('injected recovery write failure'))
   assert.equal(result.failure.visible, true)
   assert.deepEqual(result.dialog, { rendered: true, close: 1, disk: true })
+  assert.deepEqual(result.saveLoopOriginal, { saved: true, dirtyAfter: false, snapshotCleaned: true })
+  assert.deepEqual(result.saveLoopDraft, { cancelledRetained: true, savedBound: true, noRepeatDialog: true })
+  assert.deepEqual(result.diffEmpty, { diskTextNotNull: true, diffSource: 'disk' })
   assert.equal(result.unclaimedSafety, true)
   assert.equal(result.restoreFailureAndExternalSafety, true)
   assert.equal(result.queuedEditAfterFailure, true)

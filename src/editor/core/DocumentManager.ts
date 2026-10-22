@@ -50,13 +50,14 @@ interface CachedDocument {
   languageGeneration: number
   readyLanguageGeneration: number | null
   scroll: { top: number; left: number }
-  panes: Record<string, { selection: EditorSelection; top: number; left: number; mode?: MarkdownMode }>
+  panes: Record<string, { selection: EditorSelection; top: number; left: number; mode?: MarkdownMode; snapshot?: ReturnType<EditorView['scrollSnapshot']>; snapshotText?: Text }>
 }
 
 export class DocumentManager {
   readonly layout = new EditorLayoutManager()
   private readonly views = new Map<string, EditorView>()
   private readonly hosts = new Map<string, HTMLElement>()
+  private readonly rehosting = new Map<string, {host:HTMLElement;id:string|null;focused:boolean}>()
   private readonly liveViews = new Map<string, {id:string; editor:LiveEditor}>()
   private readonly liveLoads = new Map<string, object>()
   private liveOrigin: {pane:string;update:unknown}|null = null
@@ -175,6 +176,7 @@ export class DocumentManager {
   }
   getState(id: string) { return this.records.get(id)?.state }
   getText(id: string) { return this.records.get(id)?.state.doc.toString() }
+  getBaselineText(id: string) { return this.records.get(id)?.baseline?.toString() ?? null }
   mediaViewState(id: string, pane: string): MediaViewState {
     return this.media.viewState(id, pane)
   }
@@ -591,7 +593,7 @@ export class DocumentManager {
     this.paneNavigation.set(targetPane, this.navigationRevision(targetPane) + 1)
 
     this.captureScroll(targetPane)
-    const wasActive = group.activeId === id
+    const wasActive = group.activeId === id, wasActivePane = this.activePane === targetPane
     const res = this.layout.closeTab(targetPane, id)
     if (isLastRef) {
       this.release(id)
@@ -601,7 +603,7 @@ export class DocumentManager {
     if (res.paneRemoved) {
       this.destroyView(targetPane)
       this.hosts.delete(targetPane)
-      this.showActive(this.layout.activePaneId)
+      if (wasActivePane) this.showActive(this.layout.activePaneId)
     } else if (wasActive) {
       this.showActive(targetPane)
     }
@@ -641,11 +643,11 @@ export class DocumentManager {
     const live=this.liveViews.get(resolved)
     if(record&&live&&live.id===id){
       const selection=live.editor.selection,root=this.hosts.get(resolved)?.querySelector('.markdown-live')
-      record.panes[resolved]={...record.panes[resolved],selection:EditorSelection.single(selection.anchor,selection.head),top:root?.scrollTop||0,left:root?.scrollLeft||0}
+      record.panes[resolved]={...record.panes[resolved],selection:EditorSelection.single(selection.anchor,selection.head),top:root?.scrollTop||0,left:root?.scrollLeft||0,snapshot:undefined,snapshotText:undefined}
       return
     }
     if (record && view) {
-      record.panes[resolved] = { ...record.panes[resolved], selection: view.state.selection, top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
+      record.panes[resolved] = { ...record.panes[resolved], selection: view.state.selection, top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft, snapshot:view.scrollSnapshot(),snapshotText:view.state.doc }
       if (resolved === 'main') record.scroll = { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
     }
   }
@@ -708,6 +710,13 @@ export class DocumentManager {
     shownView.setState(record.state.update({ selection: record.panes[resolved].selection, annotations: Transaction.addToHistory.of(false) }).state)
     const shownDocument = shownView.state.doc
     const scroll = { ...record.panes[resolved] }
+    // A raw scrollTop write is overridden by CM's new height-map anchor after
+    // setState. Its snapshot restores the measured line and pixel offset after
+    // layout, without sharing selection/scroll state with another pane.
+    if (scroll.snapshot && scroll.snapshotText === shownDocument) {
+      shownView.dispatch({effects:scroll.snapshot,annotations:Transaction.addToHistory.of(false)})
+      return
+    }
     shownView.requestMeasure({
       read: () => scroll,
       write: saved => {
@@ -742,6 +751,18 @@ export class DocumentManager {
   mountPane(parent: HTMLElement, pane: Pane) {
     const resolved = this.resolvePaneId(pane)
     if (this.disposed || this.hosts.get(resolved) === parent) return
+    const retained=this.rehosting.get(resolved)
+    if(retained && retained.host===this.hosts.get(resolved) && retained.id===this.paneGroup(resolved).activeId && (this.views.has(resolved)||this.liveViews.has(resolved))){
+      // Split-tree shape changes remount Vue hosts within the same flush. Move
+      // the pane's existing editor DOM instead of rebuilding its view/plugins.
+      parent.append(...retained.host.childNodes)
+      this.hosts.set(resolved,parent);this.rehosting.delete(resolved)
+      const saved=retained.id?this.records.get(retained.id)?.panes[resolved]:undefined,view=this.views.get(resolved)
+      if(view&&saved?.snapshot&&saved.snapshotText===view.state.doc)view.dispatch({effects:saved.snapshot,annotations:Transaction.addToHistory.of(false)})
+      view?.requestMeasure()
+      if(retained.focused&&this.activePane===resolved&&document.activeElement===document.body){view?.focus();this.liveViews.get(resolved)?.editor.focus()}
+      return
+    }
     this.captureScroll(resolved)
     this.destroyView(resolved)
     this.hosts.set(resolved, parent)
@@ -942,9 +963,15 @@ export class DocumentManager {
     } finally { this.applying = false }
   }
 
-  unmount(pane: Pane = 'main', expectedHost?: HTMLElement | null) {
+  unmount(pane: Pane = 'main', expectedHost?: HTMLElement | null, allowRehost = false) {
     if (expectedHost && this.hosts.get(pane) !== expectedHost) return
     if (this.layout.getPane(pane)) this.captureScroll(pane)
+    if(allowRehost&&expectedHost&&this.layout.getPane(pane)&&!this.disposed){
+      const retained={host:expectedHost,id:this.paneGroup(pane).activeId,focused:expectedHost.contains(document.activeElement)}
+      this.rehosting.set(pane,retained)
+      queueMicrotask(()=>{if(this.rehosting.get(pane)!==retained)return;this.rehosting.delete(pane);if(this.hosts.get(pane)===expectedHost){this.destroyView(pane);this.hosts.delete(pane)}})
+      return
+    }
     this.destroyView(pane)
     this.hosts.delete(pane)
   }
@@ -1389,7 +1416,7 @@ export class DocumentManager {
     for(const live of this.liveViews.values())live.editor.destroy()
     this.liveViews.clear();this.liveLoads.clear()
     this.views.clear()
-    this.hosts.clear()
+    this.hosts.clear();this.rehosting.clear()
     this.records.clear(); this.media.clear(); this.seeds.clear(); this.deferred.clear(); this.listeners.clear(); this.releaseListeners.clear()
   }
 }

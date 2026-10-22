@@ -1,72 +1,121 @@
 <template>
   <div v-if="visible" class="recovery-overlay" @keydown.stop="onKeydown">
-    <section ref="dialogRef" class="recovery-dialog" role="dialog" aria-modal="true" aria-label="可恢复的未保存文档">
+    <section ref="dialogRef" class="recovery-dialog" role="dialog" aria-modal="true" aria-label="未保存文档恢复">
       <header>
         <div>
-          <h2>可恢复的未保存文档</h2>
-          <p class="hint">这些内容在异常退出前还没有保存。恢复后仍会保持“未保存修改”，可以在确认后再保存。</p>
+          <h2>未保存文档恢复</h2>
+          <p class="hint">这些文档在异常退出前未完成保存。打开后将载入未保存内容并保持编辑状态，核对后请按 Ctrl+S 及时保存。</p>
         </div>
         <button class="icon-close" type="button" aria-label="关闭恢复面板" @click="$emit('close')">×</button>
       </header>
 
       <p v-if="error" class="error" role="alert">{{ error }}</p>
-      <p v-if="records.length" class="hint keep-hint">恢复稿会保留到您明确恢复或丢弃为止；“暂不处理”只关闭面板，不会删除任何恢复稿。</p>
+      <p v-if="records.length" class="hint keep-hint">恢复备份将保留至您明确打开或删除为止；点击“稍后处理”仅关闭面板，不会丢失任何数据。</p>
       <p v-if="!records.length" class="empty">没有可恢复的未保存文档。</p>
 
       <ul v-else class="recovery-list">
         <li v-for="record in records" :key="record.id" class="recovery-row">
           <div class="row-main">
-            <strong :title="record.name">{{ record.name }}</strong>
-            <span class="path" :title="record.path || '未命名文档'">{{ record.path || '未命名文档' }}</span>
-            <span class="meta">
-              {{ formatTime(record.updatedAt) }} · {{ record.charCount.toLocaleString() }} 字符
-              <template v-if="record.mode"> · {{ modeLabel(record.mode) }}</template>
-              <template v-if="record.panes.length > 1"> · {{ record.panes.length }} 个窗格</template>
-            </span>
-            <span class="disk" :class="{ changed: record.diskChanged, missing: record.path && !record.diskExists }">
-              {{ diskLabel(record) }}
-            </span>
+            <div class="title-row">
+              <strong :title="record.name">{{ record.name }}</strong>
+              <span class="status-badge" :class="statusInfo(record).statusClass">
+                {{ statusInfo(record).statusText }}
+              </span>
+            </div>
+            <span class="path" :title="displayPath(record.path)">{{ displayPath(record.path) }}</span>
+            <div class="meta-row">
+              <span class="meta-item">更新于 {{ formatTime(record.updatedAt) }}</span>
+              <span class="meta-sep">·</span>
+              <span class="meta-item">{{ record.charCount.toLocaleString() }} 字符</span>
+              <template v-if="record.mode">
+                <span class="meta-sep">·</span>
+                <span class="meta-item">{{ modeLabel(record.mode) }}</span>
+              </template>
+              <template v-if="record.panes.length > 1">
+                <span class="meta-sep">·</span>
+                <span class="meta-item">{{ record.panes.length }} 个窗格</span>
+              </template>
+            </div>
+            <div class="save-hint">
+              <span class="hint-icon">ℹ</span>
+              <span>{{ statusInfo(record).saveHint }}</span>
+            </div>
+
+            <!-- 删除恢复备份二次确认条 -->
+            <div v-if="confirmDiscardId === record.id" class="discard-confirm-bar" role="alert">
+              <span class="confirm-text">确认删除此恢复稿？此操作仅删除恢复备份，<strong>不会删除磁盘原文件</strong>。</span>
+              <div class="confirm-actions">
+                <button type="button" class="btn-danger-confirm" :disabled="busy" @click="confirmDiscard(record)">
+                  确认删除备份
+                </button>
+                <button type="button" class="btn-cancel-confirm" :disabled="busy" @click="cancelDiscard">
+                  取消
+                </button>
+              </div>
+            </div>
           </div>
-          <div class="row-actions">
-            <button type="button" class="primary" :disabled="busy" @click="$emit('restore', record)">恢复</button>
-            <button v-if="record.path" type="button" :disabled="busy" @click="$emit('diff', record)">比较</button>
-            <button type="button" class="discard" :disabled="busy" @click="$emit('discard', record)">丢弃</button>
+
+          <div v-if="confirmDiscardId !== record.id" class="row-actions">
+            <button type="button" class="primary" :disabled="busy" @click="$emit('restore', record)">
+              打开恢复稿
+            </button>
+            <button v-if="record.path" type="button" :disabled="busy" @click="$emit('diff', record)">
+              查看差异
+            </button>
+            <button type="button" class="discard" :disabled="busy" @click="askDiscard(record)">
+              删除恢复稿
+            </button>
           </div>
         </li>
       </ul>
 
+      <!-- 差异比对面板 -->
       <div v-if="diff" class="diff-panel">
         <div class="diff-head">
-          <strong>{{ diff.name }}</strong>
-          <span v-if="diff.path" class="path">{{ diff.path }}</span>
-          <button type="button" class="icon-close" aria-label="关闭比较" @click="$emit('close-diff')">×</button>
+          <div class="diff-head-title">
+            <strong>{{ diff.name }}</strong>
+            <span v-if="diff.path" class="path">{{ displayPath(diff.path) }}</span>
+          </div>
+          <button type="button" class="icon-close" aria-label="关闭差异比对" @click="$emit('close-diff')">×</button>
         </div>
+
         <p v-if="diff.error" class="error">{{ diff.error }}</p>
-        <p v-else-if="!diff.diskText" class="empty">原文件不存在，恢复稿将作为新的未保存文档打开。</p>
+        <p v-else-if="diff.diskText === null" class="empty">原文件在磁盘上不存在或为未命名草稿，恢复稿将作为独立文档打开。</p>
         <template v-else>
-          <p class="hint diff-hint">对比当前编辑器内容与恢复内容。</p>
+          <div class="diff-legend-bar">
+            <p class="hint diff-hint">
+              对比<strong>{{ diff.diffSource === 'session' ? '当前会话编辑内容' : '当前磁盘内容' }}</strong>与恢复稿：
+              <span class="legend-add">+ 恢复稿新增</span>
+              <span class="legend-remove">− 恢复稿删除</span>
+            </p>
+          </div>
           <div class="diff-lines" role="list">
             <div v-for="(line, index) in diffLines.lines" :key="index" class="diff-line" :class="line.type" role="listitem">
               <span class="sign">{{ line.type === 'add' ? '+' : line.type === 'remove' ? '−' : ' ' }}</span>
               <span class="text">{{ line.text || ' ' }}</span>
             </div>
           </div>
-          <p v-if="diffLines.truncated" class="hint">差异较大，仅显示前 400 行。</p>
+          <p v-if="diffLines.truncated" class="hint">差异行数较多，仅展示前 400 行。</p>
         </template>
       </div>
 
       <footer>
-        <button type="button" class="secondary" :disabled="busy" @click="$emit('close')">暂不处理</button>
-        <button type="button" :disabled="busy || !records.length" @click="$emit('restore-all')">全部恢复</button>
+        <button type="button" class="secondary" :disabled="busy" @click="$emit('close')">
+          稍后处理
+        </button>
+        <button type="button" class="primary" :disabled="busy || !records.length" @click="$emit('restore-all')">
+          全部打开
+        </button>
       </footer>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useModal } from '../../features/shell/useModal'
 import { diffText } from '../../features/recovery/diff'
+import { readablePath } from '../../features/shell/pathDisplay'
 import type { RecoveryDiff, RecoverySummary } from '../../features/recovery/types'
 
 const props = defineProps<{
@@ -76,6 +125,7 @@ const props = defineProps<{
   diff: RecoveryDiff | null
   error: string | null
 }>()
+
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'restore', record: RecoverySummary): void
@@ -86,14 +136,27 @@ const emit = defineEmits<{
 }>()
 
 const { dialogRef, open: openModal, close: closeModal, handleKeydown } = useModal()
-void dialogRef // Bound by name in the template.
-const diffLines = computed(() => props.diff
-  ? diffText(props.diff.recoveryText, props.diff.diskText ?? '')
-  : { lines: [], truncated: false })
+void dialogRef
+
+const confirmDiscardId = ref<string | null>(null)
+
+// 准确的比对顺序：以磁盘/会话已有内容为 before 基准，恢复稿为 after 新状态。
+// 恢复稿相对于原文件新增的内容展示为 add (+)，删除的内容展示为 remove (−)。
+const diffLines = computed(() => {
+  if (!props.diff || props.diff.diskText === null) {
+    return { lines: [], truncated: false }
+  }
+  return diffText(props.diff.diskText, props.diff.recoveryText)
+})
 
 watch(() => props.visible, value => {
-  if (value) openModal()
-  else closeModal()
+  if (value) {
+    openModal()
+    confirmDiscardId.value = null
+  } else {
+    closeModal()
+    confirmDiscardId.value = null
+  }
 }, { immediate: true })
 
 function onKeydown(event: KeyboardEvent) {
@@ -101,6 +164,10 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     event.preventDefault()
     event.stopPropagation()
+    if (confirmDiscardId.value) {
+      confirmDiscardId.value = null
+      return
+    }
     if (props.diff) emit('close-diff')
     else emit('close')
     return
@@ -108,16 +175,59 @@ function onKeydown(event: KeyboardEvent) {
   handleKeydown(event)
 }
 
+function displayPath(path: string | null): string {
+  if (!path) return '未命名草稿（保存在恢复缓存中）'
+  return readablePath(path)
+}
+
 function formatTime(value: number) {
   return new Date(value).toLocaleString('zh-CN', { hour12: false })
 }
+
 function modeLabel(mode: string) {
   return mode === 'live' ? '实时排版' : mode === 'split' ? '双栏' : '源码'
 }
-function diskLabel(record: RecoverySummary) {
-  if (!record.path) return '未命名草稿'
-  if (!record.diskExists) return '原文件已删除'
-  return record.diskChanged ? '磁盘内容已变化' : '原文件存在'
+
+function statusInfo(record: RecoverySummary) {
+  if (!record.path) {
+    return {
+      statusText: '未命名草稿',
+      statusClass: 'draft',
+      saveHint: '打开为独立草稿，可通过另存为 (Ctrl+S) 选择保存位置',
+    }
+  }
+  if (!record.diskExists) {
+    return {
+      statusText: '原文件不存在或已删除',
+      statusClass: 'missing',
+      saveHint: '原文件缺失，打开为独立草稿，可通过另存为 (Ctrl+S) 重新保存',
+    }
+  }
+  if (record.diskChanged) {
+    return {
+      statusText: '原文件已被外部修改 (磁盘内容已变化)',
+      statusClass: 'changed',
+      saveHint: '磁盘原文件已更新，打开为独立副本，避免不安全覆盖；可另存为新文件',
+    }
+  }
+  return {
+    statusText: '原文件完整且一致',
+    statusClass: 'safe',
+    saveHint: '可安全原位恢复，打开后按 Ctrl+S 直接保存至原文件',
+  }
+}
+
+function askDiscard(record: RecoverySummary) {
+  confirmDiscardId.value = record.id
+}
+
+function cancelDiscard() {
+  confirmDiscardId.value = null
+}
+
+function confirmDiscard(record: RecoverySummary) {
+  confirmDiscardId.value = null
+  emit('discard', record)
 }
 </script>
 
@@ -129,48 +239,316 @@ function diskLabel(record: RecoverySummary) {
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(0, 0, 0, .42);
+  background: rgba(0, 0, 0, .48);
+  backdrop-filter: blur(2px);
 }
 .recovery-dialog {
-  width: min(760px, 100%);
-  max-height: min(82vh, 720px);
-  overflow: auto;
+  width: min(780px, 100%);
+  max-height: min(85vh, 760px);
+  overflow-y: auto;
   background: var(--paper);
   color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: var(--shadow);
-  padding: 20px;
+  padding: 24px;
 }
-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-h2 { margin: 0 0 6px; font-size: calc(var(--ui-font-size) + 3px); color: var(--bright); }
-.hint, .empty { color: var(--muted); line-height: 1.55; margin: 0; }
-.hint { font-size: var(--ui-small-font-size); }
-.error { color: #d9534f; white-space: pre-wrap; }
-.icon-close { border: 0; background: transparent; color: var(--muted); font-size: 22px; line-height: 1; cursor: pointer; padding: 0 2px; }
-.recovery-list { list-style: none; padding: 0; margin: 16px 0 12px; display: grid; gap: 8px; }
-.recovery-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--editor); }
-.row-main { display: grid; gap: 3px; min-width: 0; }
-.row-main strong { color: var(--bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.path { color: var(--muted); font-size: var(--ui-small-font-size); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.meta { color: var(--muted); font-size: var(--ui-small-font-size); }
-.disk { color: #3f9c62; font-size: var(--ui-small-font-size); }
-.disk.changed { color: #c98a2c; }
-.disk.missing { color: #d9534f; }
-.row-actions { display: flex; gap: 6px; flex: none; }
-button { padding: 6px 11px; border-radius: 6px; border: 1px solid var(--line); background: var(--soft); color: var(--ink); cursor: pointer; }
-button.primary { background: var(--accentbg); color: var(--bright); }
-button.discard { color: #d9534f; }
-button:disabled { opacity: .5; cursor: default; }
-footer { display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
-.diff-panel { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
-.diff-head { display: flex; align-items: center; gap: 8px; }
-.diff-head .path { flex: 1; }
-.diff-hint { margin: 8px 0; }
-.diff-lines { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--editor); font-family: var(--font-mono); font-size: var(--ui-small-font-size); }
-.diff-line { display: flex; gap: 8px; padding: 1px 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.diff-line.add { background: rgba(63, 156, 98, .14); color: #7ec89a; }
-.diff-line.remove { background: rgba(217, 83, 79, .13); color: #e08c89; }
-.diff-line .sign { width: 1ch; flex: none; color: var(--muted); }
-.diff-line .text { min-width: 0; }
+header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
+}
+h2 {
+  margin: 0 0 6px;
+  font-size: calc(var(--ui-font-size) + 4px);
+  color: var(--bright);
+  font-weight: 600;
+}
+.hint, .empty {
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0;
+}
+.hint {
+  font-size: var(--ui-small-font-size);
+}
+.keep-hint {
+  margin: 12px 0 6px;
+}
+.error {
+  color: #d9534f;
+  white-space: pre-wrap;
+  margin: 10px 0;
+  padding: 8px 12px;
+  background: rgba(217, 83, 79, .1);
+  border: 1px solid rgba(217, 83, 79, .3);
+  border-radius: 6px;
+}
+.icon-close {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.icon-close:hover {
+  color: var(--bright);
+  background: var(--soft);
+}
+.recovery-list {
+  list-style: none;
+  padding: 0;
+  margin: 14px 0;
+  display: grid;
+  gap: 12px;
+}
+.recovery-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--editor);
+}
+.row-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.title-row strong {
+  color: var(--bright);
+  font-size: calc(var(--ui-font-size) + 1px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-badge {
+  font-size: var(--ui-small-font-size);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.status-badge.safe {
+  background: rgba(63, 156, 98, .16);
+  color: #3f9c62;
+  border: 1px solid rgba(63, 156, 98, .3);
+}
+.status-badge.changed {
+  background: rgba(201, 138, 44, .16);
+  color: #c98a2c;
+  border: 1px solid rgba(201, 138, 44, .3);
+}
+.status-badge.missing {
+  background: rgba(217, 83, 79, .14);
+  color: #d9534f;
+  border: 1px solid rgba(217, 83, 79, .3);
+}
+.status-badge.draft {
+  background: rgba(120, 140, 160, .16);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.path {
+  color: var(--muted);
+  font-size: var(--ui-small-font-size);
+  font-family: var(--font-mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--ui-small-font-size);
+  flex-wrap: wrap;
+}
+.meta-sep {
+  opacity: .5;
+}
+.save-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: var(--ui-small-font-size);
+  color: var(--muted);
+}
+.hint-icon {
+  font-weight: bold;
+  color: var(--accent, #3b82f6);
+}
+.discard-confirm-bar {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(217, 83, 79, .12);
+  border: 1px solid rgba(217, 83, 79, .35);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.confirm-text {
+  font-size: var(--ui-small-font-size);
+  color: var(--bright);
+}
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+.btn-danger-confirm {
+  background: #d9534f !important;
+  color: #ffffff !important;
+  border-color: #d9534f !important;
+  font-weight: 500;
+}
+.btn-cancel-confirm {
+  background: var(--soft) !important;
+  color: var(--ink) !important;
+}
+.row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: none;
+}
+button {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: var(--ui-small-font-size);
+  transition: all .15s ease;
+}
+button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+button.primary {
+  background: var(--accentbg);
+  color: var(--bright);
+  border-color: var(--accentbg);
+  font-weight: 500;
+}
+button.discard {
+  color: #d9534f;
+  background: transparent;
+}
+button.discard:hover:not(:disabled) {
+  background: rgba(217, 83, 79, .1);
+}
+button:disabled {
+  opacity: .5;
+  cursor: default;
+}
+footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+  margin-top: 14px;
+}
+.diff-panel {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 14px;
+}
+.diff-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.diff-head-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.diff-head-title strong {
+  color: var(--bright);
+}
+.diff-legend-bar {
+  margin: 6px 0 10px;
+}
+.diff-hint {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.legend-add {
+  color: #48bb78;
+  font-weight: 500;
+}
+.legend-remove {
+  color: #f56565;
+  font-weight: 500;
+}
+.diff-lines {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--editor);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--ui-small-font-size);
+  line-height: 1.45;
+}
+.diff-line {
+  display: flex;
+  gap: 8px;
+  padding: 1px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-line.add {
+  background: rgba(63, 156, 98, .18);
+  color: #68d391;
+}
+.diff-line.remove {
+  background: rgba(217, 83, 79, .18);
+  color: #fc8181;
+}
+.diff-line .sign {
+  width: 1.2ch;
+  flex: none;
+  font-weight: bold;
+}
+.diff-line .text {
+  min-width: 0;
+}
+
+@media (max-width: 600px) {
+  .recovery-row {
+    flex-direction: column;
+  }
+  .row-actions {
+    flex-direction: row;
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
 </style>
