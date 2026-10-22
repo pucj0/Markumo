@@ -7,6 +7,13 @@ import { parseControlledImageHtml } from './imageHtml'
 import { installMarkdownMath } from '../mathSemantics'
 
 export const tokenizer = new MarkdownIt('commonmark', {html:true,linkify:true}).enable(['table','strikethrough','linkify'])
+// Markdown-it decodes percent-encoding in a linkified label by default
+// (`%20` becomes a space). The editor must keep the exact source spelling: a
+// decoded label would be written back to the file on the next edit, silently
+// corrupting the URL, and it would also stop the incremental link reconciler
+// from locating the raw text. Only the label is affected; `href` is still
+// normalised by markdown-it.
+tokenizer.normalizeLinkText = (url: string) => url
 installMarkdownMath(tokenizer)
 // Markdown-it strips its hidden definition tokens before inline parsing. Keep
 // the native ranges out-of-band before that step; do not reimplement its grammar.

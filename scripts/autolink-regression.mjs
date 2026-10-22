@@ -263,6 +263,72 @@ try {
     assert.equal(state.anchors[0].autolink, 'none', 'an explicit link is never re-spelled as a bare URL')
   })
 
+  await test('15. replacing a selected part of a URL rewrites text and href together', async () => {
+    await page.evaluate(() => window.f.reset('文本 https://yuanmahome.cn/originalDetail?id=42 结束', false))
+    // Replace `originalDetail` exactly as a user would: select, then type.
+    await page.evaluate(() => {
+      const m = window.f.manager, id = m.activeId
+      const text = m.getText(id)
+      const from = text.indexOf('originalDetail')
+      m.dispatch(id, {
+        changes: { from, to: from + 'originalDetail'.length, insert: 'itemDetail' },
+        userEvent: 'input.type',
+      })
+    })
+    await page.waitForTimeout(60)
+    const state = await snapshot()
+    assert.equal(state.source, '文本 https://yuanmahome.cn/itemDetail?id=42 结束')
+    assert.equal(state.anchors.length, 1)
+    assert.equal(state.anchors[0].text, 'https://yuanmahome.cn/itemDetail?id=42')
+    assert.equal(state.anchors[0].href, 'https://yuanmahome.cn/itemDetail?id=42')
+    assert.equal(state.anchors[0].autolink, 'bare')
+  })
+
+  await test('16. a percent-encoded query keeps its exact spelling and stays one link', async () => {
+    const source = '查询 https://a.cn/search?q=hello%20world&tag=%E4%B8%AD%E6%96%87 结束'
+    await page.evaluate(src => window.f.reset(src, false), source)
+    const state = await snapshot()
+    assert.equal(state.source, source, 'a percent-encoded URL is never rewritten')
+    assert.equal(state.anchors.length, 1)
+    // The painted text and the destination are the same raw URL: decoding the
+    // label would corrupt the source on the next edit.
+    assert.equal(state.anchors[0].text, 'https://a.cn/search?q=hello%20world&tag=%E4%B8%AD%E6%96%87')
+    assert.equal(state.anchors[0].href, state.anchors[0].text)
+    // Editing after the encoded part still extends the same link.
+    await page.evaluate(() => {
+      const m = window.f.manager, id = m.activeId
+      const at = m.getText(id).indexOf('%E4%B8%AD%E6%96%87') + '%E4%B8%AD%E6%96%87'.length
+      m.dispatch(id, { changes: { from: at, insert: '&page=2' }, userEvent: 'input.type' })
+    })
+    await page.waitForTimeout(60)
+    const edited = await snapshot()
+    assert.equal(edited.anchors.length, 1)
+    assert.ok(edited.source.includes('%E4%B8%AD%E6%96%87&page=2'), 'the encoded part survives the edit')
+    assert.ok(edited.anchors[0].href.endsWith('%E4%B8%AD%E6%96%87&page=2'), 'href follows the appended parameter')
+    assert.equal(edited.anchors[0].autolink, 'bare')
+  })
+
+  await test('17. the Split renderer produces the same target as the Live link', async () => {
+    const source = '文本 https://yuanmahome.cn/originalDetail?id=2113188155363074049 结束'
+    await page.evaluate(src => window.f.reset(src, false), source)
+    const live = await snapshot()
+    // Render the same Markdown through the shared preview renderer (the one the
+    // split pane uses) and compare the resolved target, not the styling.
+    const preview = await page.evaluate(async src => {
+      const { createMarkdownRenderer } = await import('/src/editor/markdown/rendering.ts')
+      const host = document.createElement('div')
+      host.innerHTML = createMarkdownRenderer(() => {}, true).render(src, {})
+      const anchor = host.querySelector('a')
+      const previewSource = host.textContent || ''
+      return { href: anchor?.getAttribute('href') ?? null, text: anchor?.textContent ?? null, previewSource }
+    }, source)
+    assert.ok(preview.href, 'the preview also renders a link')
+    assert.equal(decodeURI(preview.href), decodeURI(live.anchors[0].href), 'both modes resolve to the same target')
+    assert.equal(preview.text, live.anchors[0].text, 'both modes paint the same range')
+    assert.ok(preview.previewSource.includes('https://yuanmahome.cn/originalDetail?id=2113188155363074049'))
+    assert.equal(await page.evaluate(() => window.f.source()), source, 'rendering never mutates the source')
+  })
+
   console.log('========================================')
   console.log(`All ${results.length} bare URL editing tests passed successfully!`)
   console.log('========================================')

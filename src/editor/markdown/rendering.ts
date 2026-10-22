@@ -25,6 +25,10 @@ export { markdownSemantics } from './semantics'
 export { fenceLanguage } from '../languages'
 export function createMarkdownRenderer(onLanguageReady: () => void = () => {}, preview = false) {
   const md = new MarkdownIt(markdownSemantics)
+  // Keep the raw spelling of a linkified URL in the rendered text, exactly like
+  // the Live editor does. Decoding `%20` here would make the preview disagree
+  // with the editable text and with what is stored on disk.
+  md.normalizeLinkText = (url: string) => url
   // Export customizes its own renderers. Only the hydrated preview emits math
   // placeholders; static consumers must never silently lose formula source.
   if (preview) installMarkdownMath(md)
