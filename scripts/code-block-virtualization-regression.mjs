@@ -138,10 +138,20 @@ try {
   })
   assert.equal(await page.evaluate(()=>[...window.f.live().codeViews][100].existingEditor.state.selection.main.empty),false)
   // Start a real drag on a cold placeholder, then continue on the mounted CM.
-  await page.evaluate(()=>[...window.f.live().codeViews][110].observer.disconnect())
+  await page.evaluate(()=>{
+    const code=[...window.f.live().codeViews][110]
+    code.observer.disconnect();code.inViewport=false;code.detachEditor()
+    if(code.existingEditor)throw Error('Drag target must start without a CodeMirror instance')
+  })
   const dragBlock=page.locator('.md-code-block').nth(110)
   await dragBlock.scrollIntoViewIfNeeded()
-  const dragStart=await dragBlock.locator('.md-code-text').first().evaluate(el=>{const r=el.getBoundingClientRect();return{x:r.left+16,y:r.top+8}})
+  const dragStart=await dragBlock.locator('.md-code-placeholder code').evaluate(el=>{
+    // Cold placeholders are flat text; recently released highlighted blocks
+    // can have spans. Resolve the source coordinate in either representation.
+    const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT),text=walker.nextNode()
+    const range=document.createRange();range.setStart(text,2);range.collapse(true)
+    const r=range.getBoundingClientRect();return{x:r.left+1,y:(r.top+r.bottom)/2}
+  })
   await page.mouse.move(dragStart.x,dragStart.y);await page.mouse.down()
   await page.waitForTimeout(80)
   const dragEnd=await page.evaluate(()=>{

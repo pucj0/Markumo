@@ -46,12 +46,6 @@ const SMOKE_TESTS = [
   'scripts/history-regression.mjs',
   'scripts/docx-regression.mjs',
   'scripts/workspace-dnd-regression.mjs',
-  'scripts/window-detach-regression.mjs',
-  'scripts/autolink-regression.mjs',
-  'scripts/repair01-regression.mjs',
-  'scripts/repair02-regression.mjs',
-  'scripts/repair03-regression.mjs',
-  'scripts/path-display-regression.mjs',
   'scripts/slash-commands-regression.mjs',
   'scripts/math-editor-regression.mjs',
   'scripts/typewriter-focus-regression.mjs',
@@ -60,7 +54,7 @@ const SMOKE_TESTS = [
 ]
 
 // Full regression suite: all existing regression scripts
-const FULL_REGRESSION_TESTS = [
+const FULL_REGRESSION_TESTS = [...new Set([
   'scripts/tab-navigation-regression.mjs',
   'scripts/outline-docking-regression.mjs',
   'scripts/code-structure-regression.mjs',
@@ -103,24 +97,9 @@ const FULL_REGRESSION_TESTS = [
   'scripts/typewriter-focus-regression.mjs',
   'scripts/focus-mode-regression.mjs',
   'scripts/pdf-destination-regression.mjs',
-    'scripts/callout-regression.mjs',
-  'scripts/toc-regression.mjs',
-  'scripts/footnote-regression.mjs',
-  'scripts/image-editing-regression.mjs',
-  'scripts/outline-reorder-regression.mjs',
-  'scripts/frontmatter-regression.mjs',
-  'scripts/history-regression.mjs',
-  'scripts/docx-regression.mjs',
-  'scripts/autolink-regression.mjs',
-  'scripts/workspace-dnd-regression.mjs',
-  'scripts/window-detach-regression.mjs',
-  'scripts/repair01-regression.mjs',
-  'scripts/repair02-regression.mjs',
-  'scripts/repair03-regression.mjs',
-  'scripts/repair04-outline-regression.mjs',
-  'scripts/path-display-regression.mjs',
-  'scripts/release-regression.mjs'
-]
+  'scripts/release-regression.mjs',
+  ...SMOKE_TESTS,
+])]
 
 // Bounds on retained child output. A runaway test must not grow this process.
 const MAX_CAPTURE_CHARS = 64 * 1024
@@ -347,9 +326,9 @@ function runSingleTest(scriptPath, timeoutMs = 180000) {
       } catch {}
     }
 
-    const snapshotArgs = process.env.MARKUMO_TEST_REF
-      ? ['--import', pathToFileURL(path.join(ROOT_DIR, 'scripts/regression-snapshot-register.mjs')).href]
-      : []
+    // Warm all lazy runtime dependencies before navigation in ordinary CI too.
+    // Source overrides still require an explicit MARKUMO_TEST_REF.
+    const snapshotArgs = ['--import', pathToFileURL(path.join(ROOT_DIR, 'scripts/regression-snapshot-register.mjs')).href]
     const child = spawn(process.execPath, [...snapshotArgs, absPath], {
       cwd: ROOT_DIR,
       env,
@@ -501,12 +480,16 @@ async function main() {
   let suiteName = 'smoke'
   let customFiles = []
   let timeoutMs = 180000
+  let repeat = 1
 
   for (const arg of args) {
     if (arg === 'smoke' || arg === '--smoke' || arg === '--suite=smoke') {
       suiteName = 'smoke'
     } else if (arg === 'regression' || arg === '--regression' || arg === '--suite=regression' || arg === 'all') {
       suiteName = 'regression'
+    } else if (arg.startsWith('--repeat=')) {
+      repeat = Number(arg.slice('--repeat='.length))
+      if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) throw Error('--repeat must be an integer from 1 to 10')
     } else if (arg.startsWith('--timeout=')) {
       const val = parseInt(arg.split('=')[1], 10)
       if (!isNaN(val) && val > 0) timeoutMs = val
@@ -524,6 +507,7 @@ async function main() {
   } else {
     testsToRun = SMOKE_TESTS
   }
+  testsToRun = Array.from({ length: repeat }, () => testsToRun).flat()
 
   console.log('='.repeat(70))
   console.log(` Markumo Regression Runner [suite: ${suiteName}]`)
@@ -536,6 +520,7 @@ async function main() {
     process.exit(1)
   }
   console.log(`[ENV] Browser: ${envCheck.browser} (${envCheck.type})`)
+  console.log('[ENV] Lazy runtime dependencies prepared before browser navigation; HMR disabled')
   if (process.env.MARKUMO_TEST_REF) console.log(`[ENV] Read-only source snapshot: ${process.env.MARKUMO_TEST_REF}; test-host HMR disabled`)
   console.log(`[INFO] Running ${testsToRun.length} test(s) serially (timeout: ${timeoutMs / 1000}s)...\n`)
 
@@ -548,6 +533,11 @@ async function main() {
     process.stdout.write(`${indexStr} Running ${testFile} ... `)
 
     const res = await runSingleTest(testFile, timeoutMs)
+    if (repeat > 1 && res.logFile && fs.existsSync(res.logFile)) {
+      const roundLog = res.logFile.replace(/\.log$/, `.round-${Math.floor(i / (testsToRun.length / repeat)) + 1}.log`)
+      fs.copyFileSync(res.logFile, roundLog)
+      res.logFile = roundLog
+    }
     results.push(res)
 
     if (res.status === 'PASS') {
@@ -564,13 +554,20 @@ async function main() {
   const passed = results.filter(r => r.status === 'PASS').length
   const failed = results.filter(r => r.status === 'FAIL').length
   const skipped = results.filter(r => r.status === 'SKIP').length
+  fs.mkdirSync(path.join(ROOT_DIR, 'test-results'), { recursive: true })
+  fs.writeFileSync(path.join(ROOT_DIR, 'test-results', `regression-${suiteName}-summary.json`), JSON.stringify({
+    suite: suiteName, repeat, platform: process.platform, node: process.version,
+    browser: envCheck, sourceRef: process.env.MARKUMO_TEST_REF || null,
+    total: results.length, passed, failed, skipped, durationSeconds: Number(overallDuration), results,
+  }, null, 2))
 
   console.log('\n' + '='.repeat(70))
   console.log(' Test Summary')
   console.log('='.repeat(70))
   console.log(` Total: ${results.length} | Passed: ${passed} | Failed: ${failed} | Skipped: ${skipped} | Time: ${overallDuration}s`)
 
-  if (failed > 0) {
+  if (failed > 0 || suiteName === 'smoke' && skipped > 0) {
+    if (skipped > 0) console.error('Smoke gate requires every selected test to run; skipped tests cannot pass this gate.')
     console.log('\nFailed tests:')
     for (const r of results.filter(r => r.status === 'FAIL')) {
       console.log(`  - ${r.name}: ${r.error || 'Unknown failure'}`)

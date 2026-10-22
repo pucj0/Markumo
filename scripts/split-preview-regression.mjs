@@ -5,6 +5,7 @@ import { startRegressionServer } from './regression-server.mjs'
 const { chromium } = await import(process.env.MARKUMO_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MARKUMO_PLAYWRIGHT_MODULE).href : 'playwright')
 const output = 'test-results/split-unification'
 fs.mkdirSync(output, { recursive: true })
+fs.writeFileSync(`${output}/progress.log`, '')
 fs.writeFileSync(`${output}/index.html`, '<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><div id="app"></div><script type="module" src="./fixture.js"></script>')
 fs.writeFileSync(`${output}/fixture.js`, `
 import {createApp,h,ref,markRaw,nextTick} from 'vue';
@@ -47,14 +48,30 @@ window.t={parseMarkdown,MarkdownSourceBridge,createMarkdownRenderer,htmlForPrevi
 const server = await startRegressionServer()
 const port = server.httpServer.address().port
 const results=[],errors=[]
-let browser
+let browser, diagnosticsTimer
 try {
   browser=await chromium.launch({headless:true,executablePath:process.env.MARKUMO_CHROME || (fs.existsSync('C:/Program Files/Google/Chrome/Application/chrome.exe')?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined)})
   const page=await browser.newPage({viewport:{width:1440,height:860}})
-  page.on('pageerror',e=>errors.push(e.message))
+  const pending=new Set()
+  page.on('request',request=>pending.add(request.url()))
+  for(const event of ['requestfinished','requestfailed'])page.on(event,request=>pending.delete(request.url()))
+  diagnosticsTimer=setInterval(()=>fs.writeFileSync(`${output}/pending-requests.json`,JSON.stringify([...pending],null,2)),1000)
+  page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message)})
+  page.on('framenavigated',frame=>{if(frame===page.mainFrame())console.log('NAVIGATED '+frame.url())})
   await page.goto(`http://127.0.0.1:${port}/${output}/index.html`)
   await page.waitForFunction(()=>window.t)
-  const test=async(name,run)=>{await run();results.push(name);console.log('PASS '+name)}
+  page.setDefaultTimeout(15000)
+  const test=async(name,run)=>{
+    fs.appendFileSync(`${output}/progress.log`, `START ${name}\n`)
+    try {await run();results.push(name);console.log('PASS '+name);fs.appendFileSync(`${output}/progress.log`, `PASS ${name}\n`)}
+    catch(error){
+      fs.appendFileSync(`${output}/progress.log`, `FAIL ${name}: ${error.stack}\n`)
+      const diagnostic=await page.evaluate(()=>({notices:window.t?.notices,source:window.t?.source(),live:!!window.t?.live,body:document.body.innerText})).catch(error=>({error:String(error)}))
+      fs.writeFileSync(`${output}/failure.json`,JSON.stringify({name,error:String(error),errors,diagnostic},null,2))
+      await page.screenshot({path:`${output}/failure.png`,timeout:5000}).catch(()=>{})
+      throw error
+    }
+  }
   const reset=async(source,real=false)=>{await page.evaluate(({source,real})=>window.t.reset(source,real),{source,real});if(!real)await page.waitForFunction(()=>!!window.t.live)}
   const math=String.raw`# 公式对照
 
@@ -301,4 +318,11 @@ $$
   })
   assert.deepEqual(errors,[])
   fs.writeFileSync(`${output}/result.json`,JSON.stringify({ok:true,browser:await browser.version(),tests:results,errors},null,2))
-} finally {await browser?.close();await server.close()}
+} finally {
+  clearInterval(diagnosticsTimer)
+  fs.appendFileSync(`${output}/progress.log`, 'CLEANUP browser\n')
+  await browser?.close()
+  fs.appendFileSync(`${output}/progress.log`, 'CLEANUP server\n')
+  await server.close()
+  fs.appendFileSync(`${output}/progress.log`, 'CLEANUP complete\n')
+}

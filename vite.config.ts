@@ -32,7 +32,7 @@ const noDesktopReload = () => process.env.MARKUMO_DESKTOP_NO_RELOAD === '1'
 // CodeMirror instances and make every language extension fail to install.
 function isolatedServerCache(): Plugin {
   return {name:'isolated-server-cache',config(config,env) {
-    if(env.command === 'serve') return {cacheDir:path.resolve(__dirname,`node_modules/.vite-server-${config.server?.port ?? 1420}`)}
+    if(env.command === 'serve' && !config.cacheDir) return {cacheDir:path.resolve(__dirname,`node_modules/.vite-server-${config.server?.port ?? 1420}`)}
   }}
 }
 

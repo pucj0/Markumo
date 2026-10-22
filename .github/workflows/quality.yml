@@ -53,6 +53,11 @@ jobs:
           mkdir -p test-results
           set -o pipefail
           pnpm test:smoke 2>&1 | tee test-results/browser-smoke.log
+      - name: Repeat focus, hydration and virtualization regressions
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/run-regressions.mjs scripts/split-preview-regression.mjs scripts/markdown-live-toolbar-regression.mjs scripts/code-block-virtualization-regression.mjs scripts/math-editor-regression.mjs --repeat=3 2>&1 | tee test-results/browser-stability.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

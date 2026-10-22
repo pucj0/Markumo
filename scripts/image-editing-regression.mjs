@@ -148,6 +148,31 @@ try {
     assert.ok(hasBrokenTag > 0)
   })
 
+  await test('6. Image hydration and toolbar selection do not reparse the atom or change canonical history', async () => {
+    const source = '![正常图片](./assets/pixel.png)\n\n![失效图片](broken.png)'
+    await page.evaluate(async source => {
+      const { LiveImageView } = await import('/src/editor/markdown/wysiwyg/LiveImageView.ts')
+      const update = LiveImageView.prototype.update
+      window.imageUpdates = 0
+      window.restoreImageUpdate = () => { LiveImageView.prototype.update = update }
+      LiveImageView.prototype.update = function (...args) { window.imageUpdates++; return update.apply(this, args) }
+      window.f.reset(source, true)
+    }, source)
+    try {
+      await page.waitForFunction(() => window.f.ready() && document.querySelector('.md-live-image img')?.naturalWidth && document.querySelector('.is-broken-image'))
+      const before = await page.evaluate(() => ({ source: window.f.source(), history: window.f.history(), publications: window.f.publications.length, updates: window.imageUpdates }))
+      await page.locator('.md-live-image img').click()
+      await page.locator('.md-image-toolbar:not([hidden])').waitFor()
+      // Let the actual DOM observer and animation-frame work settle. The old
+      // implementation repeatedly re-parsed the image and starved this frame.
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+      const after = await page.evaluate(() => ({ source: window.f.source(), history: window.f.history(), publications: window.f.publications.length, updates: window.imageUpdates }))
+      assert.equal(after.source, source)
+      assert.deepEqual(after, before, 'Image presentation mutations must not cause NodeView updates or document edits')
+      assert.equal(await page.locator('.md-live-image.md-image-selected').count(), 1)
+    } finally { await page.evaluate(() => window.restoreImageUpdate()) }
+  })
+
   console.log(`========================================`)
   console.log(`All ${results.length} Image editing regression tests passed successfully!`)
   console.log(`========================================`)

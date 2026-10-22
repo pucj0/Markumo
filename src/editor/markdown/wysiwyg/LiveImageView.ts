@@ -392,9 +392,12 @@ export class LiveImageView implements NodeView {
     return true
   }
 
-  ignoreMutation(mutation: any) {
-    if (this.toolbar && this.toolbar.contains(mutation.target as globalThis.Node)) return true
-    return false
+  ignoreMutation() {
+    // This atom has no contentDOM: image loading, selection and layout only
+    // mutate its presentation. Re-parsing those mutations calls update(),
+    // which writes image attributes/styles again and can loop indefinitely.
+    // Document edits go through explicit transactions in the toolbar handlers.
+    return true
   }
 
   destroy() {
