@@ -51,7 +51,7 @@ let timer: ReturnType<typeof setTimeout> | undefined
 
 watch(() => props.content, content => {
   if (timer) clearTimeout(timer)
-  timer = setTimeout(() => { previewText.value = content }, 60)
+  timer = setTimeout(() => { previewText.value = content }, 100)
 })
 
 let mountedImages: ReturnType<typeof mountMarkdownImage>[] = []
@@ -74,20 +74,31 @@ onUnmounted(() => {
   mountedHtmlImages = undefined
 })
 
+let lastParsedText = ''
+let lastParsedRevision = -1
+let lastRenderedResult = { html: '', slots: [] as any[] }
+
 const rendered = computed(() => {
-  revision.value
+  const rev = revision.value
   if (props.tooLarge || previewText.value.length > 1024 * 1024) {
     return { html: '<p>文档较大，已暂停只读预览；源码仍可编辑。</p>', slots: [] }
   }
+  const currentText = previewText.value || ''
+  if (currentText === lastParsedText && rev === lastParsedRevision && lastRenderedResult.html) {
+    return lastRenderedResult
+  }
   const environment: PreviewEnvironment = { slots: [] }
-  const tokens = md.parse(previewText.value || '', environment)
+  const tokens = md.parse(currentText, environment)
   for (const token of tokens) {
     if (token.map && token.nesting === 1 && token.level === 0) {
       token.attrSet('data-source-line', String(token.map[0] + 1))
     }
   }
   const rawRendered = md.renderer.render(tokens, md.options, environment)
-  return { html: htmlForPreview(rawRendered), slots: environment.slots || [] }
+  lastParsedText = currentText
+  lastParsedRevision = rev
+  lastRenderedResult = { html: htmlForPreview(rawRendered), slots: environment.slots || [] }
+  return lastRenderedResult
 })
 const renderedHtml = computed(() => rendered.value.html)
 
