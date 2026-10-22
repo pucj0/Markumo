@@ -11,7 +11,7 @@
       <span class="crumb-separator symbol-separator" aria-hidden="true">›</span>
       <button class="crumb-symbol" :title="`${symbol.kind==='heading' ? '标题' : '代码符号'}：${symbol.name}`" @click="revealSymbol(symbol)"><Icon :name="symbol.kind==='heading' ? 'outline' : 'symbol-'+symbol.kind" size="small" />{{ symbol.name }}{{ ['method','function','constructor'].includes(symbol.kind || '') ? '()' : '' }}</button>
     </template>
-    <NavigationPopup v-if="menuAnchor" :key="menuPath" :anchor="menuAnchor" :title="menuPath" filter-label="筛选目录文件" :items="menuItems" :message="message" :parent-label="parentPath" action-label="在工作区文件树中定位当前文件" @select="choose" @parent="loadDirectory(parentPath!)" @action="revealTree" @close="close" />
+    <NavigationPopup v-if="menuAnchor" :key="menuPath" :anchor="menuAnchor" :title="readablePath(menuPath)" filter-label="筛选目录文件" :items="menuItems" :message="message" :parent-label="parentPath ? readablePath(parentPath) : undefined" action-label="在工作区文件树中定位当前文件" @select="choose" @parent="loadDirectory(parentPath!)" @action="revealTree" @close="close" />
   </nav>
 </template>
 <script setup lang="ts">

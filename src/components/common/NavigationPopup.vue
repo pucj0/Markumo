@@ -1,13 +1,13 @@
 <template>
   <Teleport to="body">
-    <div ref="popup" class="app-menu-popup navigation-popup" :style="position" :aria-label="title" role="dialog" @keydown="keydown" @focusout="focusout">
-      <div class="navigation-head"><span>{{ title }}</span><button v-if="parentLabel" @click="$emit('parent')" :title="parentLabel" aria-label="上一级目录">↑</button></div>
+    <div ref="popup" class="app-menu-popup navigation-popup" :style="position" :aria-label="displayTitle" role="dialog" @keydown="keydown" @focusout="focusout">
+      <div class="navigation-head"><span :title="displayTitle">{{ displayTitle }}</span><button v-if="parentLabel" @click="$emit('parent')" :title="displayParentLabel" aria-label="上一级目录">↑</button></div>
       <input ref="input" v-model="query" :aria-label="filterLabel" :placeholder="filterLabel" role="combobox" aria-autocomplete="list" aria-expanded="true" :aria-controls="listId" :aria-activedescendant="rows[index] ? `${listId}-${index}` : undefined" />
       <p v-if="message" class="navigation-message" role="status">{{ message }}</p>
-      <div :id="listId" class="navigation-options" role="listbox" :aria-label="title">
-        <div v-for="(item,at) in rows" :id="`${listId}-${at}`" :key="item.id" class="navigation-option" :class="{selected:at===index}" role="option" :aria-selected="at===index" :title="item.detail || item.label" @mousedown.prevent @pointermove="index=at" @click="$emit('select',item.id)">
+      <div :id="listId" class="navigation-options" role="listbox" :aria-label="displayTitle">
+        <div v-for="(item,at) in rows" :id="`${listId}-${at}`" :key="item.id" class="navigation-option" :class="{selected:at===index}" role="option" :aria-selected="at===index" :title="item.detail ? readablePath(item.detail) : item.label" @mousedown.prevent @pointermove="index=at" @click="$emit('select',item.id)">
           <span v-if="item.directory" class="navigation-folder">▸</span><FileIcon v-else :name="item.name || item.label" />
-          <span class="navigation-label">{{ item.label }}<small v-if="item.detail">{{ item.detail }}</small></span>
+          <span class="navigation-label">{{ item.label }}<small v-if="item.detail">{{ readablePath(item.detail) }}</small></span>
           <span class="navigation-dirty" :class="{dirty:item.dirty}" :aria-label="item.dirty ? '未保存修改' : undefined">●</span>
           <button v-if="closable" class="navigation-close" :aria-label="`关闭 ${item.label}`" @click.stop="$emit('remove',item.id)">✕</button>
         </div>
@@ -21,10 +21,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import FileIcon from './FileIcon.vue'
+import { readablePath } from '../../features/shell/pathDisplay'
 export interface NavigationItem { id:string; label:string; name?:string; detail?:string; dirty?:boolean; directory?:boolean }
 const props=defineProps<{anchor:HTMLElement;title:string;filterLabel:string;items:NavigationItem[];message?:string;closable?:boolean;actionLabel?:string;parentLabel?:string}>()
 const emit=defineEmits<{(e:'select',id:string):void;(e:'remove',id:string):void;(e:'close',restore:boolean):void;(e:'action'):void;(e:'parent'):void}>()
 const query=ref(''),index=ref(0),popup=ref<HTMLElement>(),input=ref<HTMLInputElement>(),listId=useId()
+const displayTitle = computed(() => readablePath(props.title))
+const displayParentLabel = computed(() => props.parentLabel ? readablePath(props.parentLabel) : undefined)
 const filtered=computed(()=>{const q=query.value.trim().toLocaleLowerCase();return props.items.filter(item=>(item.label+' '+(item.detail||'')).toLocaleLowerCase().includes(q))})
 const rows=computed(()=>filtered.value.slice(0,200))
 const position = computed(() => {
