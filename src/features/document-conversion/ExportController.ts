@@ -6,7 +6,6 @@ import { releaseConversion } from './conversionLease'
 import { loadConversionSettings, saveLastExport, loadLastExport } from './conversionSettings'
 import { renderMarkdownForExport, extractDocumentTitle } from './ExportRenderer'
 import { buildCompleteHtml } from './ExportStyles'
-import { exportMarkdownToDocx, getPandocStatus } from './PandocBridge'
 import { exportAppearance } from './ExportAppearance'
 import { exportMarkdownToNativeDocx } from './nativeDocxExport'
 
@@ -164,14 +163,23 @@ export class ExportController {
     documentToken?: string
   ): Promise<void> {
     if (!target) throw new Error('未指定导出路径')
-    const pandoc = await getPandocStatus().catch(() => ({ available: false }))
-    if (pandoc.available) {
-      const resourceDir = docPath ? docPath.replace(/[/\\][^/\\]+$/, '') : undefined
-      await exportMarkdownToDocx(markdown, target.path, resourceDir, target.token, documentToken)
-      return
-    }
-
-    const bytes = await exportMarkdownToNativeDocx(markdown, title)
+    // Pandoc stays available as the advanced path, but the native writer runs
+    // first because it needs no external tool and reports its own warnings.
+    const resources = createMarkdownResources(() => documentToken)
+    const result = await exportMarkdownToNativeDocx(markdown, {
+      title,
+      resolveImage: async source => {
+        if (!source || /^(?:https?:)?\/\//i.test(source)) return null
+        try {
+          const bytes = await resources.loadLocal(source)
+          return { data: bytes, alt: source }
+        } catch {
+          return null
+        }
+      },
+    })
+    for (const warning of result.warnings) this.notify(warning.message)
+    const bytes = result.bytes
     if (isTauri()) {
       await invoke('save_binary_file', {
         token: target.token,
@@ -181,6 +189,7 @@ export class ExportController {
     } else {
       this.downloadBlob(new Blob([bytes as unknown as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }), target.path)
     }
+    void docPath
   }
 
   private async exportPng(

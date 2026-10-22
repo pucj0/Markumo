@@ -46,7 +46,7 @@ const markdownSource = [
 
 // Test 1: Generates valid DOCX binary with standard PKZip magic bytes
 {
-  const bytes = await exportMarkdownToNativeDocx(markdownSource, '专业文档导出')
+  const bytes = (await exportMarkdownToNativeDocx(markdownSource, { title: '专业文档导出' })).bytes
   assert.ok(bytes instanceof Uint8Array)
   assert.ok(bytes.length > 500, 'Docx file should have substantial size')
 
@@ -60,7 +60,7 @@ const markdownSource = [
 
 // Test 2: Verify OOXML components inside the archive
 {
-  const bytes = await exportMarkdownToNativeDocx(markdownSource, '测试文档')
+  const bytes = (await exportMarkdownToNativeDocx(markdownSource, { title: '测试文档' })).bytes
   const binaryString = new TextDecoder('latin1').decode(bytes)
 
   assert.ok(binaryString.includes('[Content_Types].xml'), 'Contains [Content_Types].xml')
@@ -72,7 +72,7 @@ const markdownSource = [
 
 // Test 3: Verify semantic XML content inside document.xml
 {
-  const bytes = await exportMarkdownToNativeDocx(markdownSource, '语义测试')
+  const bytes = (await exportMarkdownToNativeDocx(markdownSource, { title: '语义测试' })).bytes
   const binaryString = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
 
   // Title & Headings
@@ -102,7 +102,7 @@ const markdownSource = [
 // Test 4: Write real physical docx artifact to disk and verify file existence
 {
   const artifactPath = path.resolve('test-results/native-export-test.docx')
-  const bytes = await exportMarkdownToNativeDocx(markdownSource, '物理导出文件')
+  const bytes = (await exportMarkdownToNativeDocx(markdownSource, { title: '物理导出文件' })).bytes
   fs.writeFileSync(artifactPath, bytes)
 
   const stat = fs.statSync(artifactPath)

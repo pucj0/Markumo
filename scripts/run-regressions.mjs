@@ -50,6 +50,7 @@ const SMOKE_TESTS = [
   'scripts/autolink-regression.mjs',
   'scripts/repair01-regression.mjs',
   'scripts/repair02-regression.mjs',
+  'scripts/repair03-regression.mjs',
   'scripts/slash-commands-regression.mjs',
   'scripts/math-editor-regression.mjs',
   'scripts/typewriter-focus-regression.mjs',
