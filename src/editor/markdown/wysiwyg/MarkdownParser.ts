@@ -3,6 +3,7 @@ import { inlineHtmlRanges } from './HtmlSourceRanges'
 import { MarkdownParser, defaultMarkdownParser } from 'prosemirror-markdown'
 import type { Node } from 'prosemirror-model'
 import { markdownSchema as s } from './MarkdownSchema'
+import { parseControlledImageHtml } from './imageHtml'
 import { installMarkdownMath } from '../mathSemantics'
 
 export const tokenizer = new MarkdownIt('commonmark', {html:true,linkify:true}).enable(['table','strikethrough','linkify'])
@@ -203,8 +204,20 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
     let node:Node
     if(reused)node=reused.node
     else try {
+      // A sized/aligned image is the only HTML this editor writes itself, so it
+      // must read back as an editable image node rather than an inert HTML
+      // block. Anything outside the allow-list stays protected source.
+      const controlledImage = parseControlledImageHtml(original)
       const fnMatch = kind === 'footnote' && /^\s*\[\^([^\]]+)\]:\s*([\s\S]*)$/.exec(original)
-      if (fnMatch) {
+      if (controlledImage) {
+        node = s.nodes.paragraph.create(null, s.nodes.image.create({
+          src: controlledImage.src,
+          alt: controlledImage.alt,
+          title: controlledImage.title,
+          width: controlledImage.width,
+          align: controlledImage.align,
+        }))
+      } else if (fnMatch) {
         const label = fnMatch[1]
         const body = fnMatch[2].trim() || ' '
         const parsed = markdownParser.parse(body, env)

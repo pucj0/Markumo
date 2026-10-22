@@ -25,8 +25,7 @@ export class FootnoteDefNodeView implements NodeView {
     this.badgeBtn = document.createElement('button')
     this.badgeBtn.type = 'button'
     this.badgeBtn.className = 'md-footnote-def-badge'
-    this.badgeBtn.title = `脚注 [^${node.attrs.label || '1'}]（点击跳转至正文引用）`
-    this.badgeBtn.innerHTML = `<span>[^${node.attrs.label || '1'}]</span><span class="md-footnote-back-icon" aria-hidden="true"> ↩</span>`
+    this.renderBadge(node)
 
     this.badgeBtn.onclick = (e) => {
       e.preventDefault()
@@ -63,11 +62,26 @@ export class FootnoteDefNodeView implements NodeView {
     }
   }
 
+  /** The label is document content: it is rendered as text, never markup. */
+  private renderBadge(node: Node) {
+    const label = String(node.attrs.label || '1')
+    this.badgeBtn.title = `脚注 [^${label}]（点击跳转至正文引用）`
+    const tag = document.createElement('span')
+    tag.textContent = `[^${label}]`
+    const back = document.createElement('span')
+    back.className = 'md-footnote-back-icon'
+    back.setAttribute('aria-hidden', 'true')
+    back.textContent = ' ↩'
+    this.badgeBtn.replaceChildren(tag, back)
+    // A label can also inform assistive tech without becoming markup.
+    this.badgeBtn.setAttribute('aria-label', `脚注 ${label}，跳转到正文引用`)
+  }
+
   update(node: Node) {
     if (node.type !== this.node.type) return false
     this.node = node
     this.dom.setAttribute('data-footnote-label', node.attrs.label || '1')
-    this.badgeBtn.innerHTML = `<span>[^${node.attrs.label || '1'}]</span><span class="md-footnote-back-icon" aria-hidden="true"> ↩</span>`
+    this.renderBadge(node)
     return true
   }
 

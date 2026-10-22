@@ -502,15 +502,18 @@ export class MarkdownEditorController implements LiveEditor {
           dom.className = 'md-footnote'
           dom.contentEditable = 'false'
           dom.textContent = node.attrs.label
-          dom.title = '查看脚注'
+          dom.title = '查看脚注定义'
+          dom.setAttribute('role', 'button')
+          dom.setAttribute('data-footnote-ref', String(node.attrs.label))
           dom.onclick = () => {
-            view.state.doc.forEach((block, pos) => {
-              if (block.type === s.nodes.protected_source && String(block.attrs.source).includes(`[^${node.attrs.label}]:`)) {
-                view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)).scrollIntoView())
-                const target = this.dom.querySelectorAll<HTMLDetailsElement>('.md-protected')
-                for (const item of target) if (item.textContent?.includes(`[^${node.attrs.label}]`)) item.open = true
-              }
-            })
+            const target = this.footnoteDefinitionPosition(view.state.doc, String(node.attrs.label))
+            if (target === null) {
+              window.dispatchEvent(new CustomEvent('editor-notice', { detail: `没有找到脚注定义 [^${node.attrs.label}]` }))
+              return
+            }
+            // Navigation only: the document and its undo history stay untouched.
+            view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, target)).scrollIntoView())
+            view.focus()
           }
           return { dom, stopEvent: () => true }
         },
@@ -1021,6 +1024,36 @@ export class MarkdownEditorController implements LiveEditor {
       return result
     }
     return null
+  }
+
+  /**
+   * The one place that maps a footnote label to its definition node.
+   *
+   * Both directions of footnote navigation go through this map, so a reference
+   * can find its definition (and a definition its reference) without ever
+   * scanning raw source text or relying on DOM order.
+   */
+  footnoteDefinitionPosition(doc: Node, label: string): number | null {
+    let found: number | null = null
+    doc.descendants((node, pos) => {
+      if (found !== null) return false
+      if (node.type === s.nodes.footnote_definition && String(node.attrs.label) === label) {
+        found = pos
+        return false
+      }
+      return true
+    })
+    return found
+  }
+
+  /** Every reference that uses `label`, in document order. */
+  footnoteReferencePositions(doc: Node, label: string): number[] {
+    const positions: number[] = []
+    doc.descendants((node, pos) => {
+      if (node.type === s.nodes.footnote_reference && String(node.attrs.label) === label) positions.push(pos)
+      return true
+    })
+    return positions
   }
 
   private htmlView(node:Node,view:EditorView,getPos:()=>number|undefined,inline=false){

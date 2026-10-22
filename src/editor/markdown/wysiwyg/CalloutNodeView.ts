@@ -1,5 +1,6 @@
 import type { Node } from 'prosemirror-model'
 import type { EditorView, NodeView } from 'prosemirror-view'
+import { setStaticIcon, textElement } from './safeDom'
 
 export type CalloutType = 'NOTE' | 'TIP' | 'IMPORTANT' | 'WARNING' | 'CAUTION'
 
@@ -113,10 +114,12 @@ export class CalloutNodeView implements NodeView {
     this.dom.className = `md-callout-node md-callout-${type.toLowerCase()}`
     this.dom.setAttribute('data-callout-type', type)
 
-    this.iconEl.innerHTML = meta.iconSvg
+    // Fixed icon templates only; validated before being written as markup.
+    setStaticIcon(this.iconEl, meta.iconSvg)
     this.typeBtn.textContent = meta.label
 
     const customTitle = this.node.attrs.title
+    // The custom title is document content and stays plain text.
     this.titleEl.textContent = customTitle || ''
     this.titleEl.style.display = customTitle ? 'inline' : 'none'
   }
@@ -143,7 +146,11 @@ export class CalloutNodeView implements NodeView {
       const item = document.createElement('button')
       item.type = 'button'
       item.className = 'md-callout-menu-item'
-      item.innerHTML = `<span class="md-callout-menu-icon">${meta.iconSvg}</span><span>${meta.label} (${key})</span>`
+      // Icon from the audited constant table, label as plain text.
+      const icon = document.createElement('span')
+      icon.className = 'md-callout-menu-icon'
+      setStaticIcon(icon, meta.iconSvg)
+      item.append(icon, textElement('span', undefined, `${meta.label} (${key})`))
       if (key === normalizeCalloutType(this.node.attrs.calloutType)) {
         item.classList.add('is-active')
       }

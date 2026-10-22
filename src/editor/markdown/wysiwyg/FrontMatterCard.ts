@@ -1,4 +1,8 @@
 import { parseFrontMatter, updateFrontMatterField, type ParsedFrontMatter } from '../frontmatter/frontMatterParser'
+import { setStaticIcon, textElement } from './safeDom'
+
+/** Fixed, audited icon template. Never built from document content. */
+const FRONT_MATTER_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="md-frontmatter-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>'
 
 export function renderFrontMatterCard(
   container: HTMLElement,
@@ -18,7 +22,9 @@ export function renderFrontMatterCard(
 
   const titleGroup = document.createElement('div')
   titleGroup.className = 'md-frontmatter-title-group'
-  titleGroup.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="md-frontmatter-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg><span>元数据 (Front Matter)</span>`
+  // Fixed icon template only; validated before it is written as markup.
+  setStaticIcon(titleGroup, FRONT_MATTER_ICON)
+  titleGroup.append(textElement('span', undefined, '元数据 (Front Matter)'))
 
   const actions = document.createElement('div')
   actions.className = 'md-frontmatter-actions'
@@ -117,14 +123,22 @@ export function renderFrontMatterCard(
   if (parsed.status) {
     const statusWrap = document.createElement('span')
     statusWrap.className = 'md-frontmatter-meta-item'
-    statusWrap.innerHTML = `<strong>状态:</strong> <span class="md-frontmatter-status-val">${parsed.status}</span>`
+    const statusLabel = document.createElement('strong')
+    statusLabel.textContent = '状态:'
+    const statusValue = document.createElement('span')
+    statusValue.className = 'md-frontmatter-status-val'
+    // Metadata comes from the document: it is text, never markup.
+    statusValue.textContent = parsed.status
+    statusWrap.append(statusLabel, document.createTextNode(' '), statusValue)
     metaRow.append(statusWrap)
   }
 
   if (parsed.created) {
     const createdWrap = document.createElement('span')
     createdWrap.className = 'md-frontmatter-meta-item'
-    createdWrap.innerHTML = `<strong>创建:</strong> ${parsed.created}`
+    const createdLabel = document.createElement('strong')
+    createdLabel.textContent = '创建:'
+    createdWrap.append(createdLabel, document.createTextNode(` ${parsed.created}`))
     metaRow.append(createdWrap)
   }
 
