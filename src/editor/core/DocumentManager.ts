@@ -781,11 +781,13 @@ export class DocumentManager {
     return true
   }
 
-  splitPane(direction: SplitDirection, targetPane: Pane = this.activePane, docId?: string, sourcePane: Pane = targetPane): string {
+  splitPane(direction: SplitDirection, targetPane: Pane = this.activePane, docId?: string, sourcePane: Pane = targetPane, cloneActive = true): string {
     if (this.disposed || this.isComposing) return targetPane
     const resolvedTarget = this.resolvePaneId(targetPane)
     const targetGroup = this.paneGroup(resolvedTarget)
-    const openDocId = docId || targetGroup.activeId || undefined
+    // A file dropped on an edge creates a pane for that file only. Cloning the
+    // source document there would leave a meaningless temporary duplicate tab.
+    const openDocId = docId || (cloneActive ? targetGroup.activeId || undefined : undefined)
     this.captureScroll(resolvedTarget)
     const resolvedSource = this.resolvePaneId(sourcePane)
     if (resolvedSource !== resolvedTarget) this.captureScroll(resolvedSource)

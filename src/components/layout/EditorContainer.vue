@@ -77,8 +77,8 @@ import { useDocumentOutline } from '../../editor/outline/useDocumentOutline'
 import type { EditorDocument } from '../../types'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { FileController } from '../../features/files/FileController'
+import type { WorkspaceController } from '../../features/workspace/WorkspaceController'
 import type { DropZone } from './DropZoneOverlay.vue'
-import type { SplitDirection } from '../../editor/layout/types'
 
 const props = withDefaults(defineProps<{
   doc: EditorDocument | null
@@ -95,6 +95,7 @@ const props = withDefaults(defineProps<{
   rootPath?: string | null
   liveToolbar?: boolean
   markdownWidth?: number
+  workspace?: WorkspaceController
 }>(), { liveToolbar: true, outlinePosition: 'right' })
 
 const emit = defineEmits<{
@@ -108,6 +109,7 @@ const emit = defineEmits<{
   // never be handled twice (which would prompt for the same dirty file twice).
   (e: 'close-tab', payload: { id: string; pane: string }): void
   (e: 'open-path', path: string): void
+  (e: 'open-workspace-file', payload: { path: string; name: string; paneId: string; zone: DropZone }): void
   (e: 'reveal-in-explorer', token: string): void
   (e: 'toggle-outline'): void
   (e: 'update:markdown-width', width: number): void
@@ -198,10 +200,11 @@ function handleCloseTab(payload: { id: string; pane: string }) {
 }
 
 function handleOpenWorkspaceFile(payload: { path: string; name: string; paneId: string; zone: DropZone }) {
-  if (payload.zone !== 'center') {
-    props.manager.splitPane(payload.zone as SplitDirection, payload.paneId)
+  if (props.workspace) {
+    void props.workspace.openWorkspaceFileInPane(payload)
+  } else {
+    emit('open-workspace-file', payload)
   }
-  emit('open-path', payload.path)
 }
 
 const isMarkdownDoc = computed(() => {

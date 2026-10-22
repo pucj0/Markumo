@@ -2,7 +2,7 @@ import { markRaw } from 'vue'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import type { FileController } from '../files/FileController'
 import { displayPathKey, readablePath } from '../shell/pathDisplay'
-import type { EditorPaneModel } from '../../editor/layout/types'
+import type { EditorPaneModel, SplitDirection } from '../../editor/layout/types'
 import type {
   SearchDonePayload,
   SearchMatch,
@@ -585,6 +585,65 @@ export class WorkspaceController {
     })()
     this.inFlightOpens.set(key, request)
     return request.promise
+  }
+
+  async openWorkspaceFileInPane(options: {
+    path: string
+    name?: string
+    paneId: string
+    zone?: 'center' | 'left' | 'right' | 'top' | 'bottom'
+    pin?: boolean
+  }): Promise<void> {
+    if (this.disposed || this.operationBusy || this.documentManager.isComposing) return
+    const targetPath = options.path
+    const targetPane = options.paneId
+    const zone = options.zone || 'center'
+    const pin = options.pin ?? true
+    const manager = this.documentManager
+    const key = displayPathKey(targetPath)
+
+    // Dropping a file always produces a real (pinned) tab so the next preview
+    // navigation cannot silently replace what the user just dropped.
+    const preview = !pin
+
+    const existingDoc = manager.openedDocuments.find(
+      doc => doc.path && displayPathKey(doc.path) === key
+    )
+    if (existingDoc) {
+      const pane = zone === 'center'
+        ? targetPane
+        : manager.splitPane(zone as SplitDirection, targetPane, existingDoc.id)
+      manager.open(existingDoc.id, preview, pane, false)
+      if (pin) manager.pin(existingDoc.id, pane)
+      manager.focusPane(pane, true)
+      return
+    }
+
+    // Load first: a failed or cancelled read must not leave a stray empty pane.
+    let file: Awaited<ReturnType<WorkspaceGateway['openWorkspaceFile']>>
+    try {
+      file = await this.gateway.openWorkspaceFile(targetPath)
+    } catch (e) {
+      this.notify(`打开工作区文件失败: ${e}`)
+      return
+    }
+    if (this.disposed) {
+      void this.fileController.gateway.release(file.token).catch(() => {})
+      return
+    }
+
+    // `cloneActive: false` keeps the new pane empty until this file is adopted,
+    // so no temporary duplicate of the source document is ever left behind.
+    const pane = zone === 'center'
+      ? targetPane
+      : manager.splitPane(zone as SplitDirection, targetPane, undefined, targetPane, false)
+
+    if (!this.fileController.accept(file, preview, pane, false)) return
+    const opened = manager.openedDocuments.find(
+      doc => doc.fileToken === file.token || (doc.path && displayPathKey(doc.path) === key)
+    )
+    if (opened && pin) manager.pin(opened.id, pane)
+    manager.focusPane(pane, true)
   }
 
   async createFile(parentDir: string, name: string) {
