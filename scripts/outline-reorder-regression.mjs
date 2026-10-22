@@ -6,7 +6,7 @@ const server = await createServer({
   server: { host: '127.0.0.1', port: 1445, strictPort: true, hmr: false, watch: null }
 })
 
-const { planOutlineMove, getSectionRange } = await server.ssrLoadModule('./src/editor/outline/outlineReorder.ts')
+const { planOutlineMove, getSectionRange, applyOutlineMove } = await server.ssrLoadModule('./src/editor/outline/outlineReorder.ts')
 
 console.log('--- Running Outline Reorder Unit & Algorithm Tests ---')
 
@@ -57,14 +57,14 @@ const items = [
   const plan = planOutlineMove(markdownDoc, items, 'h-1', 'h-4', 'after')
   assert.ok(plan.valid)
   // Verify Chapter 2 is now before Chapter 1
-  const posCh2 = plan.newSource.indexOf('# 第二章 实践指南')
-  const posCh1 = plan.newSource.indexOf('# 第一章 概述')
+  const posCh2 = applyOutlineMove(markdownDoc, plan).indexOf('# 第二章 实践指南')
+  const posCh1 = applyOutlineMove(markdownDoc, plan).indexOf('# 第一章 概述')
   assert.ok(posCh2 !== -1 && posCh1 !== -1)
   assert.ok(posCh2 < posCh1, 'Chapter 2 must precede Chapter 1 after move')
 
   // Verify Chapter 1 still contains its subheadings
-  assert.ok(plan.newSource.includes('### 1.1.1 底层实现'))
-  assert.ok(plan.newSource.includes('底层细节 C。'))
+  assert.ok(applyOutlineMove(markdownDoc, plan).includes('### 1.1.1 底层实现'))
+  assert.ok(applyOutlineMove(markdownDoc, plan).includes('底层细节 C。'))
   console.log('PASS 2. Moving section downwards moves entire block with all subheadings')
 }
 
@@ -72,8 +72,8 @@ const items = [
 {
   const plan = planOutlineMove(markdownDoc, items, 'h-6', 'h-4', 'before')
   assert.ok(plan.valid)
-  const posCh3 = plan.newSource.indexOf('# 第三章 总结与展望')
-  const posCh2 = plan.newSource.indexOf('# 第二章 实践指南')
+  const posCh3 = applyOutlineMove(markdownDoc, plan).indexOf('# 第三章 总结与展望')
+  const posCh2 = applyOutlineMove(markdownDoc, plan).indexOf('# 第二章 实践指南')
   assert.ok(posCh3 < posCh2, 'Chapter 3 must precede Chapter 2 after moving before')
   console.log('PASS 3. Moving section upwards places section right before target')
 }
@@ -94,12 +94,12 @@ const items = [
   const plan = planOutlineMove(markdownDoc, items, 'h-1', 'h-4', 'after')
   assert.ok(plan.valid)
   // Verify all sections and texts are completely preserved
-  assert.ok(plan.newSource.includes('这是第一章的正文内容 A。'))
-  assert.ok(plan.newSource.includes('架构详细说明 B。'))
-  assert.ok(plan.newSource.includes('底层细节 C。'))
-  assert.ok(plan.newSource.includes('第二章正文 D。'))
-  assert.ok(plan.newSource.includes('上手指南 E。'))
-  assert.ok(plan.newSource.includes('总结内容 F。'))
+  assert.ok(applyOutlineMove(markdownDoc, plan).includes('这是第一章的正文内容 A。'))
+  assert.ok(applyOutlineMove(markdownDoc, plan).includes('架构详细说明 B。'))
+  assert.ok(applyOutlineMove(markdownDoc, plan).includes('底层细节 C。'))
+  assert.ok(applyOutlineMove(markdownDoc, plan).includes('第二章正文 D。'))
+  assert.ok(applyOutlineMove(markdownDoc, plan).includes('上手指南 E。'))
+  assert.ok(applyOutlineMove(markdownDoc, plan).includes('总结内容 F。'))
   console.log('PASS 5. Reordering preserves exact source fidelity without modifying untouched content')
 }
 

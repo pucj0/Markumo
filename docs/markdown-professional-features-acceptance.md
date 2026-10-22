@@ -1,192 +1,134 @@
 # Markumo Markdown 专业编辑能力增强工程 · 综合验收报告
 
-## 一、工程概述与完成情况
+> 本报告只记录有证据支撑的结论。状态分为四类：
+>
+> - **已实现且验证**：有代码，且有自动化测试或可复现命令作为证据。
+> - **部分实现**：核心路径可用，但存在明确列出的缺口。
+> - **尚未验证**：代码存在，但没有在本仓库环境中执行过对应验证（例如需要 Word/LibreOffice 的场景）。
+> - **已知限制**：按设计不支持，或受外部条件限制。
+>
+> 本次审查基线为 `38a69c9`，复核于 HEAD `fe51ae4` 之后的修复提交。结论以当前实际代码为准，不以本文件历史陈述为准。
 
-本次工程在保持 Markumo “轻量、快速、便捷、通用文本编辑 + 专业 Markdown 编辑” 的产品定位不变、完全延续当前技术栈（Rust + Tauri 2 + Vue 3 + CodeMirror 6 + ProseMirror）的前提下，深度借鉴 Nomo 的优秀设计与规范，彻底完成了 8 项 Markdown 专业能力的底层增强与体验革新。
+## 一、状态总览
 
-| 功能序号 | 阶段与功能名称 | 优先级 | 完成状态 | 核心交付模块 |
-|---|---|---|---|---|
-| **P0-1** | Callout 原生结构化编辑 | P0 | ✅ 100% 完成 | `CalloutNodeView.ts`, `MarkdownSchema.ts`, `MarkdownParser.ts`, `MarkdownSerializer.ts`, `SlashCommandRegistry.ts` |
-| **P0-2** | TOC 原生动态目录 | P0 | ✅ 100% 完成 | `TocNodeView.ts`, `MarkdownParser.ts`, `MarkdownSerializer.ts`, `rendering.ts` |
-| **P0-3** | 脚注定义原生编辑 | P0 | ✅ 100% 完成 | `FootnoteDefNodeView.ts`, `MarkdownSchema.ts`, `MarkdownParser.ts`, `MarkdownSerializer.ts` |
-| **P0-4** | 图片编辑体验完善 | P0 | ✅ 100% 完成 | `LiveImageView.ts`, `MarkdownSchema.ts`, `MarkdownSerializer.ts`, `presentation.css` |
-| **P1-5** | 大纲整节拖动 | P1 | ✅ 100% 完成 | `outlineReorder.ts`, `OutlineView.vue`, `useDocumentOutline.ts` |
-| **P1-6** | Front Matter 可视化 | P1 | ✅ 100% 完成 | `frontMatterParser.ts`, `FrontMatterCard.ts`, `MarkdownEditorController.ts` |
-| **P1-7** | Markdown 历史版本系统 | P1 | ✅ 100% 完成 | `historyService.ts`, `HistoryDialog.vue`, `FileController.ts` |
-| **P1-8** | 原生 Word DOCX 导出 | P1 | ✅ 100% 完成 | `nativeDocxExport.ts`, `ExportController.ts`, `src-tauri/src/conversion/engine.rs` |
+| 编号 | 功能 | 级别 | 当前状态 | 主要证据 |
+| --- | --- | --- | --- | --- |
+| P0-1 | Callout 原生结构化编辑 | P0 | 已实现且验证 | `scripts/callout-regression.mjs`（6 项，含源码往返、类型切换、撤销） |
+| P0-2 | TOC 原生动态目录 | P0 | 已实现且验证 | `scripts/toc-regression.mjs`（6 项）＋本轮 `tocIndex.ts` 有界缓存 |
+| P0-3 | 脚注定义原生编辑与双向导航 | P0 | 已实现且验证 | `scripts/footnote-regression.mjs`（6 项）＋`scripts/repair01-regression.mjs` 第 8–10 项 |
+| P0-4 | 图片编辑与属性持久化 | P0 | 已实现且验证 | `scripts/repair01-regression.mjs` 第 5–7 项（20 种宽高/对齐往返、重开、模式切换） |
+| P0-5 | 文档内容注入防护 | P0 | 已实现且验证 | `scripts/repair01-regression.mjs` 第 1–4 项 |
+| P0-6 | 历史版本本地持久化 | P0 | 部分实现 | Rust 13 项单测 + `scripts/repair02-regression.mjs`（8 项）；**未做**真实桌面端跨进程重开验证 |
+| P0-7 | 原生 DOCX 导出 | P0 | 部分实现 | `scripts/repair03-regression.mjs`（12 项结构校验）；**未做** Word/LibreOffice 实际打开验证 |
+| P1-8 | 大纲整节拖动源码保真 | P1 | 已实现且验证 | `scripts/repair04-outline-regression.mjs`（11 项，逐字节比对） |
+| P1-9 | Front Matter 解析与安全更新 | P1 | 部分实现 | `scripts/frontmatter-regression.mjs`（4 项）；复杂 YAML 明确降级为源码编辑 |
+| P1-10 | 裸 URL 增量编辑 | P1 | 已实现且验证 | `scripts/autolink-regression.mjs`（14 项） |
 
----
+## 二、本轮修复内容（按提交）
 
-## 二、八项功能技术设计与架构说明
+### Repair 01 · `fix(markdown): 修复文档内容注入、脚注导航与图片属性持久化`
 
-### 1. Callout 原生结构化编辑 (P0)
-- **语义节点化**：扩展 `MarkdownSchema.ts`，新增 `callout` 块级语义节点（支持 `calloutType` 与 `title` 属性，内容为 `block+`）。
-- **Parser 自动识别**：在 `MarkdownParser.ts` 中引入 `markumo_callouts` core ruler，将以 `> [!NOTE]` / `> [!TIP]` / `> [!IMPORTANT]` / `> [!WARNING]` / `> [!CAUTION]` 开头的引用块转换为结构化节点，不再将其作为死板的受保护源码 `protected_source` 隔离。
-- **独立 CalloutNodeView**：实现 ProseMirror `NodeView`，外层挂载类型图标、类型切换悬浮菜单（支持一键在 5 种提示块间切换）与自定义标题双击编辑；内部 `contentDOM` 原生托管给 ProseMirror，用户可直接在提示块内部流畅打字、插入列表与代码块，无缝支持中文输入法（IME）与单步撤销重做（Undo/Redo）。
-- **保真序列化**：在 `MarkdownSerializer.ts` 中通过 `wrapBlock('> ', ...)` 严格回写标准 GitHub 规范源码，完全保留引用前缀与段落层次。
+**注入风险（原为真实 XSS）**
 
-### 2. TOC 原生动态目录 (P0)
-- **纯动态派生**：在 ProseMirror 中定义原子块节点 `toc`（属性保留用户原始标记如 `[TOC]` / `[toc]`）。
-- **联动响应**：`TocNodeView` 注册进编辑器的 `extensionViews` 观察者队列。每当正文标题（H1-H6）发生增删、重命名或层级变动时，TOC 自动提取最新标题大纲并更新目录视图；**该派生过程不派发任何改动文档内容的 Transaction，因此 100% 不破坏脏状态（dirty flag），绝不产生多余的 Undo 历史！**
-- **点击跳转与空状态**：支持点击平滑定位光标并聚焦标题；文档无标题时展示友好空状态；提供一键删除目录按钮。
-- **源码保真**：序列化时仅回写用户输入的原始 `[TOC]` 标记，绝不把展开的 HTML 目录永久写入 Markdown 文件。
+- `FrontMatterCard.ts` 曾把 YAML 的 `status` / `created` 直接拼进 `innerHTML`；`FootnoteDefNodeView.ts` 曾把脚注 label 拼进 `innerHTML`。恶意文档可执行脚本。现全部改为 `createElement` + `textContent`。
+- 新增 `safeDom.ts`：`setStaticIcon` 只接受标签与属性白名单（拒绝 `script/iframe/object/foreignObject/use/a`、`on*`、未知属性），Callout / TOC / Front Matter 的固定 SVG 统一走该入口，**用户文本与固定模板彻底分离**。
+- `MarkdownSerializer.ts` 的受控 `<img>` 改用 `escapeHtmlAttribute` 转义，`width`/`align` 走白名单（`auto | N% | Npx` / `left|center|right`）。修复前 `src="x" onerror="alert(1)"` 可直接逃逸出属性。
 
-### 3. 脚注定义原生编辑 (P0)
-- **解耦结构化**：在 `MarkdownSchema.ts` 中新增 `footnote_definition` 块级节点。
-- **双向联动导航**：实现 `FootnoteDefNodeView`，左侧展示药丸徽章 `[^label]` 与返回图标 `↩`，点击自动定位并聚焦正文引用节点；右侧 `contentDOM` 由 ProseMirror 托管，用户像编辑正文一样直接修改脚注内容。
-- **原子插入**：`/footnote` 命令自动分配下一个未冲突标签，在正文插入引用的同时在文末插入对应定义，形成单个撤销单元。
+**图片属性持久化闭环**
 
-### 4. 图片编辑体验完善 (P0)
-- **悬浮工具栏**：在 `LiveImageView` 中通过 `selectNode()` / `deselectNode()` 生命周期管理工具栏展示。提供左对齐、居中、右对齐、宽度预设（25%、50%、75%、100%、原图 Auto）、放大预览、编辑路径及安全删除按钮。
-- **受控持久化策略**：
-  - 未编辑尺寸/对齐的图片：100% 保持 CommonMark 原生语法 `![alt](src)`；
-  - 明确调整了尺寸或对齐的图片：受控序列化为标准 HTML `<img src="..." width="..." align="..." />`，保证在重启、Live/Source/Split 切换以及 DOCX/PDF 导出时 100% 恢复。
-- **删除段落清理**：针对单图片独立段落，删除图片时自动删除该空段落并平滑过渡光标，单步 Undo 即可完整恢复。
-- **破损图片规范**：加载失败时统一展示小巧精致的破损图片 SVG 图标与名称，悬浮 title 显示详细诊断信息，杜绝无限重试与排版污染。
+- 新增 `imageHtml.ts`：`parseControlledImageHtml` 只识别本编辑器写出的那一种 `<img>`，仅允许 `src/alt/title/width/align`；任何额外属性（含事件属性、`style`）继续作为受保护源码。
+- `MarkdownParser` 据此将其重新解析为**可编辑 image 节点**。修复前，调整尺寸后保存重开会变成不可编辑的原始 HTML，工具栏消失、属性丢失。
 
-### 5. 大纲整节拖动 (P1)
-- **纯函数算法驱动**：在 `src/editor/outline/outlineReorder.ts` 中实现纯函数 `planOutlineMove` 与 `getSectionRange`，根据语法树行首偏移精准计算目标章节的完整源码范围（包含标题、正文及所有子孙章节）。
-- **拖拽安全防护**：内置严格规则，禁止将章节拖入自身或其自身的子章节内部。
-- **UI 交互与事务**：在 `OutlineView.vue` 中支持原生 HTML5 拖拽，根据鼠标 Y 坐标动态渲染置顶（`drop-before`）与置底（`drop-after`）高亮指示线，拖拽放置后通过 DocumentManager 派发单个 Undo 事务，支持一键撤销。
+**脚注双向导航**
 
-### 6. Front Matter 可视化 (P1)
-- **安全轻量解析**：在 `frontMatterParser.ts` 中构建安全无外部依赖的解析引擎，杜绝任何危险 YAML 构造器执行风险。
-- **可视化元数据卡片**：在 `FrontMatterCard.ts` 中为文档头部的 YAML 提供结构化展示（标题、标签 Tags、创建/更新时间、状态 Status），支持直接编辑标题并以局部在位更新（`updateFrontMatterField`）回写源码，保留所有用户注释与未知字段。
-- **非阻塞容错**：面对非法或极其复杂的 YAML 语法，提供友好的红色提示与一键“编辑源码”按钮，优雅降级。
+- 引用点击原先在 `protected_source` 文本里搜索，现统一走 `MarkdownEditorController.footnoteDefinitionPosition` 的节点映射；缺失定义给出明确提示，不虚构定义、不写入正文、不产生撤销步骤。
 
-### 7. Markdown 历史版本系统 (P1)
-- **职责清晰划分**：Crash Recovery 专注于未保存崩溃草稿的临时恢复；Version History 专注于保存版本的安全快照归档与回滚，两者存储与界面完全独立。
-- **哈希去重与配额**：每次保存成功时由 `FileController` 自动触发归档；内容未发生实质变更时不重复保存；单文件自动保留最多 30 个最近版本。
-- **独立对比面板**：实现 `HistoryDialog.vue`，左侧时间轴展示保存历史，右侧提供只读全屏预览与红绿行级差异对比（Diff）；恢复前进行用户确认，通过 DocumentManager 正常更新文档，保证可撤销性。
+### Repair 02 · `fix(history): 用受控 Rust 持久化替换 localStorage 历史版本`
 
-### 8. 原生 Word DOCX 导出 (P1)
-- **零依赖原生打包**：在 `nativeDocxExport.ts` 中实现基于标准 PKZip 规范的纯 TypeScript 归档打包器 `createZipArchive` 与 OpenXML 生成器。
-- **标准 Word 文档模型**：严格映射 H1-H6 标题、段落、粗体（`w:b`）、斜体（`w:i`）、删除线（`w:strike`）、行内代码等宽字体、代码块底色框、引用块左边框、列表项缩进、以及原生可编辑 Word 表格（`w:tbl`）。
-- **平滑双通道**：普通用户无需预装 Pandoc 即可一键直接导出格式精美的 `.docx` 文件；同时保留现有 Pandoc 作为高级通道。
+- 新增 `src-tauri/src/history.rs`：独立 `history` 目录（与 Crash Recovery 分离）、SHA-256 内容寻址去重、索引只存元数据、原子写入（临时文件 + fsync + rename）。
+- 配额：单快照 8 MiB、单文件 40 版、总量 192 MiB；超限按最旧优先清理并通过 `warnings` 回报，写失败向上抛出，不静默吞掉。
+- 安全：文件键是路径摘要且**从不参与 I/O**；对象名与版本 id 校验字符集，无任意路径读写。索引损坏则另存备份并重建。
+- 前端 `historyService` 改为 IPC 客户端：列表只返回元数据、正文按需读取、失败即报错；`recordVersion` 区分 `disk`（保存前磁盘版本）/`saved`（刚写入）/`manual`（手动）。
+- `FileController` 在写入前记录 `getBaselineText()` 的磁盘版本，保存成功后再记录新版本——两者语义不再混为一谈。
+- `HistoryDialog` 重写为按需加载、来源标签、恢复前创建「恢复前保护点」、失败即中止；并接入文件菜单「历史版本…」（**此前该面板没有任何入口，属死代码**）。
+- 旧 `localStorage` 历史一次性迁移，迁移成功才删除旧键。
+- Diff 改为先裁剪公共前后缀、再在窗口内做 LCS，超大文档降级为块级差异。
 
----
+### Repair 03 · `fix(export): 补全原生 DOCX 导出结构与可验证性`
 
-## 三、测试验证与质量门禁结果
+- 真正的 Word 列表：`word/numbering.xml`（abstractNum/num + 九级 lvl），段落带 `w:numPr`/`w:ilvl`。
+- 真正的超链接：为绝对 HTTP(S)/mailto 目标生成 External relationship + `w:hyperlink r:id`；相对目标降级为文本并警告，不产生坏关系。
+- 图片：签名识别 png/jpeg/gif/bmp → `word/media` + relationship + `w:drawing`；受 64 MiB 媒体预算与 120 张上限约束，超限降级为替代文字并警告。
+- 标题写 `outlineLvl` 与 bookmark；`[toc]` 生成可跳转标题列表；Callout 输出主题色边栏提示块；脚注以文末编号列表导出；KaTeX/Mermaid 以源码/等宽降级——以上均产生显式 warning。
+- 取消（AbortSignal）、64 MiB 文档上限、失败不落半成品。
+- 返回 `{ bytes, warnings, stats }`，导出路径逐条提示警告；保留 Pandoc 通道。
 
-全套专项回归测试在真实运行时环境中全部 100% 绿灯通过：
+### Repair 04 · 大纲保真、YAML 安全、TOC 性能、CI 与验收
 
-```
---- Running Native DOCX Export Regression Suite ---
-PASS 1. Generated DOCX has valid PKZip archive header
-PASS 2. All required OOXML structure parts present
-PASS 3. Word semantic elements (headings, formatting, tables, code) accurately structured
-PASS 4. Physical DOCX artifact created successfully (9122 bytes) at E:\code\lightEdit\test-results\native-export-test.docx
-========================================
-All Native DOCX Export tests passed successfully! (4/4)
-========================================
+- `outlineReorder.planOutlineMove` 返回**最小 delete/insert 变更**（不再整篇替换），保留 LF/CRLF、尾部换行状态、Front Matter、代码围栏；无末尾换行文件不新增换行；跨层/自身移动拒绝；`OutlineView` 单事务应用并恢复选区。
+- `frontMatterParser` 重写为「只往返它能精确表达的子集」：识别锚点、别名、自定义标签、块标量、流式集合、制表符、重复键；命中即 `editable: false`，卡片只显示原文与「编辑源码」入口，**不再静默重排 YAML**。字段更新只替换值区间，保留注释、顺序、引号风格与 CRLF。
+- `tocIndex.ts`：按文档标题结构签名的共享有界缓存（最多 4 条），TOC 节点复用同一次扫描；`TocNodeView` 增加渲染签名，相同标题列表不再重建 DOM。
+- `run-regressions.mjs` 的 `FULL_REGRESSION_TESTS` 补齐此前**只进 SMOKE、未进全量**的 15 个套件（八项功能 + 拖放/独立窗口/裸 URL + 四个 Repair 套件）。
 
---- Running Document Version History Regression Suite ---
-PASS 1. Record snapshot creates valid history entry
-PASS 2. Content deduplication prevents redundant snapshots
-PASS 3. Multiple sequential saves recorded in reverse chronological order
-PASS 4. Line-level diff computation accurately detects additions and removals
-PASS 5. Delete specific snapshot removes targeted record
-PASS 6. Clear snapshots empties history records cleanly
-========================================
-All Version History tests passed successfully! (6/6)
-========================================
+## 三、质量门禁与测试结果（本机实测）
 
---- Running Front Matter Regression Suite ---
-PASS 1. YAML Front Matter parses into visual metadata card with title and tags
-PASS 2. Editing metadata field updates YAML source incrementally and supports Undo
-PASS 3. Source fidelity: untouched YAML Front Matter round-trips identically across Live/Source
-PASS 4. Invalid or irregular YAML provides non-blocking hint and edit-raw button
-========================================
-All Front Matter regression tests passed successfully! (4/4)
-========================================
+| 项目 | 命令 | 结果 |
+| --- | --- | --- |
+| 类型检查 | `pnpm typecheck` | 通过 |
+| 生产构建 | `pnpm build` | 通过（`built in ~20s`） |
+| Rust 单元测试 | `cargo test --manifest-path src-tauri/Cargo.toml history` | 13 passed / 0 failed |
+| Rust 全量 | `cargo test`（172 项基线） | 通过（需将 `TEMP` 指向可写目录，见下） |
+| 裸 URL | `node scripts/autolink-regression.mjs` | 14/14 |
+| Repair 01 | `node scripts/repair01-regression.mjs` | 10/10 |
+| Repair 02 | `node scripts/repair02-regression.mjs` | 8/8 |
+| Repair 03 | `node scripts/repair03-regression.mjs` | 12/12 |
+| Repair 04（大纲） | `node scripts/repair04-outline-regression.mjs` | 11/11 |
+| Callout | `node scripts/callout-regression.mjs` | 6/6 |
+| TOC | `node scripts/toc-regression.mjs` | 6/6 |
+| 脚注 | `node scripts/footnote-regression.mjs` | 6/6 |
+| Front Matter | `node scripts/frontmatter-regression.mjs` | 4/4 |
+| DOCX（旧套件） | `node scripts/docx-regression.mjs` | 4/4 |
+| Split 预览 | `node scripts/split-preview-regression.mjs` | 4 组全通过 |
+| Live 控制器 | `node scripts/markdown-live-controller-regression.mjs` | 21/21 |
 
---- Running Outline Reorder Unit & Algorithm Tests ---
-PASS 1. getSectionRange correctly includes heading, body and all descendants
-PASS 2. Moving section downwards moves entire block with all subheadings
-PASS 3. Moving section upwards places section right before target
-PASS 4. Dragging into itself or descendants rejected with safe error
-PASS 5. Reordering preserves exact source fidelity without modifying untouched content
-========================================
-All Outline Reorder tests passed successfully! (5/5)
-========================================
+**CI 门禁核对**
 
---- Running Image Editing Regression Suite ---
-PASS 1. Untouched Markdown image strictly preserves pure markdown syntax
-PASS 2. Selecting image exposes hover toolbar with align, width and delete buttons
-PASS 3. Modifying width and alignment applies styling and controlled persistence
-PASS 4. Delete image button cleans paragraph and supports single-step Undo
-PASS 5. Non-existent image displays broken badge gracefully without infinite retry
-========================================
-All Image editing regression tests passed successfully! (5/5)
-========================================
+- `.github/workflows/quality.yml` 的 `Browser Smoke` 作业执行 `pnpm test:smoke`（带 `set -o pipefail`），**未设置 `continue-on-error`**：任一冒烟用例失败会使该 job 失败，因此是阻塞门禁。
+- 同一作业另有 `--repeat=3` 的稳定性复跑（split / toolbar / 虚拟化 / 数学）。
+- 全量回归此前**缺少**八项功能的套件，本轮已在 `FULL_REGRESSION_TESTS` 补齐。
 
---- Running Footnote Regression Suite ---
-PASS 1. Numbered and named footnote definitions parse into native FootnoteDefNodeViews
-PASS 2. Source fidelity: untouched footnote definitions round-trip identically across Live/Source/Live
-PASS 3. Native text editing inside footnote definition supports typing, undo and redo
-PASS 4. Clicking footnote definition badge navigates cursor back to reference in body
-PASS 5. Multiple references correctly share a single footnote definition
-PASS 6. Insert footnote command creates linked reference and definition atomically
-========================================
-All Footnote regression tests passed successfully! (6/6)
-========================================
+**关于测试超时**
 
---- Running TOC Regression Suite ---
-PASS 1. [TOC] parses into native TocNodeView and dynamically extracts H1-H6
-PASS 2. Source fidelity: [TOC] marker is retained and does not serialize generated list to disk
-PASS 3. Heading edits dynamically update TOC without polluting Undo history
-PASS 4. Clicking TOC item navigates cursor to matching heading position
-PASS 5. Document without headings shows friendly empty placeholder
-PASS 6. Delete TOC button removes [TOC] block from document cleanly
-========================================
-All TOC regression tests passed successfully! (6/6)
-========================================
+`markdown-live-toolbar-regression.mjs` 中的 `timeout: 30000` / `60000` 属该文件既有实现（提交 `995c954`、`f288f6d`），不是本轮引入，且该文件当前有他人未提交改动，本轮未改动。核对结论：
 
---- Running Callout Regression Suite ---
-PASS 1. All 5 Callout types (NOTE, TIP, IMPORTANT, WARNING, CAUTION) parse and render
-PASS 2. Source fidelity: untouched Callouts round-trip identically across Live/Source/Split
-PASS 3. Native text editing inside Callout body supports typing, undo and redo
-PASS 4. Interactive type switching updates Callout type and serializes correctly
-PASS 5. Nested rich content (lists, code blocks) inside Callout preserved
-PASS 6. Ordinary blockquote is not hijacked and continues normal behavior
-========================================
-All Callout regression tests passed successfully! (6/6)
-========================================
+- `settingsReady` 的 30s 是**应用外壳整体水合的启动预算**（CI 冷启动需预构建 Vite 依赖），属性能预算。
+- `liveReady` 的 60s 出现在「切换编辑模式」之后，确实是宽松值；但由于断言本身必须在预算内成立，初始化失败或懒激活死锁仍会使作业失败，**不构成对功能缺陷的掩盖**。
+- 建议后续单独提交把 `liveReady` 收紧到 15s，并附一次实测；本轮不做，以免与他人未提交改动冲突。
+
+## 四、尚未验证与已知限制
+
+**尚未验证（需外部环境）**
+
+1. **DOCX 在 Word / LibreOffice 中实际打开**：本机未安装 Office 或 LibreOffice，未执行真实打开、分页与目录 F9 更新验证。已完成的是解包级结构校验（OOXML 良构、Relationships、numbering、media、drawing、表格、书签、正文完整性）。Pandoc 高级导出通道未在本轮回归中执行。
+2. **历史版本的跨进程重开**：Rust 侧有 13 项单测覆盖存储语义，前端有 mock IPC 的契约测试；但未在真实 Tauri 桌面进程中执行「保存 → 关闭 → 重开 → 查看历史」的端到端流程。
+3. **WebView2 下的 IME 组合过程**：裸 URL 自动链接在组合期跳过由 `this.composing` 保护，但未做录屏级验证。
+
+**已知限制**
+
+1. **Front Matter**：不引入 YAML 库。锚点、别名、标签、块标量、流式集合、制表符缩进、重复键一律判定为不可可视化编辑，回退到源码编辑。这是刻意的保守选择：宁可少改，也不静默重写用户 YAML。
+2. **DOCX**：TOC 无页码（需 Word 分页）；脚注以文末编号列表表示，不是 Word 原生脚注（原生 `footnotes.xml` 与正文引用编号的对应尚未实现）；KaTeX/Mermaid 以源码导出；相对路径图片不嵌入。以上都会在导出时逐条提示。
+3. **历史版本**：`MAX_WINDOWS` 之外的多窗口并发由单一存储锁串行化；超大文档（> 8 MiB）不记录历史版本，只提示。
+4. **裸 URL**：无分隔符紧邻中文时，linkify（与 GFM、右侧预览一致）把中文并入 IRI，`href` 做百分号编码；保证 `decodeURI(href)` 等于显示文本、源码保持裸 URL、三种模式一致。
+5. **大纲拖动**：只支持同一父级内的移动语义校验（跨层移动被拒绝），不支持跨文件拖动。
+
+## 五、复现方式
+
+```bash
+pnpm typecheck
+pnpm build
+node scripts/run-regressions.mjs --smoke          # 冒烟（CI 门禁同款）
+node scripts/run-regressions.mjs --full           # 全量（含本节新增 15 个套件）
+cargo test --manifest-path src-tauri/Cargo.toml    # Windows 若遇 TEMP 权限问题，先将 TEMP/TMP 指向可写目录
 ```
 
-- **TypeScript 类型检查**：`pnpm typecheck` 零错误通过。
-- **生产构建验证**：`pnpm build` 顺利完成。
-- **Rust 后端检查**：`cargo check --locked` 编译通过。
-
----
-
-## 四、与参考项目（Nomo）的架构异同
-
-| 模块 | Nomo 参考思路 | Markumo 落地设计 | 差异与优势 |
-|---|---|---|---|
-| **技术栈** | Svelte + 自建简易编辑器 | Vue 3 + CodeMirror 6 + ProseMirror | 严格遵守 Markumo 既有技术栈，不引入 Svelte，单一文档数据源通过 DocumentManager 权威管理 |
-| **Callout** | 基于自定义 DOM 与正则替换 | ProseMirror 原生 `callout` Schema 节点 + `CalloutNodeView` | 具有完整的可撤销事务支持与光标进出控制，支持 5 种类型快速切换 |
-| **TOC** | 单向生成列表并依赖正则提取 | 基于 ProseMirror 文档树动态派生，注册至 `extensionViews` | 派生过程绝不污染正文撤销栈与文件脏状态，源码保真仅写回 `[TOC]` |
-| **脚注** | 分离的文本替换 | `footnote_definition` 结构化节点 + 双向徽章定位 | 正文直接输入，支持 `[^1] ↩` 双向跳转 |
-| **图片** | 直接改写为 HTML | 受控条件序列化（修改属性走受控 `<img>`，未修改保持标准 Markdown） | 严格保护未修改图片的原始 Markdown 语法，不批量篡改用户源文件 |
-| **大纲拖拽** | outlineReorder 算法 | 纯函数 `planOutlineMove` + 单事务派发 | 精准计算多级子章节范围，禁止非法内拖，支持单步 Ctrl+Z 恢复原状 |
-| **历史版本** | 文件级别备份文件 | 基于哈希去重与配额治理的独立 Snapshots 服务 + Diff 视图 | 彻底与 Crash Recovery 隔离，支持行级差异高亮与安全回滚 |
-| **DOCX** | 前端拼接简易 OpenXML | 纯 TypeScript PKZip 打包器 + 标准 OpenXML AST 转换器 | 零外部依赖，100% 离线自闭环，自动生成物理有效 `.docx` 文件 |
-
----
-
-## 五、各阶段 Git 提交记录
-
-所有代码与测试均在 `main` 分支完成独立增量提交：
-1. `4d443ea` - `fix(ui): 消除目录导航弹窗标题中的 Windows 扩展长度路径前缀`
-2. `00ad49a` - `style(markdown): 统一 Split 预览与实时排版表格样式，优化图片加载失败为破损图片标识`
-3. `2dc9a44` - `feat(markdown): support native callout editing` (Phase 1)
-4. `62c092f` - `feat(markdown): implement dynamic toc node` (Phase 2)
-5. `40772b0` - `feat(markdown): support editable footnote definitions` (Phase 3)
-6. `221d161` - `feat(markdown): enhance image editing controls` (Phase 4)
-7. `8a9862c` - `feat(outline): support section reordering` (Phase 5)
-8. `f41f46f` - `feat(markdown): add visual front matter editor` (Phase 6)
-9. `3874913` - `feat(history): add saved document version history` (Phase 7)
-10. `557f8e1` - `feat(export): support native docx export` (Phase 8)
-
-全部工作均已圆满完成并通过全部质量门禁。
+浏览器套件默认使用系统 Edge/Chromium；CI 使用 Playwright 自带 Chromium。

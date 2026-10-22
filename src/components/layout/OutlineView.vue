@@ -230,10 +230,13 @@ function onDrop(e: DragEvent, targetItem: OutlineItem) {
   const fullSource = props.manager.getText(props.documentId)
   if (!fullSource) return
   const plan = planOutlineMove(fullSource, props.items, sourceId, targetItem.id, position)
-  if (!plan.valid) return
+  if (!plan.valid || !plan.changes.length) return
 
+  // A minimal delete/insert pair keeps the rest of the file byte-identical and
+  // forms a single undo step, unlike replacing the whole document.
   props.manager.dispatch(props.documentId, {
-    changes: { from: 0, to: fullSource.length, insert: plan.newSource },
+    changes: plan.changes,
+    selection: { anchor: plan.newCaretPos, head: plan.newCaretPos },
     userEvent: 'input.outline.reorder',
   })
 }

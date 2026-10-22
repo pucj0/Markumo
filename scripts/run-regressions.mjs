@@ -102,6 +102,21 @@ const FULL_REGRESSION_TESTS = [
   'scripts/typewriter-focus-regression.mjs',
   'scripts/focus-mode-regression.mjs',
   'scripts/pdf-destination-regression.mjs',
+    'scripts/callout-regression.mjs',
+  'scripts/toc-regression.mjs',
+  'scripts/footnote-regression.mjs',
+  'scripts/image-editing-regression.mjs',
+  'scripts/outline-reorder-regression.mjs',
+  'scripts/frontmatter-regression.mjs',
+  'scripts/history-regression.mjs',
+  'scripts/docx-regression.mjs',
+  'scripts/autolink-regression.mjs',
+  'scripts/workspace-dnd-regression.mjs',
+  'scripts/window-detach-regression.mjs',
+  'scripts/repair01-regression.mjs',
+  'scripts/repair02-regression.mjs',
+  'scripts/repair03-regression.mjs',
+  'scripts/repair04-outline-regression.mjs',
   'scripts/release-regression.mjs'
 ]
 

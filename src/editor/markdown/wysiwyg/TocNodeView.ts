@@ -2,6 +2,7 @@ import type { Node } from 'prosemirror-model'
 import { TextSelection } from 'prosemirror-state'
 import type { EditorView, NodeView } from 'prosemirror-view'
 import { setStaticIcon, textElement } from './safeDom'
+import { headingsFor } from './tocIndex'
 
 /** Fixed, audited icon template. Never built from document content. */
 const TOC_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="md-toc-icon"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>'
@@ -19,6 +20,8 @@ export class TocNodeView implements NodeView {
   private deleteBtn: HTMLButtonElement
   private listEl: HTMLElement
   private disposed = false
+  /** Signature of the heading list currently rendered, to skip no-op rebuilds. */
+  private rendered = ''
 
   constructor(
     private node: Node,
@@ -68,23 +71,21 @@ export class TocNodeView implements NodeView {
   }
 
   private extractHeadings(): HeadingItem[] {
-    const headings: HeadingItem[] = []
-    const schema = this.view.state.schema
-    this.view.state.doc.descendants((node, pos) => {
-      if (node.type === schema.nodes.heading) {
-        headings.push({
-          pos,
-          level: node.attrs.level || 1,
-          text: node.textContent.trim(),
-        })
-      }
-    })
-    return headings
+    // Shared, signature-keyed cache: several TOC nodes and repeated selection
+    // changes reuse one scan instead of walking the document each time.
+    const headings = headingsFor(this.view.state.doc, this.view.state.schema.nodes.heading)
+    return headings.map(heading => ({ pos: heading.pos, level: heading.level, text: heading.text }))
   }
 
   refreshHeadings() {
     if (this.disposed) return
     const headings = this.extractHeadings()
+    // Selection changes fire on every keystroke; rebuilding identical DOM each
+    // time is pure waste. The rendered signature decides whether a rebuild is
+    // actually needed.
+    const signature = headings.map(heading => `${heading.level}:${heading.pos}:${heading.text}`).join('\u0000')
+    if (signature === this.rendered && this.listEl.childElementCount > 0) return
+    this.rendered = signature
     this.listEl.replaceChildren()
 
     if (!headings.length) {

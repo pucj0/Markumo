@@ -65,6 +65,22 @@ export function renderFrontMatterCard(
     return
   }
 
+  // A block this module cannot rewrite byte-exactly is shown read-only, with a
+  // clear reason and the source editor as the only edit path. Silently
+  // re-serialising it would drop comments, order or quoting.
+  if (!parsed.editable) {
+    const notice = document.createElement('div')
+    notice.className = 'md-frontmatter-error'
+    notice.setAttribute('role', 'status')
+    notice.textContent = `此元数据无法可视化修改（${parsed.unsafeReason || '结构过于复杂'}），请使用“编辑源码”。`
+    container.append(notice)
+    const preview = document.createElement('pre')
+    preview.className = 'md-frontmatter-raw-preview'
+    preview.textContent = parsed.raw.replace(/^---\r?\n?|\r?\n?(?:---|\.\.\.)\s*$/g, '')
+    container.append(preview)
+    return
+  }
+
   // Visual Body
   const body = document.createElement('div')
   body.className = 'md-frontmatter-body'
@@ -83,6 +99,13 @@ export function renderFrontMatterCard(
   titleVal.disabled = readOnly
   titleVal.onchange = () => {
     const nextYaml = updateFrontMatterField(yamlSource, 'title', titleVal.value.trim())
+    // `null` means the block became unsafe to rewrite: revert and let the user
+    // edit the source instead of writing a guessed value.
+    if (nextYaml === null) {
+      titleVal.value = parsed.title || ''
+      onOpenSource()
+      return
+    }
     if (nextYaml !== yamlSource) onUpdateSource(nextYaml)
   }
   titleRow.append(titleLabel, titleVal)
