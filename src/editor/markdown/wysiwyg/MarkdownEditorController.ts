@@ -20,6 +20,7 @@ import { CodeBlockView } from './CodeBlockView'
 import { CalloutNodeView } from './CalloutNodeView'
 import { TocNodeView } from './TocNodeView'
 import { FootnoteDefNodeView } from './FootnoteDefNodeView'
+import { renderFrontMatterCard } from './FrontMatterCard'
 import { LiveImageView } from './LiveImageView'
 import { ImagePreview } from './ImagePreview'
 import { FenceAutocomplete } from './FenceAutocomplete'
@@ -1722,8 +1723,18 @@ export class MarkdownEditorController implements LiveEditor {
         preview.textContent = source
       } else if (/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)/.test(source)) {
         summary.textContent = '元数据 (YAML Front Matter)'
-        preview.className = 'md-yaml-preview'
-        preview.textContent = source.replace(/^---\r?\n?|\r?\n?(?:---|\.\.\.)\s*$/g, '').trim()
+        renderFrontMatterCard(
+          preview,
+          source,
+          newYaml => {
+            const pos = getPos()
+            if (pos !== undefined && !this.options.readOnly?.() && view.state.doc.nodeAt(pos) === node) {
+              view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, source: newYaml }))
+            }
+          },
+          () => editSource(),
+          !!this.options.readOnly?.()
+        )
       }
     }
 
