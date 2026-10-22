@@ -496,11 +496,12 @@ async function teardown(){
   ++positionEpoch;pendingAnchor=undefined;cancelAnimationFrame(anchorFrame);cancelAnimationFrame(scrollFrame);scrollFrame=0
   const oldLoading=loading,oldWorker=worker,oldNative=nativeWorker,oldTransport=transport
   loading=undefined;pdf.value=undefined;worker=undefined;nativeWorker=undefined;transport=undefined;oldTransport?.abort()
+  oldWorker?.destroy();oldNative?.terminate()
   await nextTick()
   let timeout:ReturnType<typeof setTimeout>|undefined
-  try{if(oldLoading)await Promise.race([oldLoading.destroy(),new Promise<void>(resolve=>{timeout=setTimeout(resolve,2000)})])}
+  try{if(oldLoading)await Promise.race([oldLoading.destroy(),new Promise<void>(resolve=>{timeout=setTimeout(resolve,1000)})])}
   catch{/* Already destroyed during load. */}
-  finally{if(timeout)clearTimeout(timeout);oldWorker?.destroy();oldNative?.terminate()}
+  finally{if(timeout)clearTimeout(timeout)}
 }
 async function load(){
   savePosition()

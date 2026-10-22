@@ -69,7 +69,7 @@ async function load() {
     const parts: BlobPart[] = []
     for (let offset=0; offset<metadata.byteLength; offset+=MEDIA_CHUNK) {
       const bytes = await readMediaChunk(props.doc.fileToken!, version, offset, Math.min(MEDIA_CHUNK, metadata.byteLength-offset))
-      if (disposed || generation !== current) return
+      if (disposed || generation !== current) { parts.length = 0; release(); return }
       parts.push(bytes.buffer as ArrayBuffer)
     }
     const blob = new Blob(parts, { type:metadata.mime }); parts.length = 0
