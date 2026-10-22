@@ -70,11 +70,10 @@ export class TocNodeView implements NodeView {
     this.refreshHeadings()
   }
 
-  private extractHeadings(): HeadingItem[] {
-    // Shared, signature-keyed cache: several TOC nodes and repeated selection
+  private extractHeadings(): readonly HeadingItem[] {
+    // Shared, immutable-document cache: several TOC nodes and repeated selection
     // changes reuse one scan instead of walking the document each time.
-    const headings = headingsFor(this.view.state.doc, this.view.state.schema.nodes.heading)
-    return headings.map(heading => ({ pos: heading.pos, level: heading.level, text: heading.text }))
+    return headingsFor(this.view.state.doc, this.view.state.schema.nodes.heading)
   }
 
   refreshHeadings() {

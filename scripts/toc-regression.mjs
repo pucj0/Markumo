@@ -161,6 +161,44 @@ try {
     assert.ok(updatedSource.includes('# 标题一'))
   })
 
+  await test('7. Immutable document identity isolates TOCs, text changes and shifted heading positions without selection rescans', async () => {
+    const evidence = await page.evaluate(async () => {
+      const { parseMarkdown } = await import('/src/editor/markdown/wysiwyg/MarkdownParser.ts')
+      const { headingsFor, clearHeadingCache } = await import('/src/editor/markdown/wysiwyg/tocIndex.ts')
+      clearHeadingCache()
+      const a = parseMarkdown('# 0123456789abcdef-A\n\n正文').doc
+      const b = parseMarkdown('前置正文\n\n# 0123456789abcdef-B\n\n正文').doc
+      const type = a.type.schema.nodes.heading
+      let scans = 0
+      const descend = a.descendants.bind(a)
+      a.descendants = (...args) => { scans++; return descend(...args) }
+      const first = headingsFor(a, type)
+      for (let i = 0; i < 1000; i++) if (headingsFor(a, type) !== first) throw Error('Same immutable document must share its cached heading array')
+      const second = headingsFor(b, type)
+      const shifted = parseMarkdown('新增正文\n\n# 0123456789abcdef-A\n\n正文').doc
+      const third = headingsFor(shifted, type)
+      return { first, second, third, scans }
+    })
+    assert.equal(evidence.first[0].text, '0123456789abcdef-A')
+    assert.equal(evidence.second[0].text, '0123456789abcdef-B')
+    assert.ok(evidence.second[0].pos > evidence.first[0].pos)
+    assert.ok(evidence.third[0].pos > evidence.first[0].pos)
+    assert.equal(evidence.scans, 1, '1000 cache hits must not scan the document again')
+
+    const original = '[TOC]\n\n[TOC]\n\n# 0123456789abcdef-A\n\n正文'
+    await page.evaluate(text => window.f.reset(text, true), original)
+    await page.waitForFunction(() => window.f.ready() && document.querySelectorAll('.md-toc-item').length === 2)
+    const changed = original.replace('# 0123456789abcdef-A', '前置正文\n\n# 0123456789abcdef-B')
+    await page.evaluate(text => window.f.manager.dispatch(window.f.id, {changes:{from:0,to:window.f.source().length,insert:text},userEvent:'input.test'}), changed)
+    await page.waitForFunction(() => [...document.querySelectorAll('.md-toc-text')].every(el => el.textContent === '0123456789abcdef-B'))
+    await page.locator('.md-toc-item').last().click()
+    assert.equal(await page.evaluate(() => window.f.live().view.state.selection.$from.parent.textContent), '0123456789abcdef-B')
+    assert.equal(await page.evaluate(() => window.f.source()), changed)
+    assert.equal(await page.evaluate(() => window.f.history().undo), 1)
+    await page.evaluate(() => window.f.undo())
+    await page.waitForFunction(text => window.f.source() === text, original)
+  })
+
   console.log(`========================================`)
   console.log(`All ${results.length} TOC regression tests passed successfully!`)
   console.log(`========================================`)
