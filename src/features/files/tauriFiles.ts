@@ -5,6 +5,7 @@ import type { FileGateway, FileMetadata, OpenBatch, OpenFile, Preferences, SaveT
 
 // No path-based arbitrary read/write API: native selection creates backend tokens.
 export const tauriFiles: FileGateway = {
+  historyTransactional: true,
   checkExternal: token => invoke<string>('check_external_file', { token }),
   readExternal: (token, expectedVersion, encoding) => invoke<OpenFile>('read_external_file', { token, expectedVersion, encoding }),
   beginExternalWatch: () => invoke('begin_external_watch'),

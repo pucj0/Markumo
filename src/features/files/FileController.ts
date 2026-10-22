@@ -173,8 +173,13 @@ export class FileController {
       // text afterwards is not a substitute for it.
       const diskBaseline = this.manager.getBaselineText(id)
       const baselinePath = !saveAs ? source.path || null : null
-      if (diskBaseline !== null && baselinePath) {
-        void recordVersion(baselinePath, diskBaseline, 'disk').catch(() => {})
+      if (!this.gateway.historyTransactional && diskBaseline !== null && baselinePath) {
+        try {
+          const archived = await recordVersion(baselinePath, diskBaseline, 'disk')
+          for (const warning of archived?.warnings ?? []) this.notify(warning)
+        } catch (error) {
+          throw new Error(`保存前历史备份失败，已取消写入，原文件和当前编辑内容均保留：${fileError(error)}`)
+        }
       }
       const result = await this.gateway.save(token!, snapshot.text, version, targetEncoding, targetBom)
       targetToken = undefined
@@ -183,10 +188,13 @@ export class FileController {
       // recovery/release callback can let an older check run.
       if (accepted) {
         this.external.saved(id)
-        if (result.path) {
-          void recordVersion(result.path, snapshot.text.toString(), 'saved', automatic ? '自动保存' : '手动保存')
-            .then(record => { for (const warning of record?.warnings ?? []) this.notify(warning) })
-            .catch(error => this.notify(`历史版本记录失败：${fileError(error)}`))
+        if (result.path && !this.gateway.historyTransactional) {
+          try {
+            const record = await recordVersion(result.path, snapshot.text.toString(), 'saved', automatic ? '自动保存' : '手动保存')
+            for (const warning of record?.warnings ?? []) this.notify(warning)
+          } catch (error) {
+            this.notify(`正文已保存，但本次新版本未能写入历史：${fileError(error)}`)
+          }
         }
       }
       if (accepted) this.automaticErrors.delete(id)

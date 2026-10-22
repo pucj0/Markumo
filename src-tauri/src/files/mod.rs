@@ -1,6 +1,8 @@
 pub(crate) mod atomic;
 pub mod classfile;
 pub(crate) mod codec;
+#[cfg(test)]
+mod history_save_tests;
 pub mod external;
 #[cfg(test)]
 mod external_tests;
@@ -185,6 +187,7 @@ struct Grant {
     canonical: PathBuf,
     writable: bool,
     hex: bool,
+    encoding: Option<String>,
     owner: String,
     identity: Option<FileIdentity>,
 }
@@ -536,6 +539,7 @@ impl FileService {
                 canonical,
                 writable,
                 hex: false,
+                encoding: None,
                 owner: self.current_owner.clone(),
                 identity,
             },
@@ -659,7 +663,9 @@ impl FileService {
             .map(str::to_owned)
             .unwrap_or_else(|| self.grant(selected, path.clone(), true));
         if existing_token.is_none() {
-            self.grants.get_mut(&token).unwrap().hex = encoding == "Hex";
+            let grant = self.grants.get_mut(&token).unwrap();
+            grant.hex = encoding == "Hex";
+            grant.encoding = Some(encoding.clone());
         }
         let warning = if existing_token.is_none() {
             self.recent(&path)
@@ -843,6 +849,20 @@ impl FileService {
         encoding: &str,
         bom: bool,
     ) -> Result<FileMetadata> {
+        self.save_inner(token, text, expected, encoding, bom, None)
+    }
+
+    pub fn save_with_history(
+        &mut self, token: &str, text: &str, expected: Option<&str>,
+        encoding: &str, bom: bool, history: &crate::history::HistoryStore,
+    ) -> Result<FileMetadata> {
+        self.save_inner(token, text, expected, encoding, bom, Some(history))
+    }
+
+    fn save_inner(
+        &mut self, token: &str, text: &str, expected: Option<&str>,
+        encoding: &str, bom: bool, history: Option<&crate::history::HistoryStore>,
+    ) -> Result<FileMetadata> {
         self.require_text_grant(token)?;
         let path = self.validate(token, true)?;
         if self.grants.get(token).is_some_and(|grant| grant.hex) && encoding != "Hex" {
@@ -865,6 +885,21 @@ impl FileService {
         if bytes.len() as u64 > MAX_BYTES {
             return fail("size", "编码后的文件超过 16 MiB，已阻止写入。");
         }
+        // The FileStore mutex serializes this entire operation across windows.
+        // A failed archive aborts before touching disk; the atomic writer checks
+        // the disk version again after archiving to reject external changes.
+        if let Some(history) = history.filter(|_| encoding != "Hex") {
+            if path.exists() {
+                let (original, version, _) = read_disk(&path)?;
+                if Some(version.as_str()) != expected {
+                    return fail("conflict", "磁盘文件已变化，未归档或覆盖。")
+                }
+                let original_encoding = self.grants.get(token).and_then(|grant| grant.encoding.as_deref());
+                let (original_text, _, _) = codec::decode_with_path(&original, original_encoding, Some(&path))?;
+                history.record(&display_path(&path), &original_text, "disk", None)
+                    .map_err(|error| FileError::new("history_backup", &format!("保存前历史备份失败，原文件未覆盖：{error}")))?;
+            }
+        }
         // User documents keep their Windows file identity so a Desktop item never
         // moves; internal data keeps the atomic replacement helper instead.
         atomic::write_checked_preserving_identity(&path, &bytes, expected)?;
@@ -875,8 +910,17 @@ impl FileService {
                 "写入后检测到外部修改；磁盘状态未确认，编辑内容保留。",
             );
         }
-        self.grants.get_mut(token).unwrap().hex = encoding == "Hex";
-        let warning = self.recent(&path);
+        let grant = self.grants.get_mut(token).unwrap();
+        grant.hex = encoding == "Hex";
+        grant.encoding = Some(encoding.into());
+        let mut warnings = self.recent(&path).into_iter().collect::<Vec<_>>();
+        if let Some(history) = history.filter(|_| encoding != "Hex") {
+            match history.record(&display_path(&path), text, "saved", None) {
+                Ok(record) => warnings.extend(record.warnings),
+                Err(error) => warnings.push(format!("正文已保存，但本次新版本未能写入历史：{error}")),
+            }
+        }
+        let warning = if warnings.is_empty() { None } else { Some(warnings.join("\n")) };
         Ok(FileMetadata {
             token: token.into(),
             path: path.to_string_lossy().into_owned(),

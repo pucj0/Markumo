@@ -243,7 +243,7 @@ impl HistoryStore {
         }
 
         let entry = HistoryEntry {
-            id: format!("{}-{}", origin, now_millis()),
+            id: format!("{}-{}-{}", origin, now_millis(), &hash[..16]),
             hash: hash.clone(),
             bytes,
             created_at: now_millis(),

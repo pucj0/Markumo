@@ -333,6 +333,7 @@ pub async fn reopen_file(
 pub async fn save_file(
     window: Window,
     store: State<'_, FileStore>,
+    history: State<'_, Arc<Mutex<crate::history::HistoryStore>>>,
     token: String,
     text: String,
     expected_version: Option<String>,
@@ -340,8 +341,10 @@ pub async fn save_file(
     bom: bool,
 ) -> Result<FileMetadata> {
     let owner = window.label().to_owned();
+    let history = history.inner().clone();
     operate(store.inner().clone(), owner, move |service| {
-        service.save(&token, &text, expected_version.as_deref(), &encoding, bom)
+        let history = history.lock().map_err(|_| FileError::new("history_backup", "历史存储状态损坏，未执行保存。"))?;
+        service.save_with_history(&token, &text, expected_version.as_deref(), &encoding, bom, &history)
     })
     .await
 }

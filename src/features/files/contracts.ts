@@ -54,6 +54,8 @@ export interface Preferences {
 export interface ExternalFileHint { generation: number; tokens: string[]; error?: string | null }
 export interface WatchStatus { watcherCount: number; directoryCount: number; fileCount: number }
 export interface FileGateway {
+  /** Native save archives the old/new text inside its serialized transaction. */
+  historyTransactional?: boolean
   checkExternal?(token: string): Promise<string>
   readExternal?(token: string, expectedVersion: string, encoding: string): Promise<OpenFile>
   beginExternalWatch?(): Promise<number>
