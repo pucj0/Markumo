@@ -581,6 +581,17 @@ body.light .file-icon-gray { color: #6c7c92; }
   outline: none;
 }
 
+.markdown-live .md-code-block .md-code-placeholder {
+  margin: 0;
+  padding: 10px 30px 6px 14px;
+  font: var(--md-code-font-size)/var(--md-code-line-height) var(--font-mono);
+  color: var(--text);
+  background: transparent;
+  white-space: pre;
+  overflow-x: auto;
+  box-sizing: border-box;
+}
+
 /* Mermaid in CodeBlock */
 .markdown-live .md-diagram-toolbar {
   display: flex;
