@@ -583,7 +583,7 @@ body.light .file-icon-gray { color: #6c7c92; }
 
 .markdown-live .md-code-block .md-code-placeholder {
   margin: 0;
-  padding: 10px 30px 6px 14px;
+  padding: 10px 30px 6px 0;
   font: var(--md-code-font-size)/var(--md-code-line-height) var(--font-mono);
   color: var(--text);
   background: transparent;
@@ -592,12 +592,28 @@ body.light .file-icon-gray { color: #6c7c92; }
   box-sizing: border-box;
 }
 .markdown-live .md-code-block .md-code-placeholder > code {
+  display: block;
   font: inherit;
   padding: 0;
   border: 0;
   background: transparent;
   white-space: inherit;
 }
+.markdown-live .md-code-placeholder .md-code-line { display: flex; min-height: 1lh; }
+.markdown-live .md-code-placeholder .md-code-number {
+  display: none;
+  flex: none;
+  box-sizing: border-box;
+  min-width: calc(max(20px, var(--code-digits, 1) * 1ch + 8px) + 4px);
+  padding: 0 3px 0 9px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+}
+.markdown-live .md-code-placeholder.has-numbers .md-code-number { display: block; }
+.markdown-live .md-code-placeholder .md-code-text { display: block; padding: 0 14px; min-width: 0; }
+.markdown-live .md-code-placeholder:not(.is-wrapped) .md-code-text { flex: none; }
 .markdown-live .md-code-block .md-code-placeholder.is-wrapped {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

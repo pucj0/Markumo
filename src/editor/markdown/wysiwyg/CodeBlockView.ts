@@ -13,6 +13,11 @@ import type { EditorView, NodeView } from 'prosemirror-view'
 import { parseFenceInfo, loadLanguage } from '../../languages'
 import { textClipboard } from '../../../features/shell/clipboard'
 import type { MarkdownTypography } from './contracts'
+import { LanguageSupport } from '@codemirror/language'
+import { syntaxSpans } from '../../core/syntaxSpans'
+import { staticCodeLines } from '../staticCode'
+
+const escapeCode = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]!))
 
 interface CodeSearchRange { from: number; to: number; current: boolean }
 const setCodeSearch = StateEffect.define<CodeSearchRange[]>()
@@ -84,9 +89,22 @@ export class CodeBlockView implements NodeView {
   private inViewport = false
   private isFocused = false
   private pointerActive = false
+  private coldDragAnchor: number | null = null
+  private dragPlaceholder = (event: PointerEvent) => {
+    const editor = this.cmInstance
+    if (!editor || this.coldDragAnchor === null) return
+    const range = document.caretRangeFromPoint(event.clientX, event.clientY)
+    const head = range && editor.contentDOM.contains(range.startContainer)
+      ? editor.posAtDOM(range.startContainer, range.startOffset)
+      : editor.posAtCoords({ x: event.clientX, y: event.clientY }, false)
+    if (head !== null) editor.dispatch({ selection: { anchor: this.coldDragAnchor, head } })
+  }
   private savedSelection = EditorSelection.single(0)
+  private placeholderGeneration = 0
   private releasePointer = () => {
     this.pointerActive = false
+    this.coldDragAnchor = null
+    window.removeEventListener('pointermove', this.dragPlaceholder)
     window.removeEventListener('pointerup', this.releasePointer)
     window.removeEventListener('pointercancel', this.releasePointer)
     if (!this.inViewport) this.detachEditor()
@@ -186,13 +204,38 @@ export class CodeBlockView implements NodeView {
       window.addEventListener('pointercancel', this.releasePointer)
       if (this.cmContainer.hidden || !this.cmContainer.contains(event.target as globalThis.Node)) return
       const wasStatic = !this.cmInstance
+      let sourceOffset: number | null = null
+      if (wasStatic && this.placeholder) {
+        const range = document.caretRangeFromPoint(event.clientX, event.clientY)
+        if (range) {
+          let offset = 0
+          for (const line of this.placeholder.querySelectorAll('.md-code-text')) {
+            if (line.contains(range.startContainer)) {
+              const prefix = document.createRange()
+              prefix.selectNodeContents(line)
+              prefix.setEnd(range.startContainer, range.startOffset)
+              sourceOffset = offset + prefix.toString().length
+              break
+            }
+            offset += (line.textContent?.length ?? 0) + 1
+          }
+        }
+      }
       const editor = this.ensureEditor()
       if (wasStatic && event.button === 0) {
         // pointerdown precedes the native mousedown. Mount at the same geometry
         // and place the caret on this first click, including on a cold placeholder.
-        const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
-        if (pos !== null) editor.dispatch({ selection: { anchor: pos } })
+        const pos = sourceOffset ?? editor.posAtCoords({ x: event.clientX, y: event.clientY })
+        const anchor = event.shiftKey ? editor.state.selection.main.anchor : pos
+        if (pos !== null && anchor !== null) editor.dispatch({ selection: { anchor, head: pos } })
         editor.focus()
+        // The original pointer target is removed during mounting. Its default
+        // mousedown would focus ProseMirror instead of the new content DOM.
+        // Preserve this gesture's source anchor until pointerup. Subsequent
+        // gestures use CM's native handlers; this one began on the removed DOM.
+        event.preventDefault()
+        this.coldDragAnchor = anchor
+        window.addEventListener('pointermove', this.dragPlaceholder)
       }
     }, { capture: true })
 
@@ -384,9 +427,22 @@ export class CodeBlockView implements NodeView {
       this.cmContainer.append(this.placeholder)
     }
     const code = document.createElement('code')
-    code.textContent = this.node.textContent || '\n'
+    const source = this.node.textContent
+    code.innerHTML = staticCodeLines(source, [], escapeCode)
+    this.placeholder.style.setProperty('--code-digits', String(source.split('\n').length).length.toString())
+    code.querySelectorAll('.md-code-number').forEach((number, index) => { number.textContent = String(index + 1) })
     this.placeholder.replaceChildren(code)
     this.placeholder.classList.toggle('is-wrapped', this.settings.codeWrap)
+    this.placeholder.classList.toggle('has-numbers', this.settings.codeLineNumbers)
+    const generation = ++this.placeholderGeneration
+    const { language } = parseFenceInfo(this.node.attrs.params)
+    // Reuse the same parser and token classes as preview/export, without CM state.
+    // Do not parse giant fences just to decorate an offscreen placeholder.
+    if (language && source.length <= 64 * 1024) void loadLanguage(language.name, 'fence').then(support => {
+      if (this.dead || this.cmInstance || generation !== this.placeholderGeneration || !(support instanceof LanguageSupport)) return
+      code.innerHTML = staticCodeLines(source, syntaxSpans(source, support), escapeCode)
+      code.querySelectorAll('.md-code-number').forEach((number, index) => { number.textContent = String(index + 1) })
+    }).catch(() => { /* Plain source remains selectable on language load failure. */ })
   }
 
   refreshReadOnly() {
@@ -401,7 +457,7 @@ export class CodeBlockView implements NodeView {
     this.dom.classList.toggle('is-focused', isFocused)
   }
 
-  setMermaidEditing(editing: boolean) {
+  setMermaidEditing(editing: boolean, focus = true) {
     if (this.isMermaid && !this.themeObserver) {
       let light = document.body.classList.contains('light')
       this.themeObserver = new MutationObserver(() => {
@@ -423,7 +479,8 @@ export class CodeBlockView implements NodeView {
     this.editSourceButton.textContent = editing ? '完成编辑' : '编辑图表源码'
 
     if (editing) {
-      this.ensureEditor().focus()
+      const editor = this.ensureEditor()
+      if (focus) editor.focus()
     } else {
       // Free heavy editor instance when displaying rendered Mermaid diagram
       this.detachEditor()
@@ -589,6 +646,14 @@ export class CodeBlockView implements NodeView {
     }
   }
 
+  revealSearchMatch(from: number, to: number, focus: boolean) {
+    if (this.isMermaid && !this.isEditingMermaid) this.setMermaidEditing(true, false)
+    const editor = this.ensureEditor()
+    if (focus) this.setSelection(from, to)
+    editor.dispatch({ effects: CMView.scrollIntoView(from, { y: 'nearest' }) })
+    this.dom.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }
+
   typography(settings: MarkdownTypography) {
     this.settings = settings
     if (this.cmInstance) {
@@ -629,6 +694,7 @@ export class CodeBlockView implements NodeView {
     this.dead = true
     window.removeEventListener('pointerup', this.releasePointer)
     window.removeEventListener('pointercancel', this.releasePointer)
+    window.removeEventListener('pointermove', this.dragPlaceholder)
     this.observer?.disconnect()
     this.observer = undefined
     this.themeObserver?.disconnect()

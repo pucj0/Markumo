@@ -341,17 +341,35 @@ try {
 
   // Regression E: Nested Embedded CodeBlock in Live Editor
   await test('Markdown Live: embedded CodeBlock focuses actual caret without fighting outer container', async () => {
-    const codeDoc = Array.from({length:20},(_,i)=>`Intro ${i}`).join('\n\n')+'\n\n```javascript\n'+Array.from({length:65},(_,i)=>`const value${i} = ${i};`).join('\n')+'\n```\n\nTail paragraph.'
+    const codeDoc = Array.from({length:20},(_,i)=>`Intro ${i}`).join('\n\n')+'\n\n'+Array.from({length:12},(_,block)=>'```javascript\n'+Array.from({length:65},(_,i)=>`const block${block}value${i} = ${i};`).join('\n')+'\n```\n\n').join('')+'Tail paragraph.'
     await page.evaluate(codeDoc => {
       window.f.reset(codeDoc, 'md', 'live')
       window.f.manager.setTypewriterMode(true)
     }, codeDoc)
 
-    await page.waitForSelector('.markdown-live .md-code-block .cm-editor')
-    await page.locator('.markdown-live .md-code-block .cm-line').first().click()
+    const block = page.locator('.markdown-live .md-code-block').nth(8)
+    await block.waitFor()
+    assert.equal(await block.locator('.cm-editor').count(), 0, 'Distant code block starts without an editor')
+    // A real user first scrolls to the block; .cm-line is not a scroll target
+    // while its offscreen editor is virtualized.
+    await block.scrollIntoViewIfNeeded()
+    await block.locator('.cm-line').first().click({position:{x:130,y:8}})
+    assert.equal(await page.evaluate(()=>!!document.activeElement?.closest('.cm-editor')),true)
     await page.keyboard.press('Control+End');await page.keyboard.type(' // actual input');await settled()
     assert.equal(await page.evaluate(()=>!!document.activeElement?.closest('.cm-editor')),true)
     assert.ok(Math.abs(await caretOffset()) <= 20, 'Outer Live scroller centers the embedded CM caret, not the block top')
+    assert.ok(await page.evaluate(()=>window.f.manager.getText(window.f.manager.activeId).includes('const block8value64 = 64; // actual input')),'Input goes into the requested block')
+    await page.keyboard.press('Control+Home')
+    assert.equal(await page.evaluate(()=>window.f.CM.findFromDOM(document.activeElement.closest('.cm-editor')).state.selection.main.head),0)
+    await page.evaluate(()=>{
+      const data=new DataTransfer();data.setData('text/plain','pasted line one\npasted line two\n')
+      document.activeElement.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}))
+    })
+    await settled()
+    assert.ok(await page.evaluate(()=>window.f.manager.getText(window.f.manager.activeId).includes('pasted line one\npasted line two\nconst block8value0')))
+    await page.evaluate(()=>window.f.manager.setTypewriterMode(false))
+    await page.keyboard.type('after mode off ')
+    assert.ok(await page.evaluate(()=>window.f.manager.getText(window.f.manager.activeId).includes('after mode off const block8value0')))
   })
 
   // Regression F: IME Composition Guard

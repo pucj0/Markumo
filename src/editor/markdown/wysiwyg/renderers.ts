@@ -8,6 +8,50 @@ const mathHtmlCache = new Map<string, string>()
 const DIAGRAM_CACHE_LIMIT = 30
 const diagramSvgCache = new Map<string, string>()
 
+/** Namespace a sanitized DOM fragment on every mount, including cache hits.
+ * Rewrite CSS through CSSOM so selectors and declarations remain separate. */
+function mountDiagram(host: HTMLElement, sanitized: string) {
+  const template = document.createElement('template')
+  template.innerHTML = sanitized
+  const ids = new Map<string, string>(), prefix = `markumo-mount-${++identity}-`
+  for (const element of template.content.querySelectorAll('[id]')) {
+    const old = element.id, next = prefix + ids.size
+    ids.set(old, next)
+    element.id = next
+  }
+  const urls = (value: string) => value.replace(/url\(\s*(["']?)#([^\s)'"]+)\1\s*\)/g,
+    (original, _quote, id: string) => ids.has(id) ? `url(#${ids.get(id)})` : original)
+  const decodeIdentifier = (value: string) => value.replace(/\\([\da-f]{1,6}\s?|.)/gi, (_all, escaped: string) =>
+    /^[\da-f]/i.test(escaped) ? String.fromCodePoint(parseInt(escaped.trim(), 16)) : escaped)
+  for (const element of template.content.querySelectorAll('*')) {
+    for (const attribute of [...element.attributes]) {
+      if (attribute.name === 'id') continue
+      let value = urls(attribute.value)
+      if (['aria-labelledby', 'aria-describedby'].includes(attribute.name)) value = value.split(/\s+/).map(id => ids.get(id) ?? id).join(' ')
+      if (['href', 'xlink:href'].includes(attribute.name) && value.startsWith('#')) value = '#' + (ids.get(value.slice(1)) ?? value.slice(1))
+      element.setAttribute(attribute.name, value)
+    }
+    if (element.localName === 'style') {
+      const sheet = new CSSStyleSheet()
+      sheet.replaceSync(element.textContent ?? '')
+      const rewrite = (rules: CSSRuleList) => {
+        for (const rule of rules) {
+          if (rule instanceof CSSStyleRule) {
+            rule.selectorText = rule.selectorText.replace(/#((?:\\[\da-f]{1,6}\s?|\\.|[\w\u0080-\uFFFF-])+)/gi, (original, token: string) => {
+              const id = ids.get(decodeIdentifier(token))
+              return id ? '#' + CSS.escape(id) : original
+            })
+            for (const property of rule.style) rule.style.setProperty(property, urls(rule.style.getPropertyValue(property)), rule.style.getPropertyPriority(property))
+          } else if ('cssRules' in rule) rewrite((rule as CSSGroupingRule).cssRules)
+        }
+      }
+      rewrite(sheet.cssRules)
+      element.textContent = [...sheet.cssRules].map(rule => rule.cssText).join('\n')
+    }
+  }
+  host.replaceChildren(template.content)
+}
+
 export function clearRenderCaches() {
   mathHtmlCache.clear()
   diagramSvgCache.clear()
@@ -23,12 +67,17 @@ export async function renderDiagram(host: HTMLElement, source: string, current: 
 
   if (cachedSvg !== undefined) {
     if (!host.isConnected || !current()) return
-    host.innerHTML = cachedSvg
+    diagramSvgCache.delete(cacheKey)
+    diagramSvgCache.set(cacheKey, cachedSvg)
+    mountDiagram(host, cachedSvg)
     return
   }
 
   const request = serial.then(async () => {
     if (!host.isConnected || !current()) return
+    // Concurrent identical requests may have queued before the first render.
+    const queuedCache = diagramSvgCache.get(cacheKey)
+    if (queuedCache !== undefined) { mountDiagram(host, queuedCache); return }
     const [{ default: mermaid }, { default: purify }] = await Promise.all([import('mermaid'), import('dompurify')])
     if (!host.isConnected || !current()) return
 
@@ -58,7 +107,7 @@ export async function renderDiagram(host: HTMLElement, source: string, current: 
       }
       diagramSvgCache.set(cacheKey, cleaned)
 
-      host.innerHTML = cleaned
+      mountDiagram(host, cleaned)
     } finally {
       document.getElementById('d' + id)?.remove()
     }

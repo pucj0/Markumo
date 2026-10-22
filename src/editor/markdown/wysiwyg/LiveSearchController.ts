@@ -220,8 +220,7 @@ export class LiveSearchController {
         if (pos === match.codeBlockPos) {
           const from = match.from - pos - 1
           const to = match.to - pos - 1
-          if (this.view.hasFocus()) codeView.setSelection(from, to)
-          codeView.dom.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+          codeView.revealSearchMatch(from, to, this.view.hasFocus())
           return
         }
       }
@@ -237,7 +236,7 @@ export class LiveSearchController {
 
   replaceCurrent() {
     const state = this.pluginState
-    if (!this.view.editable || this.view.composing || !state || !state.valid || state.currentIndex < 0 || state.currentIndex >= state.matches.length) return
+    if (!this.view.editable || this.view.composing || [...this.codeViewsGetter()].some(code => code.isComposing) || !state || !state.valid || state.currentIndex < 0 || state.currentIndex >= state.matches.length) return
     const match = state.matches[state.currentIndex]
 
     const tr = replaceMatch(this.view.state.tr, match, replacementText(match, this.replaceInput.value, state.options.regexp))
@@ -255,7 +254,7 @@ export class LiveSearchController {
 
   replaceAll() {
     const state = this.pluginState
-    if (!this.view.editable || this.view.composing || !state || !state.valid || !state.matches.length) return
+    if (!this.view.editable || this.view.composing || [...this.codeViewsGetter()].some(code => code.isComposing) || !state || !state.valid || !state.matches.length) return
 
     // The UI deliberately caps highlights; never silently call a partial batch "all".
     if (state.matches.length >= 1500) {

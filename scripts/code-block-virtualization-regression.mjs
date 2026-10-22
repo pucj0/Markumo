@@ -84,10 +84,129 @@ try {
     })
     assert.ok(active <= bound, `After scrolling to ${ordinal}: ${active} active CMViews exceeds viewport bound ${bound}`)
   }
+  // Freeze only this target's visibility observer to exercise a genuinely cold
+  // placeholder click. All editing still uses the production pointer handlers.
+  await page.evaluate(() => {
+    const code=[...window.f.live().codeViews][100]
+    code.observer.disconnect()
+  })
+  const cold=page.locator('.md-code-block').nth(100)
+  await cold.scrollIntoViewIfNeeded()
+  await cold.locator('.md-code-text').nth(1).waitFor()
+  const point=await cold.locator('.md-code-text').nth(1).evaluate(el=>{
+    const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);let text,remaining=7
+    while((text=walker.nextNode())&&text.length<remaining) remaining-=text.length
+    const range=document.createRange();range.setStart(text,remaining);range.collapse(true)
+    const r=range.getBoundingClientRect();return {x:r.x+1,y:(r.top+r.bottom)/2,left:el.getBoundingClientRect().left,font:getComputedStyle(el).font,padding:getComputedStyle(el).padding}
+  })
+  await page.mouse.click(point.x,point.y)
+  const clicked=await page.evaluate(()=>{
+    const code=[...window.f.live().codeViews][100], cm=code.existingEditor
+    return {head:cm?.state.selection.main.head,expected:code.node.textContent.indexOf('\n')+1+7,focus:code.hasFocus}
+  })
+  assert.equal(clicked.focus,true,'One cold placeholder click focuses embedded CM')
+  assert.equal(clicked.head,clicked.expected,'First click preserves requested source coordinate '+JSON.stringify(clicked))
+  await page.keyboard.type('COLD')
+  await page.waitForFunction(()=>window.f.source().includes('second COLDline'))
+  await page.keyboard.press('Control+z')
+  await page.waitForFunction(source=>window.f.source()===source,source)
+  await page.keyboard.press('Control+y')
+  await page.waitForFunction(()=>window.f.source().includes('second COLDline'))
+  await page.keyboard.press('Control+z')
+  await page.waitForFunction(source=>window.f.source()===source,source)
+  const cdp=await page.context().newCDPSession(page)
+  await cdp.send('Input.imeSetComposition',{text:'中文',selectionStart:2,selectionEnd:2})
+  assert.equal(await page.evaluate(()=>window.f.manager.isComposing),true)
+  await page.evaluate(()=>{window.f.live().dom.scrollTop=0})
+  assert.equal(await page.evaluate(()=>[...window.f.live().codeViews][100].hasFocus),true)
+  await cdp.send('Input.insertText',{text:'中文'})
+  await page.waitForFunction(()=>window.f.source().includes('second 中文line'))
+  // Retain reverse cross-line selections, including during a native pointer drag.
+  await page.evaluate(()=>{
+    const code=[...window.f.live().codeViews][100]
+    code.existingEditor.dispatch({selection:{anchor:code.node.textContent.length,head:2}})
+    code.inViewport=false;code.detachEditor()
+  })
+  assert.equal(await page.evaluate(()=>[...window.f.live().codeViews][100].existingEditor.state.selection.main.empty),false)
+  // Start a real drag on a cold placeholder, then continue on the mounted CM.
+  await page.evaluate(()=>[...window.f.live().codeViews][110].observer.disconnect())
+  const dragBlock=page.locator('.md-code-block').nth(110)
+  await dragBlock.scrollIntoViewIfNeeded()
+  const dragStart=await dragBlock.locator('.md-code-text').first().evaluate(el=>{const r=el.getBoundingClientRect();return{x:r.left+16,y:r.top+8}})
+  await page.mouse.move(dragStart.x,dragStart.y);await page.mouse.down()
+  await page.waitForTimeout(80)
+  const dragEnd=await page.evaluate(()=>{
+    const code=[...window.f.live().codeViews][110],pos=code.node.textContent.indexOf('\n')+1+6,r=code.existingEditor.coordsAtPos(pos)
+    return{x:r.left+1,y:(r.top+r.bottom)/2}
+  })
+  await page.mouse.move(dragEnd.x,dragEnd.y,{steps:8});await page.mouse.up()
+  assert.equal(await page.evaluate(()=>{
+    const code=[...window.f.live().codeViews][110],range=code.existingEditor.state.selection.main
+    return !range.empty&&code.node.textContent.slice(range.from,range.to).includes('\n')
+  }),true,'Dragging from the first cold gesture creates a cross-line text selection')
+  console.log('PASS cold first-click coordinate, typing, undo/redo, browser IME and cross-line selection')
+
+  await page.evaluate(source=>window.f.reset(source,true),source)
+  await page.waitForFunction(()=>window.f.ready())
+  await page.evaluate(()=>window.f.live().find(true))
+  await page.getByRole('textbox',{name:'查找',exact:true}).fill('value190')
+  await page.getByRole('textbox',{name:'替换',exact:true}).fill('renamed190')
+  await page.waitForFunction(()=>document.querySelector('.md-live-search .search-count')?.textContent==='1 / 1')
+  await page.waitForSelector('.cm-searchMatch-selected')
+  await page.getByRole('button',{name:'替换当前匹配',exact:true}).click()
+  await page.waitForFunction(()=>window.f.source().includes('const renamed190 = 190;'))
+  await page.getByRole('button',{name:'关闭查找 (Esc)',exact:true}).click()
+  await page.evaluate(()=>window.f.undo())
+  await page.waitForFunction(source=>window.f.source()===source,source)
+  assert.ok(await page.locator('.md-code-block .cm-editor').count()<35,'Search navigation activates only nearby/current code blocks')
+
+  // Geometry is derived by normal layout; changing width/wrap/numbers must not
+  // leave a stale min-height from the previous live view.
+  const geometry=[]
+  for(const width of [1280,600]) {
+    await page.setViewportSize({width,height:850})
+    const text='Visual paragraph.\n\n```js\n'+Array.from({length:8},(_,i)=>`const longLine${i} = "${'word '.repeat(30)}";`).join('\n')+'\n```\n'
+    await page.evaluate(text=>window.f.reset(text,true),text)
+    await page.waitForFunction(()=>window.f.ready())
+    await page.waitForTimeout(150)
+    for(const wrap of [false,true]) for(const numbers of [false,true]) {
+      const sizes=await page.evaluate(async({wrap,numbers})=>{
+        const live=window.f.live(),code=[...live.codeViews][0]
+        code.observer.disconnect();code.inViewport=false
+        live.typography({...live.settings,codeWrap:wrap,codeLineNumbers:numbers})
+        code.detachEditor()
+        const before=code.cmContainer.getBoundingClientRect().height
+        code.ensureEditor()
+        await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))
+        const after=code.cmContainer.getBoundingClientRect().height
+        return {before,after}
+      },{wrap,numbers})
+      geometry.push({width,wrap,numbers,...sizes})
+      assert.ok(Math.abs(sizes.before-sizes.after)<=2,`Placeholder/live height parity: ${JSON.stringify(geometry.at(-1))}`)
+    }
+    await page.screenshot({path:`${output}/${width===600?'narrow':'wide'}.png`})
+  }
+  await page.setViewportSize({width:1280,height:850})
+  await page.evaluate(()=>window.f.split())
+  await page.waitForFunction(()=>window.f.panes.length===2&&window.f.ready())
+  await page.waitForTimeout(200)
+  assert.equal(await page.evaluate(()=>window.f.panes.every(p=>[...window.f.live(p).codeViews].every(code=>code.observer.root===window.f.live(p).dom))),true)
+  await page.screenshot({path:`${output}/multi-pane.png`})
+  await page.evaluate(()=>window.f.manager.setTypewriterMode(true))
+  await page.screenshot({path:`${output}/typewriter.png`})
+  await page.evaluate(()=>document.body.classList.remove('light'))
+  await page.screenshot({path:`${output}/dark.png`})
   const disposed = await page.evaluate(() => window.f.dispose())
   assert.equal(disposed.remaining, 0)
   assert.equal(await page.evaluate(() => window.allocations.live), 0)
+  // Missing IO safely mounts editors; read-only CM also refuses actual input.
+  await page.evaluate(()=>{window.IntersectionObserver=undefined;window.f.reset('Paragraph.\n\n```js\nread only\n```',true,true)})
+  await page.waitForSelector('.md-code-block .cm-content')
+  await page.locator('.md-code-block .cm-content').click()
+  await page.keyboard.type('SHOULD_NOT_WRITE')
+  assert.equal(await page.evaluate(()=>window.f.source()),'Paragraph.\n\n```js\nread only\n```')
+  await page.evaluate(()=>window.f.dispose())
   assert.deepEqual(errors, [])
-  fs.writeFileSync(`${output}/state-queries.json`, JSON.stringify({ initial, ...result }, null, 2))
+  fs.writeFileSync(`${output}/state-queries.json`, JSON.stringify({ initial, ...result,clicked,geometry }, null, 2))
   console.log('PASS 200 code blocks: 1000 state queries, search decorations, ordinary typing and canonical undo')
 } finally { await browser?.close(); await server.close() }

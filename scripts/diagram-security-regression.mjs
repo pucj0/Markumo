@@ -44,6 +44,36 @@ try {
   assert.equal(exported.title, 'Diagram export'); assert(exported.svg)
   const blocked = await render('flowchart LR\n A --> B\n classDef default fill:red')
   assert(blocked.error, 'Application CSS/directive guard remains enabled')
+  const duplicates = await page.evaluate(async () => {
+    const source = 'flowchart LR\n A[Start] --> B{Check}\n B --> C[Done]'
+    const hosts = Array.from({length:10},()=>{const host=document.createElement('div');document.body.append(host);return host})
+    const results = []
+    for (const light of [true,false,true]) {
+      document.body.classList.toggle('light',light)
+      await Promise.all(hosts.map(host=>window.diagram(host,source)))
+      const ids = [...document.querySelectorAll('[id]')].map(el=>el.id)
+      if(new Set(ids).size!==ids.length) throw Error('Duplicate SVG IDs across cache mounts')
+      for (const host of hosts) {
+        const svg=host.querySelector('svg')
+        if(!svg || svg.querySelectorAll('.flowchart-link').length<2) throw Error('Missing SVG connections')
+        const references=[]
+        for(const el of svg.querySelectorAll('*')) for(const attr of el.attributes) {
+          for(const match of attr.value.matchAll(/url\(["']?#([^\s)'"]+)/g)) {
+            const target=svg.querySelector('[id="'+CSS.escape(match[1])+'"]')
+            if(!target) throw Error('Reference escapes owning SVG: '+match[1])
+            references.push(target.localName)
+          }
+        }
+        if(!references.includes('marker')) throw Error('Arrow marker missing')
+        const path=svg.querySelector('.flowchart-link')
+        if(!getComputedStyle(path).markerEnd.includes('markumo-mount-')) throw Error('Computed arrow marker lost')
+      }
+      results.push({light,count:hosts.length,fill:getComputedStyle(hosts[0].querySelector('.node rect')).fill})
+    }
+    return results
+  })
+  assert.notEqual(duplicates[0].fill,duplicates[1].fill,'Theme-specific cache changes diagram styling')
+  assert.equal(duplicates[0].fill,duplicates[2].fill,'Light-theme cache hit restores original styling')
   fs.writeFileSync(`${out}/result.json`, JSON.stringify({ passed: true, result, radar, exported, blocked, packageVersion: JSON.parse(fs.readFileSync('node_modules/mermaid/package.json', 'utf8')).version }, null, 2))
   console.log('PASS actual Mermaid renderer: normal flow/XY, invalid XY range settles, CSS guard preserved')
 } finally { clearTimeout(timer); await browser?.close(); await server.close() }
