@@ -9,6 +9,7 @@ const server = await createServer({
   server: { host: '127.0.0.1', port: 1468, strictPort: true, hmr: false, watch: null }
 })
 const { planOutlineMove, applyOutlineMove, getSectionRange } = await server.ssrLoadModule('./src/editor/outline/outlineReorder.ts')
+const { parseMarkdown } = await server.ssrLoadModule('./src/editor/markdown/wysiwyg/MarkdownParser.ts')
 
 const results = []
 const test = async (name, run) => {
@@ -17,23 +18,12 @@ const test = async (name, run) => {
   console.log('PASS ' + name)
 }
 
-/** Builds outline items from a source by scanning headings, skipping fenced code. */
+/** Use the production outline's Markdown parser and its line maps. */
 function outlineOf(source) {
-  const items = []
-  let offset = 0
-  let fence = null
-  for (const line of source.split('\n')) {
-    const opener = /^\s*(```+|~~~+)/.exec(line)
-    if (opener) {
-      if (!fence) fence = opener[1][0]
-      else if (opener[1][0] === fence) fence = null
-    } else if (!fence) {
-      const match = /^(#{1,6})\s+([\s\S]*)$/.exec(line)
-      if (match) items.push({ id: `h-${offset}`, name: match[2], level: match[1].length, lineNumber: 1, from: offset })
-    }
-    offset += line.length + 1
-  }
-  return items
+  return parseMarkdown(source).blocks.filter(block => block.node.type.name === 'heading').map(block => ({
+    id: `h-${block.from}`, name: block.node.textContent, level: block.node.attrs.level, from: block.from,
+    lineNumber: source.slice(0, block.from).split('\n').length,
+  }))
 }
 
 const document = [
@@ -57,6 +47,21 @@ const document = [
   '# 第三章',
   '正文 E。',
 ].join('\n')
+
+await test('0. EOF section moves preserve complete LF/CRLF source, paragraph boundaries and final-newline state', async () => {
+  for (const eol of ['\n', '\r\n']) for (const final of ['', eol]) {
+    const source = ['# A', '正文A', '', '# B', '正文B'].join(eol) + final
+    const expected = ['# B', '正文B', '', '# A', '正文A'].join(eol) + final
+    const items = outlineOf(source)
+    for (const [from, to, side] of [[1, 0, 'before'], [0, 1, 'after']]) {
+      const plan = planOutlineMove(source, items, items[from].id, items[to].id, side)
+      assert.equal(plan.valid, true)
+      assert.equal(applyOutlineMove(source, plan), expected)
+      assert.equal(plan.changes.length, 2)
+      assert.deepEqual(outlineOf(expected).map(item => item.name), ['B', 'A'])
+    }
+  }
+})
 
 await test('1. moving a section carries its body and all descendants byte for byte', async () => {
   const items = outlineOf(document)
@@ -100,14 +105,14 @@ await test('3. a file without a trailing newline keeps that property', async () 
   const plan = planOutlineMove(source, items, items[0].id, items[1].id, 'after')
   const moved = applyOutlineMove(source, plan)
   assert.equal(moved.endsWith('\n'), false, 'no newline is invented')
-  assert.equal(moved, '# B\nbody b\n# A\nbody a')
+  assert.equal(moved, '# B\nbody b\n\n# A\nbody a')
 })
 
 await test('4. a file that ends with a newline keeps exactly one', async () => {
   const source = '# A\nbody a\n\n# B\nbody b\n'
   const items = outlineOf(source)
   const moved = applyOutlineMove(source, planOutlineMove(source, items, items[0].id, items[1].id, 'after'))
-  assert.equal(moved, '# B\nbody b\n# A\nbody a\n')
+  assert.equal(moved, '# B\nbody b\n\n# A\nbody a\n')
   assert.ok(!moved.endsWith('\n\n'), 'no extra blank line is added')
 })
 
@@ -115,7 +120,7 @@ await test('5. CRLF files stay CRLF and are not normalised', async () => {
   const source = '# A\r\nbody a\r\n\r\n# B\r\nbody b\r\n'
   const items = outlineOf(source)
   const moved = applyOutlineMove(source, planOutlineMove(source, items, items[0].id, items[1].id, 'after'))
-  assert.equal(moved, '# B\r\nbody b\r\n# A\r\nbody a\r\n')
+  assert.equal(moved, '# B\r\nbody b\r\n\r\n# A\r\nbody a\r\n')
   assert.ok(!/[^\r]\n/.test(moved), 'no lone LF appears')
 })
 
@@ -133,7 +138,7 @@ await test('7. front matter and other untouched source are preserved exactly', a
   const items = outlineOf(source)
   const moved = applyOutlineMove(source, planOutlineMove(source, items, items[0].id, items[1].id, 'after'))
   assert.ok(moved.startsWith('---\ntitle: 保留\n---\n\n'), 'front matter stays at the top')
-  assert.equal(moved, '---\ntitle: 保留\n---\n\n# B\ntext b\n# A\ntext a\n')
+  assert.equal(moved, '---\ntitle: 保留\n---\n\n# B\ntext b\n\n# A\ntext a\n')
 })
 
 await test('8. moving into itself or a child section is refused', async () => {
@@ -149,7 +154,7 @@ await test('9. duplicate heading names still move the right section', async () =
   const items = outlineOf(source)
   assert.equal(items.length, 3)
   const second = applyOutlineMove(source, planOutlineMove(source, items, items[2].id, items[1].id, 'before'))
-  assert.equal(second, '# Same\nfirst\n\n# Same\nthird\n# Other\nsecond\n')
+  assert.equal(second, '# Same\nfirst\n\n# Same\nthird\n\n# Other\nsecond\n')
 })
 
 await test('10. section ranges come from parsed positions and cover descendants', async () => {

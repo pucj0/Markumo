@@ -62,10 +62,9 @@ export function getSectionRange(items: OutlineItem[], sourceItem: OutlineItem, s
 /**
  * Plans moving a whole section without touching anything else.
  *
- * The changes are a single delete/insert pair at most, so the surrounding text —
- * including line endings and whether the file ends with a newline — is preserved
- * byte for byte. No separator is invented: the moved slice already carries the
- * newline that terminated it in the original document.
+ * Two disjoint edits move the section and transfer its boundary separator.
+ * A section at EOF has no following separator: borrow its preceding separator
+ * instead, preserving the document's exact final-newline suffix separately.
  */
 export function planOutlineMove(
   fullSource: string,
@@ -103,60 +102,25 @@ export function planOutlineMove(
     return invalid('目标位置位于该章节内部')
   }
 
-  let deleteFrom = sourceRange.from
-  const deleteTo = sourceRange.to
-  // A section that ends the file owns no trailing blank line, yet the blank line
-  // before it belongs to the boundary. Absorb exactly one separator so the block
-  // that becomes last keeps the file's final-newline state instead of gaining a
-  // trailing blank line.
-  if (deleteTo === fullSource.length) {
-    while (
-      deleteFrom >= 2 &&
-      (fullSource[deleteFrom - 1] === '\n' || fullSource[deleteFrom - 1] === '\r') &&
-      (fullSource[deleteFrom - 2] === '\n' || fullSource[deleteFrom - 2] === '\r')
-    ) {
-      deleteFrom -= 1
-    }
-  }
-
-  // The moved slice is copied verbatim: its own trailing newline (or its absence
-  // at end of file) travels with it.
   const section = fullSource.slice(sourceRange.from, sourceRange.to)
   if (!section) return invalid('章节源码为空')
-
-  // Only end-of-file without a trailing newline lands mid-line. There the block
-  // must be separated from the previous line, and the file's "no trailing
-  // newline" state is kept instead of inventing one.
-  const atLineStart = insertPos === 0 || /[\r\n]/.test(fullSource[insertPos - 1])
-  const atEnd = insertPos === fullSource.length
-  const eol = section.includes('\r\n') ? '\r\n' : '\n'
-  const content = section.replace(/(?:\r\n|\n|\r)+$/, '')
-  const fileEndsWithNewline = /[\r\n]$/.test(fullSource)
-  // At the end of the file the moved block must not turn its own trailing blank
-  // line into file-trailing whitespace: keep exactly the file's final-newline
-  // state, and never concatenate two lines.
-  const inserted = !atLineStart
-    ? `\n${content}`
-    : atEnd
-      ? content + (fileEndsWithNewline ? eol : '')
-      : section
-
-  const changes: SourceChange[] =
-    sourceRange.from < insertPos
-      ? [
-          { from: deleteFrom, to: deleteTo, insert: '' },
-          { from: insertPos, to: insertPos, insert: inserted },
-        ]
-      : [
-          { from: insertPos, to: insertPos, insert: inserted },
-          { from: deleteFrom, to: deleteTo, insert: '' },
-        ]
-
-  // Caret target: start of the moved section after both edits are applied.
-  const deletedLength = deleteTo - deleteFrom
-  const newCaretPos = deleteFrom < insertPos
-    ? insertPos - deletedLength
-    : insertPos
+  const trailing = (text: string) => /(?:\r\n|\n|\r)+$/.exec(text)?.[0] || ''
+  const finalSuffix = trailing(fullSource)
+  const sectionSuffix = trailing(section)
+  const core = section.slice(0, section.length - sectionSuffix.length)
+  const sourceAtEnd = sourceRange.to === fullSource.length
+  const preceding = sourceAtEnd ? trailing(fullSource.slice(0, sourceRange.from)) : ''
+  const separator = sourceAtEnd ? preceding : sectionSuffix
+  if (!separator) return invalid('章节边界缺少可保留的换行分隔符')
+  const deleteFrom = sourceRange.from - preceding.length
+  const removal: SourceChange = { from: deleteFrom, to: sourceRange.to, insert: sourceAtEnd ? finalSuffix : '' }
+  const destination: SourceChange = insertPos === fullSource.length
+    ? { from: insertPos - finalSuffix.length, to: insertPos, insert: separator + core + finalSuffix }
+    : { from: insertPos, to: insertPos, insert: core + separator }
+  const changes = [removal, destination].sort((a, b) => a.from - b.from)
+  if (changes[0].to > changes[1].from) return invalid('章节边界重叠')
+  const shift = removal.from < destination.from ? removal.insert.length - (removal.to - removal.from) : 0
+  const newCaretPos = destination.from + shift + (insertPos === fullSource.length ? separator.length : 0)
 
   return {
     valid: true,
