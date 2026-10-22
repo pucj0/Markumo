@@ -91,6 +91,7 @@ export interface ShellCommandsHost {
   reopenEncoding: (encoding: FileOpenEncoding, force?: boolean) => Promise<void>
   runFileOperation: (action: () => Promise<unknown>) => Promise<void>
   clipboardImages: () => Promise<ImageSource[]>
+  openHistory: () => void
 }
 
 export function useShellCommands(host: ShellCommandsHost) {
@@ -213,6 +214,7 @@ export function useShellCommands(host: ShellCommandsHost) {
       { id: 'open', title: '打开文件', detail: host.desktop ? 'Ctrl+O' : '需要 Tauri 桌面版', category: 'file', disabled: !host.desktop || host.fileBusy.value, action: () => void host.openFile() },
       { id: 'save', title: '保存文件', detail: 'Ctrl+S', category: 'action', disabled: !host.desktop || host.fileBusy.value || host.activeDoc.value?.kind === 'javaClass', action: () => void host.saveActive() },
       { id: 'save-as', title: '另存为', detail: 'Ctrl+Shift+S', category: 'action', disabled: !host.desktop || host.fileBusy.value || host.activeDoc.value?.kind === 'javaClass', action: () => void host.saveActive(true) },
+      { id: 'history', title: '历史版本…', detail: '查看并恢复已保存的版本', category: 'action', disabled: !host.desktop || !host.activeDoc.value?.path, action: () => host.openHistory() },
       { id: 'save-utf8', title: '另存为 UTF-8', detail: '转换编码，无 BOM', category: 'action', disabled: !host.desktop || host.fileBusy.value || host.activeDoc.value?.kind === 'javaClass' || host.activeDoc.value?.encoding === 'Hex', action: () => void host.saveActive(true, 'UTF-8') },
       { id: 'import-html', title: '导入 HTML…', detail: 'HTML 转 Markdown', category: 'action', action: () => void host.runFileOperation(() => host.importController.importDocument('html')) },
       { id: 'import-docx', title: '导入 Word (.docx)…', detail: 'Word 转 Markdown (Pandoc)', category: 'action', action: () => void host.runFileOperation(() => host.importController.importDocument('docx')) },

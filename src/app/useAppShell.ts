@@ -10,6 +10,8 @@ import type SettingsModal from '../components/modals/SettingsModal.vue'
 import type DiscardDialog from '../components/modals/DiscardDialog.vue'
 import type Toast from '../components/common/Toast.vue'
 import type UpdateConfirm from '../components/modals/UpdateConfirm.vue'
+import type HistoryDialog from '../components/layout/HistoryDialog.vue'
+import { migrateLegacyHistory } from '../features/history/historyService'
 import { relativeMarkdownLink } from '../editor/markdown/links'
 import { FileController, fileError } from '../features/files/FileController'
 import { openDroppedDirectories, type NativeDropInput } from '../features/files/nativeDrop'
@@ -63,6 +65,26 @@ export function useAppShell() {
   const discardRef = ref<InstanceType<typeof DiscardDialog> | null>(null)
   const toastRef = ref<InstanceType<typeof Toast> | null>(null)
   const gotoLineRef = ref<{ open: () => void; close: () => void; visible: boolean } | null>(null)
+
+  // Saved-version history for the active file. Bodies stay in the native store;
+  // this dialog only holds the version the user is looking at.
+  const historyRef = ref<InstanceType<typeof HistoryDialog> | null>(null)
+  const historyOpen = ref(false)
+  const historyPath = ref('')
+  const historyDocumentId = ref<string | null>(null)
+  const historyContent = ref('')
+
+  function openHistory() {
+    const doc = manager.activeDocument
+    if (!doc?.path) {
+      toast('当前文件尚未保存，无法查看历史版本。')
+      return
+    }
+    historyPath.value = doc.path
+    historyDocumentId.value = doc.id
+    historyContent.value = manager.getText(doc.id) ?? ''
+    historyOpen.value = true
+  }
 
   function toast(message: string) {
     toastRef.value?.show(message)
@@ -1118,6 +1140,7 @@ export function useAppShell() {
     discardRef,
     gotoLineRef,
     toast,
+    openHistory,
     openFile,
     openRecent,
     saveActive,
@@ -1254,6 +1277,8 @@ export function useAppShell() {
 
   onMounted(async () => {
     if (desktop) await files.external.start()
+    // One-time move of the previous localStorage history into the native store.
+    if (desktop) void migrateLegacyHistory(toast).catch(() => {})
     // The tab bar only raises the intent; the shell owns the transfer.
     setDetachRequestHandler((documentId, paneId, drop) => {
       void detachDocumentToWindow(manager, documentId, paneId, drop, toast)
@@ -1417,6 +1442,11 @@ export function useAppShell() {
     settingsRef,
     discardRef,
     toastRef,
+    historyRef,
+    historyOpen,
+    historyPath,
+    historyDocumentId,
+    historyContent,
     manager,
     files,
     workspace,

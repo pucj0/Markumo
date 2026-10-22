@@ -49,6 +49,7 @@ const SMOKE_TESTS = [
   'scripts/window-detach-regression.mjs',
   'scripts/autolink-regression.mjs',
   'scripts/repair01-regression.mjs',
+  'scripts/repair02-regression.mjs',
   'scripts/slash-commands-regression.mjs',
   'scripts/math-editor-regression.mjs',
   'scripts/typewriter-focus-regression.mjs',

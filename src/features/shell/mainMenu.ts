@@ -26,7 +26,7 @@ export function mainMenu(state: MainMenuState): MenuGroup[] {
       submenu('workspace-menu','工作区',[cmd('open-workspace','打开文件夹…'),cmd('add-workspace','添加文件夹…'),
         submenu('recent-workspaces','最近工作区',recentWorkspaces.map(path => cmd(recentWorkspaceCommand(path),baseName(path)))),
         sep('workspace-search-section'),cmd('workspace-search'),cmd('workspace-replace'),cmd('refresh-workspace')]),
-      sep('save-section'),cmd('save','保存'),cmd('save-as','另存为…'),
+      sep('save-section'),cmd('save','保存'),cmd('save-as','另存为…'),cmd('history','历史版本…'),
       sep('import-section'),
       submenu('import-menu', '导入', [
         cmd('import-html', 'HTML'),

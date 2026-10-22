@@ -2,6 +2,7 @@ pub mod app;
 pub mod conversion;
 pub mod detach;
 pub mod files;
+pub mod history;
 pub mod recovery;
 pub mod session;
 pub mod settings;

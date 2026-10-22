@@ -10,30 +10,30 @@
       </div>
 
       <div class="history-body">
-        <!-- Left: Versions List -->
+        <!-- Left: Versions List (metadata only) -->
         <div class="history-sidebar">
           <div class="history-sidebar-header">
-            <span>保存记录 ({{ snapshots.length }})</span>
-            <button v-if="snapshots.length" class="history-clean-btn" title="清理该文件的所有历史版本" @click="clearAll">全部清理</button>
+            <span>保存记录 ({{ versions.length }})</span>
+            <button v-if="versions.length" class="history-clean-btn" title="清理该文件的所有历史版本" @click="clearAll">全部清理</button>
           </div>
-          <div v-if="!snapshots.length" class="history-empty">
+          <div v-if="!versions.length" class="history-empty">
             <p>暂无历史保存版本</p>
           </div>
           <div v-else class="history-list">
             <button
-              v-for="s in snapshots"
+              v-for="s in versions"
               :key="s.id"
               class="history-item"
               :class="{ active: s.id === selectedId }"
               @click="selectSnapshot(s)"
             >
               <div class="history-item-top">
-                <span class="history-item-time">{{ formatTime(s.timestamp) }}</span>
-                <span v-if="s.label" class="history-item-label">{{ s.label }}</span>
+                <span class="history-item-time">{{ formatTime(s.createdAt) }}</span>
+                <span class="history-item-label">{{ s.label || originLabel(s.origin) }}</span>
               </div>
               <div class="history-item-bottom">
-                <span>{{ (s.byteLength / 1024).toFixed(1) }} KB</span>
-                <span class="history-item-hash">{{ s.hash }}</span>
+                <span>{{ (s.bytes / 1024).toFixed(1) }} KB</span>
+                <span class="history-item-hash">{{ s.hash.slice(0, 10) }}</span>
               </div>
             </button>
           </div>
@@ -45,17 +45,25 @@
             <button class="history-tab" :class="{ active: viewMode === 'preview' }" @click="viewMode = 'preview'">版本预览</button>
             <button class="history-tab" :class="{ active: viewMode === 'diff' }" @click="viewMode = 'diff'">与当前版本对比</button>
             <div class="history-tab-spacer"></div>
-            <button v-if="selectedSnapshot" class="history-action-btn restore" @click="restoreSelected">恢复为此版本</button>
-            <button v-if="selectedSnapshot" class="history-action-btn" @click="copySelected">复制内容</button>
+            <button v-if="selectedSnapshot && selectedBody !== null" class="history-action-btn restore" @click="restoreSelected">恢复为此版本</button>
+            <button v-if="selectedSnapshot && selectedBody !== null" class="history-action-btn" @click="copySelected">复制内容</button>
             <button v-if="selectedSnapshot" class="history-action-btn delete" @click="deleteSelected">删除快照</button>
           </div>
 
-          <div v-if="!selectedSnapshot" class="history-content-empty">
+          <div v-if="bodyError" class="history-content-empty" role="alert">
+            <p>{{ bodyError }}</p>
+          </div>
+
+          <div v-else-if="!selectedSnapshot" class="history-content-empty">
             <p>请选择一个历史版本进行查看</p>
           </div>
 
+          <div v-else-if="loadingBody" class="history-content-empty">
+            <p>正在加载版本内容…</p>
+          </div>
+
           <div v-else-if="viewMode === 'preview'" class="history-preview-box">
-            <pre class="history-preview-pre"><code>{{ selectedSnapshot.content }}</code></pre>
+            <pre class="history-preview-pre"><code>{{ selectedBody }}</code></pre>
           </div>
 
           <div v-else-if="viewMode === 'diff'" class="history-diff-box">
@@ -72,7 +80,16 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { historyService, type DocumentSnapshot, type DiffLine } from '../../features/history/historyService'
+import {
+  clearVersions,
+  deleteVersion,
+  diffLines as computeDiffLines,
+  listVersions,
+  readVersion,
+  recordVersion,
+  type DiffLine,
+  type HistoryEntry,
+} from '../../features/history/historyService'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 
 const props = defineProps<{
@@ -85,7 +102,11 @@ const props = defineProps<{
 
 const emit = defineEmits<{(e: 'close'): void; (e: 'restored'): void}>()
 
-const snapshots = ref<DocumentSnapshot[]>([])
+const versions = ref<HistoryEntry[]>([])
+/** Bodies are fetched only for the version the user is looking at. */
+const selectedBody = ref<string | null>(null)
+const loadingBody = ref(false)
+const bodyError = ref('')
 const selectedId = ref<string | null>(null)
 const viewMode = ref<'preview' | 'diff'>('preview')
 const diffLines = ref<DiffLine[]>([])
@@ -93,43 +114,69 @@ const diffLines = ref<DiffLine[]>([])
 const currentPath = computed(() => props.filePath || '未命名文档')
 
 const selectedSnapshot = computed(() => {
-  return snapshots.value.find(s => s.id === selectedId.value) || null
+  const entry = versions.value.find(item => item.id === selectedId.value) || null
+  return entry ? { ...entry, content: selectedBody.value ?? '' } : null
 })
 
+async function loadVersions() {
+  if (!props.open || !props.filePath) {
+    versions.value = []
+    selectedId.value = null
+    selectedBody.value = null
+    return
+  }
+  versions.value = await listVersions(props.filePath).catch(error => {
+    bodyError.value = `读取历史版本失败：${error instanceof Error ? error.message : String(error)}`
+    return []
+  })
+  if (versions.value.length > 0) selectedId.value = versions.value[0].id
+  else selectedId.value = null
+}
+
 watch(() => [props.open, props.filePath], async () => {
-  if (props.open && props.filePath) {
-    snapshots.value = await historyService.getSnapshots(props.filePath)
-    if (snapshots.value.length > 0) {
-      selectedId.value = snapshots.value[0].id
-    } else {
-      selectedId.value = null
-    }
+  bodyError.value = ''
+  await loadVersions()
+}, { immediate: true })
+
+watch(() => selectedId.value, async id => {
+  diffLines.value = []
+  selectedBody.value = null
+  bodyError.value = ''
+  if (!id || !props.filePath) return
+  loadingBody.value = true
+  try {
+    selectedBody.value = await readVersion(props.filePath, id)
     updateDiff()
+  } catch (error) {
+    bodyError.value = `读取该版本失败：${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    loadingBody.value = false
   }
 }, { immediate: true })
 
-watch(() => [selectedId.value, viewMode.value], () => {
-  if (viewMode.value === 'diff') {
-    updateDiff()
-  }
-})
+watch(() => viewMode.value, () => { if (viewMode.value === 'diff') updateDiff() })
 
 function formatTime(timestamp: number): string {
   const date = new Date(timestamp)
   return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-function selectSnapshot(s: DocumentSnapshot) {
-  selectedId.value = s.id
-  if (viewMode.value === 'diff') updateDiff()
+function originLabel(origin: HistoryEntry['origin']): string {
+  if (origin === 'disk') return '保存前'
+  if (origin === 'saved') return '已保存'
+  return '手动'
+}
+
+function selectSnapshot(entry: HistoryEntry) {
+  selectedId.value = entry.id
 }
 
 function updateDiff() {
-  if (!selectedSnapshot.value) {
+  if (selectedBody.value === null) {
     diffLines.value = []
     return
   }
-  diffLines.value = historyService.computeDiff(props.currentContent, selectedSnapshot.value.content)
+  diffLines.value = computeDiffLines(props.currentContent, selectedBody.value)
 }
 
 function close() {
@@ -137,13 +184,28 @@ function close() {
 }
 
 async function restoreSelected() {
-  if (!selectedSnapshot.value || !props.manager || !props.documentId) return
-  const ok = confirm(`确定将文档恢复为 ${formatTime(selectedSnapshot.value.timestamp)} 的历史版本吗？`)
+  if (selectedBody.value === null || !props.manager || !props.documentId) return
+  const doc = props.manager.metadata(props.documentId)
+  if (!doc) return
+  // A restore is a destructive edit: say exactly what will happen before it does.
+  const warning = doc.dirty
+    ? '当前文档有未保存的修改，恢复后这些修改会被历史版本替换（可用撤销找回）。'
+    : '当前文档已保存，恢复后内容会变为该历史版本。'
+  const ok = confirm(`${warning}\n\n确定恢复为 ${formatTime(selectedSnapshot.value?.createdAt ?? Date.now())} 的版本吗？`)
   if (!ok) return
 
-  const targetContent = selectedSnapshot.value.content
-  const currentLength = props.manager.getText(props.documentId)?.length ?? 0
+  const targetContent = selectedBody.value
+  // Protection point first: the current text is recorded as a version so even a
+  // failed restore can never cost the user their document.
+  try {
+    await recordVersion(props.filePath, props.currentContent, 'manual', '恢复前保护点')
+  } catch (error) {
+    bodyError.value = `无法创建恢复保护点，已取消恢复：${error instanceof Error ? error.message : String(error)}`
+    return
+  }
 
+  const currentLength = props.manager.getText(props.documentId)?.length ?? 0
+  // A single canonical edit, so Undo restores the pre-restore text in one step.
   props.manager.dispatch(props.documentId, {
     changes: { from: 0, to: currentLength, insert: targetContent },
     userEvent: 'input.history.restore',
@@ -154,29 +216,23 @@ async function restoreSelected() {
 }
 
 function copySelected() {
-  if (selectedSnapshot.value) {
-    navigator.clipboard?.writeText(selectedSnapshot.value.content)
-  }
+  if (selectedBody.value !== null) navigator.clipboard?.writeText(selectedBody.value)
 }
 
 async function deleteSelected() {
-  if (!selectedSnapshot.value || !props.filePath) return
-  await historyService.deleteSnapshot(props.filePath, selectedSnapshot.value.id)
-  snapshots.value = await historyService.getSnapshots(props.filePath)
-  if (snapshots.value.length > 0) {
-    selectedId.value = snapshots.value[0].id
-  } else {
-    selectedId.value = null
-  }
+  if (!selectedId.value || !props.filePath) return
+  await deleteVersion(props.filePath, selectedId.value).catch(() => {})
+  await loadVersions()
 }
 
 async function clearAll() {
   if (!props.filePath) return
   const ok = confirm('确定清空该文件的所有历史版本记录吗？此操作不可撤销。')
   if (!ok) return
-  await historyService.clearSnapshots(props.filePath)
-  snapshots.value = []
+  await clearVersions(props.filePath).catch(() => {})
+  versions.value = []
   selectedId.value = null
+  selectedBody.value = null
 }
 </script>
 

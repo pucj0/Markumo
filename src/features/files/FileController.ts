@@ -12,7 +12,7 @@ import type {
 import { sameFilePath } from './pathKey'
 import { isMedia } from './media'
 import { ExternalFileChangeController } from './ExternalFileChangeController'
-import { historyService } from '../history/historyService'
+import { recordVersion } from '../history/historyService'
 
 export function fileError(error: unknown) {
   if (typeof error === 'string') return error
@@ -168,6 +168,14 @@ export class FileController {
       if (!saveAs && this.external.blocked(id)) {
         return { code: 'blocked', success: false, message: '检测到外部修改冲突，已阻止写入。' }
       }
+      // Preserve the version that is still on disk *before* it is replaced. This
+      // is the only point where the old body can be captured; recording the new
+      // text afterwards is not a substitute for it.
+      const diskBaseline = this.manager.getBaselineText(id)
+      const baselinePath = !saveAs ? source.path || null : null
+      if (diskBaseline !== null && baselinePath) {
+        void recordVersion(baselinePath, diskBaseline, 'disk').catch(() => {})
+      }
       const result = await this.gateway.save(token!, snapshot.text, version, targetEncoding, targetBom)
       targetToken = undefined
       const accepted = snapshot.complete(result)
@@ -176,7 +184,9 @@ export class FileController {
       if (accepted) {
         this.external.saved(id)
         if (result.path) {
-          void historyService.recordSnapshot(result.path, snapshot.text.toString(), automatic ? '自动保存' : '手动保存')
+          void recordVersion(result.path, snapshot.text.toString(), 'saved', automatic ? '自动保存' : '手动保存')
+            .then(record => { for (const warning of record?.warnings ?? []) this.notify(warning) })
+            .catch(error => this.notify(`历史版本记录失败：${fileError(error)}`))
         }
       }
       if (accepted) this.automaticErrors.delete(id)

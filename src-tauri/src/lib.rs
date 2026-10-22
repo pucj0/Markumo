@@ -2,6 +2,7 @@ mod commands;
 mod conversion;
 mod detach;
 mod files;
+mod history;
 mod profile_migration;
 mod recovery;
 mod session;
@@ -210,6 +211,7 @@ pub fn run() {
         .manage(recovery::RecoveryStore::default())
         .manage(search_manager)
         .manage(commands::detach::DetachStore::default())
+        .manage(std::sync::Arc::new(std::sync::Mutex::new(history::HistoryStore::default())))
         .setup(move |app| {
             let store = app.state::<FileStore>();
             let mut service = store.lock().map_err(|_| std::io::Error::other("文件服务状态损坏"))?;
@@ -223,6 +225,12 @@ pub fn run() {
                 .lock()
                 .map_err(|_| std::io::Error::other("恢复存储状态损坏"))?
                 .configure(app_data.join("recovery"));
+            // Saved-version history lives in its own directory so it can never be
+            // confused with crash-recovery drafts.
+            app.state::<std::sync::Arc<std::sync::Mutex<history::HistoryStore>>>()
+                .lock()
+                .map_err(|_| std::io::Error::other("历史版本存储状态损坏"))?
+                .configure(app_data.join("history"));
             app.state::<session::SessionStore>().lock().map_err(|_|std::io::Error::other("会话状态损坏"))?.configure(app_data.join("last-session.json"));
             let paths=session::argument_paths(std::env::args(),&std::env::current_dir()?);
             let restoring_update=commands::update::restore_after_update(&app_data.join("pending-update.json"),env!("CARGO_PKG_VERSION"));
@@ -271,6 +279,9 @@ pub fn run() {
             commands::session::initialize_launch,commands::session::persist_session,
             commands::detach::detach_tab_to_window, commands::detach::take_detached_document,
             commands::detach::commit_detach, commands::detach::cancel_detach,
+            commands::history::history_record, commands::history::history_list,
+            commands::history::history_read, commands::history::history_delete,
+            commands::history::history_clear, commands::history::history_usage,
             commands::recovery::recovery_list, commands::recovery::recovery_read,
             commands::recovery::recovery_save, commands::recovery::recovery_delete,
             commands::app::open_external_link,

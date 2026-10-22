@@ -126,6 +126,17 @@
       @goto="handleGotoLine"
     />
 
+    <!-- 历史版本面板：正文按需从本地存储读取 -->
+    <HistoryDialog
+      :open="historyOpen"
+      :file-path="historyPath"
+      :current-content="historyContent"
+      :document-id="historyDocumentId"
+      :manager="manager"
+      @close="historyOpen = false"
+      @restored="historyOpen = false"
+    />
+
     <!-- 首选项模态框 -->
     <SettingsModal
       v-model:auto-check-updates="autoCheckUpdates"
@@ -219,11 +230,12 @@ import Toast from './components/common/Toast.vue'
 import UpdatePanel from './components/common/UpdatePanel.vue'
 import UpdateConfirm from './components/modals/UpdateConfirm.vue'
 import RecoveryDialog from './components/modals/RecoveryDialog.vue'
+import HistoryDialog from './components/layout/HistoryDialog.vue'
 import { computed, nextTick, provide, ref } from 'vue'
 import { workspaceNavigationKey } from './features/workspace/navigation'
 import { useAppShell } from './app/useAppShell'
 const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, typewriterMode, defaultMdMode, liveToolbar, externalFileMonitoring, autoReloadExternal, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, smartExpand, compactFolders, syntaxStyle, bracketMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
-  paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
+  paletteRef, settingsRef, discardRef, toastRef, historyOpen, historyPath, historyDocumentId, historyContent, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
   setMode, toggleSidebar, handleSelectPanel, leftSidebarOccupied, effectiveOutlinePosition, outlineVisible, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,
   reopenEncoding, convertEncoding, saveAsEncoding,
