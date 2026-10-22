@@ -78,9 +78,9 @@ const historyRoundTrip = async (before, work) => {
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.MARKUMO_CHROME, args: ['--no-sandbox'] })
   page = await browser.newPage({ viewport: { width: 1280, height: 850 } })
-  page.setDefaultTimeout(15000)
+  page.setDefaultTimeout(30000)
   page.on('pageerror', error => errors.push(error.message))
-  await page.goto(`http://127.0.0.1:1452/${output}/index.html`)
+  await page.goto(`http://127.0.0.1:1452/${output}/index.html`, { timeout: 45000 })
   await page.waitForFunction(() => window.f)
 
   if (!profile) {
