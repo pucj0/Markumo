@@ -662,11 +662,9 @@ impl FileService {
         let token = existing_token
             .map(str::to_owned)
             .unwrap_or_else(|| self.grant(selected, path.clone(), true));
-        if existing_token.is_none() {
-            let grant = self.grants.get_mut(&token).unwrap();
-            grant.hex = encoding == "Hex";
-            grant.encoding = Some(encoding.clone());
-        }
+        let grant = self.grants.get_mut(&token).unwrap();
+        grant.hex = encoding == "Hex";
+        grant.encoding = Some(encoding.clone());
         let warning = if existing_token.is_none() {
             self.recent(&path)
         } else {

@@ -181,6 +181,10 @@ export class FileController {
           throw new Error(`保存前历史备份失败，已取消写入，原文件和当前编辑内容均保留：${fileError(error)}`)
         }
       }
+      if (this.disposed || this.manager.metadata(id)?.fileToken !== source.fileToken) {
+        return { code: 'failed', success: false, message: '历史归档期间文档已关闭或身份改变，未执行写入。' }
+      }
+      if (!saveAs && this.external.blocked(id)) return { code: 'blocked', success: false, message: '历史归档期间检测到外部冲突，未执行写入。' }
       const result = await this.gateway.save(token!, snapshot.text, version, targetEncoding, targetBom)
       targetToken = undefined
       const accepted = snapshot.complete(result)

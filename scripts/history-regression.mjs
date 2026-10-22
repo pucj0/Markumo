@@ -78,6 +78,12 @@ try{
   const result=await page.evaluate(async()=>{window.f.manager.dispatch(window.f.id,{changes:{from:3,insert:'-during-write'}});H.saveGate.resolve();const saved=await H.pending;return{code:saved.code,source:window.f.source(),disk:H.disk,dirty:window.f.manager.metadata(window.f.id).dirty}})
   assert.deepEqual(result,{code:'changed',source:'new-during-write',disk:'new',dirty:true})
  })
+ await test('disposing the controller while archive is delayed prevents a late write',async()=>{
+  await page.evaluate(()=>{H.reset();H.recordGate=H.defer();H.pending=H.files.saveDetailed(window.f.id)})
+  await page.waitForFunction(()=>H.calls.some(call=>call.command==='history_record'))
+  const result=await page.evaluate(async()=>{H.files.dispose();H.recordGate.resolve();const saved=await H.pending;return{code:saved.code,writes:H.writes.length,disk:H.disk,source:window.f.source()}})
+  assert.deepEqual(result,{code:'failed',writes:0,disk:'old',source:'new'})
+ })
  fs.writeFileSync(`${output}/results.json`,JSON.stringify({passed:true,results,browser:await browser.version()},null,2))
  await page.evaluate(()=>{H.files.dispose();window.f.dispose()})
 }finally{await browser?.close();await server.close()}

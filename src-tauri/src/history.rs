@@ -99,6 +99,17 @@ fn sha256(bytes: &[u8]) -> String {
 /// Files are identified by an opaque digest of their path. It is never used for
 /// I/O, so a hostile path cannot address anything on its own.
 pub fn file_key(path: &str) -> String {
+    legacy_key(&normalized_path(path))
+}
+
+fn normalized_path(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    if normalized.get(..8).is_some_and(|prefix| prefix.eq_ignore_ascii_case("//?/UNC/")) {
+        format!("//{}", &normalized[8..])
+    } else { normalized.strip_prefix("//?/").unwrap_or(&normalized).to_owned() }
+}
+
+fn legacy_key(path: &str) -> String {
     let normalized = path.replace('\\', "/");
     let lowered = if cfg!(windows) { normalized.to_lowercase() } else { normalized };
     sha256(lowered.as_bytes())
@@ -200,6 +211,26 @@ impl HistoryStore {
         write_atomic(&self.index_path()?, &bytes)
     }
 
+    fn index_for(&self, path: &str) -> Result<HistoryIndex, String> {
+        let mut index = self.read_index()?;
+        let display = normalized_path(path);
+        let key = file_key(path);
+        let mut aliases = vec![legacy_key(path)];
+        if display.starts_with("//") { aliases.push(legacy_key(&format!("//?/UNC/{}", display.trim_start_matches('/')))); }
+        else if display.as_bytes().get(1) == Some(&b':') { aliases.push(legacy_key(&format!("//?/{display}"))); }
+        for alias in aliases {
+            if alias == key { continue }
+            if let Some(previous) = index.files.remove(&alias) {
+                let entries = index.files.entry(key.clone()).or_default();
+                entries.extend(previous);
+                entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at));
+                let mut seen = HashSet::new();
+                entries.retain(|entry| seen.insert(entry.hash.clone()));
+            }
+        }
+        Ok(index)
+    }
+
     /// Stores one body and registers it for `path`. Identical content is
     /// deduplicated and reported instead of stored twice.
     pub fn record(
@@ -234,7 +265,7 @@ impl HistoryStore {
             ));
         }
         let _guard = self.lock.lock().map_err(|_| "历史存储状态损坏")?;
-        let mut index = self.read_index()?;
+        let mut index = self.index_for(path)?;
         let hash = sha256(text.as_bytes());
         let bytes = text.len();
 
@@ -363,7 +394,7 @@ impl HistoryStore {
     pub fn list(&self, path: &str) -> Result<Vec<HistoryEntry>, String> {
         let key = file_key(path);
         let _guard = self.lock.lock().map_err(|_| "历史存储状态损坏")?;
-        Ok(self.read_index()?.files.get(&key).cloned().unwrap_or_default())
+        Ok(self.index_for(path)?.files.get(&key).cloned().unwrap_or_default())
     }
 
     pub fn read(&self, path: &str, id: &str) -> Result<String, String> {
@@ -372,7 +403,7 @@ impl HistoryStore {
         }
         let key = file_key(path);
         let _guard = self.lock.lock().map_err(|_| "历史存储状态损坏")?;
-        let index = self.read_index()?;
+        let index = self.index_for(path)?;
         let entry = index
             .files
             .get(&key)
@@ -390,7 +421,7 @@ impl HistoryStore {
         }
         let key = file_key(path);
         let _guard = self.lock.lock().map_err(|_| "历史存储状态损坏")?;
-        let mut index = self.read_index()?;
+        let mut index = self.index_for(path)?;
         let Some(entries) = index.files.get_mut(&key) else { return Ok(false) };
         let before = entries.len();
         entries.retain(|entry| entry.id != id);
@@ -408,7 +439,7 @@ impl HistoryStore {
     pub fn clear(&self, path: &str) -> Result<(), String> {
         let key = file_key(path);
         let _guard = self.lock.lock().map_err(|_| "历史存储状态损坏")?;
-        let mut index = self.read_index()?;
+        let mut index = self.index_for(path)?;
         index.files.remove(&key);
         self.write_index(&index)?;
         self.collect_garbage(&index)
@@ -577,8 +608,26 @@ mod tests {
 
     #[test]
     fn windows_and_posix_spellings_map_to_the_same_file_key() {
+        assert_eq!(file_key(r"\\?\C:\docs\a.md"), file_key("C:/docs/a.md"));
+        assert_eq!(file_key(r"\\?\UNC\server\docs\a.md"), file_key("//server/docs/a.md"));
         assert_eq!(file_key("C:\\docs\\a.md"), file_key("C:/docs/a.md"));
         #[cfg(windows)]
         assert_eq!(file_key("C:/docs/A.MD"), file_key("c:/docs/a.md"));
+    }
+
+    #[test]
+    fn old_namespaced_history_keys_are_read_and_merged_without_losing_bodies() {
+        let (store, _dir) = store();
+        let path = "C:/docs/a.md";
+        let entry = store.record(path, "legacy body", "manual", None).unwrap().entry;
+        let mut index = store.read_index().unwrap();
+        let rows = index.files.remove(&file_key(path)).unwrap();
+        index.files.insert(legacy_key(r"\\?\C:\docs\a.md"), rows);
+        store.write_index(&index).unwrap();
+        assert_eq!(store.list(path).unwrap().len(), 1);
+        assert_eq!(store.read(path, &entry.id).unwrap(), "legacy body");
+        store.record(path, "new body", "saved", None).unwrap();
+        assert_eq!(store.list(path).unwrap().len(), 2);
+        assert_eq!(store.read_index().unwrap().files.len(), 1);
     }
 }
