@@ -1996,6 +1996,7 @@ export class MarkdownEditorController implements LiveEditor {
     if (readOnly !== this.wasReadOnly) {
       this.wasReadOnly = readOnly
       this.view.setProps({ editable: () => !this.options.readOnly?.() })
+      for (const code of this.codeViews) code.refreshReadOnly()
       for (const refresh of this.extensionViews) refresh()
     }
   }

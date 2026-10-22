@@ -16,10 +16,30 @@ try {
   page.on('pageerror', error => errors.push(error.message))
   await page.goto(`http://127.0.0.1:1497/${output}/index.html`)
   await page.waitForFunction(() => window.f)
+  await page.evaluate(async () => {
+    const { CodeBlockView } = await import('/src/editor/markdown/wysiwyg/CodeBlockView.ts')
+    const ensure = CodeBlockView.prototype.ensureEditor
+    window.allocations = { total: 0, live: 0, peak: 0 }
+    CodeBlockView.prototype.ensureEditor = function() {
+      const existed = this.existingEditor
+      const editor = ensure.call(this)
+      if (!existed) {
+        const stats = window.allocations
+        stats.total++; stats.live++; stats.peak = Math.max(stats.peak, stats.live)
+        const destroy = editor.destroy.bind(editor)
+        editor.destroy = () => { stats.live--; destroy() }
+      }
+      return editor
+    }
+  })
   const source = 'Ordinary paragraph.\n\n' + Array.from({ length: 200 }, (_, i) => `\`\`\`js\nconst value${i} = ${i};\nsecond line\n\`\`\`\n\n`).join('')
   await page.evaluate(source => window.f.reset(source, true), source)
   await page.waitForFunction(() => window.f.ready())
   await page.waitForTimeout(500)
+  const initial = await page.evaluate(() => ({ ...window.allocations, roots: [...window.f.live().codeViews].every(code => code.observer.root === window.f.live().dom) }))
+  assert.ok(initial.total < 20, `Initial allocations must be viewport bounded: ${JSON.stringify(initial)}`)
+  assert.ok(initial.peak < 20)
+  assert.equal(initial.roots, true, 'Each observer must use its Live Pane scroller')
   const result = await page.evaluate(async () => {
     const f = window.f, live = f.live(), codes = [...live.codeViews]
     let created = 0
@@ -51,7 +71,23 @@ try {
   await page.waitForFunction(() => window.f.source().includes('continuous ordinary input'))
   await page.evaluate(() => window.f.undo())
   await page.waitForFunction(source => window.f.source() === source, source)
+  // Scroll to distant blocks and back: near blocks mount, old blocks release.
+  for (const ordinal of [190, 50, 120, 0]) {
+    await page.locator('.md-code-block').nth(ordinal).scrollIntoViewIfNeeded()
+    await page.waitForTimeout(150)
+    assert.ok(await page.locator('.md-code-block').nth(ordinal).locator('.cm-content').count())
+    const active = await page.locator('.md-code-block .cm-editor').count()
+    const bound = await page.evaluate(() => {
+      const codes = [...window.f.live().codeViews]
+      const smallest = Math.min(...codes.map(code => code.dom.offsetHeight))
+      return Math.ceil((window.f.live().dom.clientHeight + 1200) / smallest) + 2
+    })
+    assert.ok(active <= bound, `After scrolling to ${ordinal}: ${active} active CMViews exceeds viewport bound ${bound}`)
+  }
+  const disposed = await page.evaluate(() => window.f.dispose())
+  assert.equal(disposed.remaining, 0)
+  assert.equal(await page.evaluate(() => window.allocations.live), 0)
   assert.deepEqual(errors, [])
-  fs.writeFileSync(`${output}/state-queries.json`, JSON.stringify(result, null, 2))
+  fs.writeFileSync(`${output}/state-queries.json`, JSON.stringify({ initial, ...result }, null, 2))
   console.log('PASS 200 code blocks: 1000 state queries, search decorations, ordinary typing and canonical undo')
 } finally { await browser?.close(); await server.close() }

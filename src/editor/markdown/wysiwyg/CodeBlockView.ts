@@ -1,4 +1,4 @@
-import { EditorState as CMState, Compartment, Prec, StateEffect, StateField } from '@codemirror/state'
+import { EditorState as CMState, EditorSelection, Compartment, Prec, StateEffect, StateField } from '@codemirror/state'
 import { EditorView as CMView, drawSelection, keymap, lineNumbers, Decoration, WidgetType, type DecorationSet } from '@codemirror/view'
 import { smoothCaret } from '../../core/smoothCaret'
 import type { CaretAnimation } from '../../core/caretMotion'
@@ -44,8 +44,7 @@ const codeSearchDecorations = StateField.define<DecorationSet>({
 
 /**
  * Lightweight CodeBlockView with Viewport Boundary Virtualization + Focus Retention.
- * Out-of-viewport unedited code blocks stay in a light placeholder state, saving
- * 90%+ DOM nodes and memory while keeping instant, jank-free native CM6 when viewed/focused.
+ * Out-of-viewport code blocks retain source and selection without a CMView.
  */
 export class CodeBlockView implements NodeView {
   readonly dom = document.createElement('div')
@@ -57,6 +56,7 @@ export class CodeBlockView implements NodeView {
   private wrap = new Compartment()
   private caret = new Compartment()
   private brackets = new Compartment()
+  private editable = new Compartment()
   private updating = false
   private dead = false
   private generation = 0
@@ -83,6 +83,14 @@ export class CodeBlockView implements NodeView {
   private observer?: IntersectionObserver
   private inViewport = false
   private isFocused = false
+  private pointerActive = false
+  private savedSelection = EditorSelection.single(0)
+  private releasePointer = () => {
+    this.pointerActive = false
+    window.removeEventListener('pointerup', this.releasePointer)
+    window.removeEventListener('pointercancel', this.releasePointer)
+    if (!this.inViewport) this.detachEditor()
+  }
 
   constructor(
     private node: Node,
@@ -158,7 +166,6 @@ export class CodeBlockView implements NodeView {
 
     this.dom.addEventListener('focusin', () => {
       this.isFocused = true
-      this.ensureEditor()
       this.updateFocusState()
     })
     this.dom.addEventListener('focusout', () => queueMicrotask(() => {
@@ -173,38 +180,59 @@ export class CodeBlockView implements NodeView {
     }))
 
     // Pre-activate on pointer interaction to guarantee seamless cursor positioning
-    this.dom.addEventListener('pointerdown', () => {
-      this.ensureEditor()
+    this.dom.addEventListener('pointerdown', event => {
+      this.pointerActive = true
+      window.addEventListener('pointerup', this.releasePointer)
+      window.addEventListener('pointercancel', this.releasePointer)
+      if (this.cmContainer.hidden || !this.cmContainer.contains(event.target as globalThis.Node)) return
+      const wasStatic = !this.cmInstance
+      const editor = this.ensureEditor()
+      if (wasStatic && event.button === 0) {
+        // pointerdown precedes the native mousedown. Mount at the same geometry
+        // and place the caret on this first click, including on a cold placeholder.
+        const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
+        if (pos !== null) editor.dispatch({ selection: { anchor: pos } })
+        editor.focus()
+      }
     }, { capture: true })
 
+    this.dom.addEventListener('compositionend', () => queueMicrotask(() => {
+      if (!this.inViewport) this.detachEditor()
+    }))
+
     // Viewport-based mount observer: ±600px buffer zone
-    if (typeof IntersectionObserver !== 'undefined') {
+    // ProseMirror constructs NodeViews before inserting their DOM. Resolve the
+    // root after insertion, when the actual Pane scroll host is discoverable.
+    queueMicrotask(() => {
+      if (this.dead) return
+      if (typeof IntersectionObserver === 'undefined') {
+        this.inViewport = true
+        if (!this.isMermaid) this.ensureEditor()
+        return
+      }
       this.observer = new IntersectionObserver(entries => {
         if (this.dead) return
         for (const entry of entries) {
           if (entry.target === this.dom) {
             this.inViewport = entry.isIntersecting
             if (this.inViewport) {
-              this.ensureEditor()
+              if (!this.isMermaid || this.isEditingMermaid) this.ensureEditor()
             } else if (!this.isFocused && !this.isEditingMermaid) {
               this.detachEditor()
             }
           }
         }
       }, {
-        root: null,
+        root: this.outer.dom.closest('.markdown-live'),
         rootMargin: '600px 0px 600px 0px'
       })
       this.observer.observe(this.dom)
-    } else {
-      this.inViewport = true
-    }
+    })
 
     if (this.isMermaid) {
       this.setMermaidEditing(false)
     } else {
-      // Default: ensure editor if initially visible or near viewport
-      this.ensureEditor()
+      this.renderPlaceholder()
     }
   }
 
@@ -214,6 +242,7 @@ export class CodeBlockView implements NodeView {
   get hasFocus(): boolean { return !!this.cmInstance?.hasFocus }
 
   ensureEditor(): CMView {
+    if (this.dead) throw new Error('Cannot activate a destroyed code block')
     if (this.cmInstance) {
       return this.cmInstance
     }
@@ -227,7 +256,11 @@ export class CodeBlockView implements NodeView {
       parent: this.cmContainer,
       state: CMState.create({
         doc: this.node.textContent,
+        selection: EditorSelection.create(this.savedSelection.ranges.map(range => EditorSelection.range(
+          Math.min(range.anchor, this.node.textContent.length), Math.min(range.head, this.node.textContent.length)
+        ))),
         extensions: [
+          this.editable.of([CMState.readOnly.of(!this.outer.editable), CMView.editable.of(this.outer.editable)]),
           this.caret.of([smoothCaret(this.caretAnim), this.caretAnim === 'off' ? [] : drawSelection()]),
           this.language.of([]),
           this.numbers.of(this.settings.codeLineNumbers ? lineNumbers() : []),
@@ -327,27 +360,39 @@ export class CodeBlockView implements NodeView {
   private detachEditor() {
     if (!this.cmInstance || this.dead) return
     // Never detach if focused or in IME composition
-    if (this.isFocused || this.cmInstance.hasFocus || this.cmInstance.compositionStarted || this.dom.contains(document.activeElement)) {
+    const pos = this.getPos(), selection = this.outer.state.selection
+    const selected = pos !== undefined && selection.to > pos && selection.from < pos + this.node.nodeSize && !selection.empty
+    const nativeSelection = window.getSelection()
+    if (this.isFocused || this.hasFocus || this.isComposing || this.updating || this.pointerActive || this.selector.isInteracting || this.isEditingMermaid
+      || selected || (nativeSelection && !nativeSelection.isCollapsed && nativeSelection.containsNode(this.dom, true))
+      || this.pendingHighlights.some(range => range.current) || this.cmInstance.state.doc.toString() !== this.node.textContent
+      || this.dom.contains(document.activeElement)) {
       return
     }
-
-    const currentHeight = this.cmContainer.offsetHeight
-    if (currentHeight > 0) {
-      this.cmContainer.style.minHeight = `${currentHeight}px`
-    }
-
+    this.savedSelection = this.cmInstance.state.selection
+    this.generation++
+    this.highlightDoc = undefined
     this.cmInstance.destroy()
     this.cmInstance = null
+    if (!this.isMermaid) this.renderPlaceholder()
+  }
 
-    // Render lightweight static placeholder
-    if (!this.placeholder && !this.isMermaid) {
+  private renderPlaceholder() {
+    if (!this.placeholder) {
       this.placeholder = document.createElement('pre')
       this.placeholder.className = 'md-code-placeholder'
-      const code = document.createElement('code')
-      code.textContent = this.node.textContent
-      this.placeholder.appendChild(code)
-      this.cmContainer.appendChild(this.placeholder)
+      this.cmContainer.append(this.placeholder)
     }
+    const code = document.createElement('code')
+    code.textContent = this.node.textContent || '\n'
+    this.placeholder.replaceChildren(code)
+    this.placeholder.classList.toggle('is-wrapped', this.settings.codeWrap)
+  }
+
+  refreshReadOnly() {
+    this.cmInstance?.dispatch({ effects: this.editable.reconfigure([
+      CMState.readOnly.of(!this.outer.editable), CMView.editable.of(this.outer.editable),
+    ]) })
   }
 
   private updateFocusState() {
@@ -381,10 +426,7 @@ export class CodeBlockView implements NodeView {
       this.ensureEditor().focus()
     } else {
       // Free heavy editor instance when displaying rendered Mermaid diagram
-      if (this.cmInstance && !this.isFocused) {
-        this.cmInstance.destroy()
-        this.cmInstance = null
-      }
+      this.detachEditor()
     }
     if (this.isMermaid) void this.renderMermaidDiagram()
   }
@@ -422,6 +464,7 @@ export class CodeBlockView implements NodeView {
         this.highlightDoc = this.cmInstance.state.doc
         this.cmInstance.dispatch({ effects: setCodeSearch.of(this.pendingHighlights) })
       }
+      if (!this.inViewport) this.detachEditor()
     })
   }
 
@@ -525,22 +568,20 @@ export class CodeBlockView implements NodeView {
 
       if (languageChanged) this.setLanguage()
     } else {
-      if (this.placeholder && changed) {
-        const code = this.placeholder.querySelector('code')
-        if (code) code.textContent = node.textContent
-      }
+      if (!this.isMermaid && (changed || languageChanged || wasMermaid)) this.renderPlaceholder()
+      if (this.isMermaid && changed) void this.renderMermaidDiagram()
     }
     return true
   }
 
   setSelection(anchor: number, head: number) {
+    if (this.cmContainer.hidden) {
+        this.dom.scrollIntoView({ block: 'nearest' })
+        return
+    }
     const editor = this.ensureEditor()
     this.updating = true
     try {
-      if (this.cmContainer.hidden) {
-        this.dom.scrollIntoView({ block: 'nearest' })
-        return
-      }
       editor.dispatch({ selection: { anchor, head } })
       editor.focus()
     } finally {
@@ -558,6 +599,7 @@ export class CodeBlockView implements NodeView {
         ],
       })
     }
+    if (this.placeholder) this.renderPlaceholder()
   }
 
   bracketMode(mode: BracketMode) {
@@ -585,6 +627,8 @@ export class CodeBlockView implements NodeView {
   destroy() {
     if (this.renderTimer) clearTimeout(this.renderTimer)
     this.dead = true
+    window.removeEventListener('pointerup', this.releasePointer)
+    window.removeEventListener('pointercancel', this.releasePointer)
     this.observer?.disconnect()
     this.observer = undefined
     this.themeObserver?.disconnect()
