@@ -12,6 +12,7 @@ import type {
 import { sameFilePath } from './pathKey'
 import { isMedia } from './media'
 import { ExternalFileChangeController } from './ExternalFileChangeController'
+import { historyService } from '../history/historyService'
 
 export function fileError(error: unknown) {
   if (typeof error === 'string') return error
@@ -172,7 +173,12 @@ export class FileController {
       const accepted = snapshot.complete(result)
       // Publish the authoritative native version before any asynchronous
       // recovery/release callback can let an older check run.
-      if (accepted) this.external.saved(id)
+      if (accepted) {
+        this.external.saved(id)
+        if (result.path) {
+          void historyService.recordSnapshot(result.path, snapshot.text.toString(), automatic ? '自动保存' : '手动保存')
+        }
+      }
       if (accepted) this.automaticErrors.delete(id)
       if (accepted && source.fileToken && source.fileToken !== result.token) await this.gateway.release(source.fileToken).catch(() => {})
       if (!accepted) {
