@@ -389,6 +389,18 @@ defineExpose({ syncScroll })
   padding: 0;
 }
 
+:deep(.md-image-preview.is-broken-image) {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: var(--soft);
+  color: var(--muted);
+  margin: 4px 0;
+}
+
 :deep(.md-image-preview img) {
   display: block;
   max-width: 100%;

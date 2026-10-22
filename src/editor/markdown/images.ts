@@ -70,11 +70,25 @@ export function mountMarkdownImage(host: HTMLElement, source: string, alt: strin
   const path = document.createElement('button'); path.type = 'button'; path.className = 'md-image-path'; path.textContent = source || '(空图片路径)'; path.title = '编辑图片路径'; path.onclick = edit
   const action = document.createElement('button'); action.type = 'button'; action.className = 'md-image-action'
   host.append(status, path, action)
-  const failure = (reason: string) => { status.textContent = `图片未显示：${reason}`; action.hidden = destination.kind === 'blocked'; action.textContent = '重试'; measure() }
+  const failure = (reason: string) => {
+    host.classList.add('is-broken-image')
+    host.title = `${alt ? alt + ' · ' : ''}${source}\n（${reason}）`
+    status.innerHTML = `<span class="broken-image-tag" role="button" tabindex="0" title="${reason}"><svg class="broken-image-svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15l-5-5L5 21"/><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><line x1="2" y1="2" x2="22" y2="22"/></svg><span class="broken-image-text">${alt || source || '图片失效'}</span><span class="broken-image-sr" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0">${reason}</span></span>`
+    const tag = status.querySelector('.broken-image-tag')
+    if (tag) tag.addEventListener('click', edit)
+    path.hidden = true
+    action.hidden = destination.kind === 'blocked'
+    action.textContent = '重试'
+    action.className = 'md-image-action broken-retry-btn'
+    measure()
+  }
   async function load() {
     const current = ++generation
     if (timer) clearTimeout(timer)
     host.querySelector('img')?.remove()
+    host.classList.remove('is-broken-image')
+    path.hidden = false
+    action.className = 'md-image-action'
     release()
     status.textContent = '图片加载中…'; action.hidden = true
     try {

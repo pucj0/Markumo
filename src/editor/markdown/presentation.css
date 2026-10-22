@@ -60,7 +60,8 @@ body.light :is(.markdown-live, .split-preview-pane) {
 :is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) hr { height: 0; border: 0; border-top: 1px solid var(--line); margin: 16px 0; background: none; }
 .markdown-live .md-document .tableWrapper, .split-preview-pane .md-table-scroll { overflow: auto; max-width: 100%; margin: 32px 0 16px; }
 :is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) table { border-collapse: collapse; table-layout: auto; width: 100%; margin: 0; border: 1px solid var(--md-table-border); }
-:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) :is(td,th) { border: 1px solid var(--md-table-border); padding: 6px 13px; min-width: 60px; vertical-align: top; text-align: left; }
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) :is(td,th) { border: 1px solid var(--md-table-border); padding: 8px 14px; min-width: 60px; min-height: 28px; vertical-align: middle; text-align: left; line-height: 1.6; }
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) :is(td,th):empty::before { content: '\00a0'; visibility: hidden; }
 :is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) th { background: var(--md-code-bg); font-weight: 700; color: var(--bright); }
 :is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) tr:nth-child(even) { background: var(--md-code-bg); }
 :is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) table:has(> thead) tbody tr:nth-child(odd) { background: var(--md-code-bg); }

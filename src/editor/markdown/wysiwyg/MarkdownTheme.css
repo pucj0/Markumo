@@ -749,6 +749,18 @@ body.light .file-icon-gray { color: #6c7c92; }
 }
 .markdown-live .md-prose p:has(> .md-image-standalone) { line-height: 0; }
 
+.markdown-live .md-image-preview.is-broken-image {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: var(--soft);
+  color: var(--muted);
+  max-width: 100%;
+  margin: 4px 0;
+}
 .markdown-live .md-image-preview img {
   display: block;
   max-width: 100%;
@@ -997,8 +1009,7 @@ kbd,
 }
 
 /* HTML 块内的表格、详情、列表 */
-.markdown-live .md-html-preview table,
-.split-preview-content table {
+.markdown-live .md-html-preview table {
   border-collapse: collapse;
   width: 100%;
   margin: 1em 0;
@@ -1006,16 +1017,13 @@ kbd,
 }
 
 .markdown-live .md-html-preview th,
-.markdown-live .md-html-preview td,
-.split-preview-content th,
-.split-preview-content td {
+.markdown-live .md-html-preview td {
   border: 1px solid var(--line);
   padding: 6px 12px;
   text-align: left;
 }
 
-.markdown-live .md-html-preview th,
-.split-preview-content th {
+.markdown-live .md-html-preview th {
   background: var(--soft);
   color: var(--bright);
   font-weight: 600;
