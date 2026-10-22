@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
-import { createServer } from 'vite'
+import { startRegressionServer } from './regression-server.mjs'
 const { chromium } = await import(process.env.MARKUMO_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MARKUMO_PLAYWRIGHT_MODULE).href : 'playwright')
 const output = 'test-results/split-unification'
 fs.mkdirSync(output, { recursive: true })
@@ -44,8 +44,7 @@ window.t={parseMarkdown,MarkdownSourceBridge,createMarkdownRenderer,htmlForPrevi
  async saveReopen(){let saved;const files=new FileController(manager,{release:async()=>{},save:async(token,text,version,encoding,bom)=>{if(version!=='v1')throw Error('stale fixture baseline');saved=text;return {token,path:'C:/fixture/compare.md',name:'compare.md',version:'v2',encoding,bom,eol:manager.metadata(id).eol,readOnly:false}}},message=>notices.push(message));const success=await files.save(id);const dirty=manager.metadata(id).dirty;files.dispose();await this.reset(saved,true);return {success,dirty,saved}},
 };
 `)
-const server = await createServer({ server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } })
-await server.listen()
+const server = await startRegressionServer()
 const port = server.httpServer.address().port
 const results=[],errors=[]
 let browser
@@ -176,6 +175,7 @@ $$
     await page.waitForFunction(()=>document.querySelector('.split-preview-content a')?.getAttribute('href')==='https://new.example/')
     await page.evaluate(()=>{window.t.manager.closePane(window.otherPane);window.otherHost.remove()})
     if (!await page.locator('.md-reference-source').first().evaluate(el=>el.open)) await page.locator('.md-reference-source summary').first().click()
+    await page.locator('.md-reference-source textarea').first().waitFor({state:'visible'})
     assert.equal(await page.locator('.md-reference-source textarea').first().isVisible(),true)
     await page.screenshot({path:`${output}/phase03-reference-edit.png`})
   })

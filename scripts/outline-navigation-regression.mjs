@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
-import { createServer } from 'vite'
+import { startRegressionServer } from './regression-server.mjs'
 const { chromium } = await import(process.env.MARKUMO_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MARKUMO_PLAYWRIGHT_MODULE).href : 'playwright')
 const output = 'test-results/outline-navigation'
 fs.mkdirSync(output, { recursive: true })
@@ -23,7 +23,7 @@ createApp({render(){rev.value;return [
  h(EditorContainer,{manager,doc:manager.activeDocument,showOutline:true,desktop:false})];}}).mount('#app');
 window.f={manager,items:()=>extractOutline(manager.activeDocument,manager.getState('md'))};document.body.classList.add('light');
 `)
-const server = await createServer({server:{host:'127.0.0.1',port:0,hmr:false,watch:null}});await server.listen()
+const server = await startRegressionServer()
 const port = server.httpServer.address().port
 let browser
 const results=[]

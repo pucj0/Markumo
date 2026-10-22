@@ -10,3 +10,5 @@
 ![Split 预览滚动后，两个大纲中的标题 7 加粗](images/outline/scroll-active-heading.png)
 
 专项：`scripts/outline-navigation-regression.mjs` 原有 9 组跳转/宽度/多 Pane 测试保留，新增 4 组 Live、源码、Split 和折叠父项滚动联动测试，共 13 组通过。测试服务器使用动态端口，避免与其他本地测试冲突。
+
+最终集成验收：类型检查、生产构建通过；Smoke 28 / 28、全量回归 39 / 39 通过。详细记录见 [Split 统一化验收报告](markdown-split-unification.md)。

@@ -1,6 +1,6 @@
 # Markdown Live / Split 统一化验收
 
-日期：2026-10-21。基线：`dbc40f99be1482ef60fca1e223994ee0059a4d55`。全部修改在 `main`，未推送，未修改版本号；用户原有的 `测试.md` 修改未纳入提交。
+实施：2026-10-21；最终验收：2026-10-22。基线：`dbc40f99be1482ef60fca1e223994ee0059a4d55`。全部修改在 `main`，未推送，未修改版本号；实施开始时用户原有的 `测试.md` 修改未纳入本轮提交。
 
 ## 根因
 
@@ -70,7 +70,7 @@ Live 图片保留编辑操作入口，Split 保留只读权限操作，因此交
 | `src/editor/markdown/wysiwyg/LiveTableToolbar.ts` | 滚动容器下工具栏定位 |
 | `src/editor/markdown/wysiwyg/renderers.ts` | 图表异步结果保护 |
 | `src/components/layout/EditorPane.vue` | 设置传递、比例与拖动清理、键盘调整 |
-| `scripts/split-preview-regression.mjs`、`run-regressions.mjs` | 新专项浏览器测试，注册 Smoke / 全量回归 |
+| `scripts/split-preview-regression.mjs`、`run-regressions.mjs`、`regression-server.mjs` | 新专项浏览器测试，注册 Smoke / 全量回归，隔离测试服务器端口和缓存 |
 | 本文和 `docs/images/markdown-split/*.png` | 验收报告和真实截图 |
 
 ## 自动化验收
@@ -79,7 +79,24 @@ Live 图片保留编辑操作入口，Split 保留只读权限操作，因此交
 
 保存重开专项使用真实 FileController 和 DocumentManager，文件网关使用测试替身；未声称该浏览器场景执行了原生磁盘写入。
 
-最终命令执行结果见本节完成记录。
+验收中发现并修复了两处兼容问题：Live 表格滚动容器下的工具栏仍假定相邻节点为 table；静态代码渲染漏掉既有 `language-*` 类。保留所有原有断言并修复实现，表格布局和 19 组语法回归随后全部通过。
+
+截图测试增加展开状态验证后，发现原生 details 的 toggle 事件与按需 textarea 创建之间存在异步间隔；改为等待可见性后继续断言。另修正 Vite 6 将 `port:0` 当作默认端口的问题，使用操作系统分配的正端口隔离两个专项服务器。
+
+完整回归过程中，更新器专项曾在 `window.f` 初始化等待处出现一次 10 秒超时；未修改更新器实现或删减断言，单独复验 32 组通过。最终套件结果另列，保留这条环境波动记录。
+
+最终命令执行结果见本节完成记录。验收基于当前 main 工作区；其他并行任务已有的未提交修改保持原样，未纳入本轮提交。
+
+| 最终执行项 | 结果 |
+| --- | --- |
+| `pnpm typecheck` | 通过，退出码 0 |
+| `pnpm build` | 通过，退出码 0；Vite 保留大 chunk 提示，无构建错误 |
+| `pnpm test:smoke` | 28 / 28 通过，0 失败，0 跳过，247.90 秒 |
+| `pnpm test:regression` | 39 / 39 通过，0 失败，0 跳过，317.77 秒 |
+| Split 专项 | 12 组通过，浏览器无 pageerror |
+| 大纲跳转与滚动联动专项 | 13 组通过，保留原有跳转、宽度、多 Pane 检查 |
+
+日志保存在 `test-results/split-unification/`；详细子套件日志由仓库运行器保存在 `test-results/regression-logs/`。
 
 ## 阶段提交
 
@@ -89,7 +106,10 @@ Live 图片保留编辑操作入口，Split 保留只读权限操作，因此交
 | 02 | `b1f3d660443274746c413377b22e627fc5f8eb53` | `feat(markdown): unify split code block presentation` |
 | 03 | `82d2d9d69b08ecb64eafada4af7a382abfa96d78` | `fix(markdown): improve reference definition presentation` |
 | 04 | `a96f719c4c2e7bb33ab4dea1caa5ac8ec39e491f` | `refactor(markdown): share live and split reading presentation` |
-| 05 | 包含本报告的独立验收提交（最终回复列出 SHA） | `test(markdown): verify unified split preview rendering` |
+| 05 资料 | `9e7a01ee3a10f6f7973d239ee5cbf0c4293feba9` | `docs: 添加 Markdown Live/Split 统一化验收文档及截图` |
+| 05 最终验收 | 本验收提交（最终回复列出 SHA） | `test(markdown): 完成 Split 与大纲联动验收` |
+
+追加的「滚动正文时，大纲当前标题加粗」功能独立提交于 `729e7294f1141a0cb939a59645025136c9b5166a`，实现、边界及截图见 [大纲滚动联动验收](outline-scroll-follow.md)。
 
 ## 已知边界和人工确认
 
