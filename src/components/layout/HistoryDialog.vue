@@ -45,7 +45,7 @@
             <button class="history-tab" :class="{ active: viewMode === 'preview' }" @click="viewMode = 'preview'">版本预览</button>
             <button class="history-tab" :class="{ active: viewMode === 'diff' }" @click="viewMode = 'diff'">与当前版本对比</button>
             <div class="history-tab-spacer"></div>
-            <button v-if="selectedSnapshot && selectedBody !== null" class="history-action-btn restore" @click="restoreSelected">恢复为此版本</button>
+            <button v-if="selectedSnapshot && selectedBody !== null" class="history-action-btn restore" :disabled="restoring || loadingBody" @click="restoreSelected">恢复为此版本</button>
             <button v-if="selectedSnapshot && selectedBody !== null" class="history-action-btn" @click="copySelected">复制内容</button>
             <button v-if="selectedSnapshot" class="history-action-btn delete" @click="deleteSelected">删除快照</button>
           </div>
@@ -79,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import {
   clearVersions,
   deleteVersion,
@@ -91,6 +91,7 @@ import {
   type HistoryEntry,
 } from '../../features/history/historyService'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
+import { sameFilePath } from '../../features/files/pathKey'
 
 const props = defineProps<{
   open: boolean
@@ -104,10 +105,12 @@ const emit = defineEmits<{(e: 'close'): void; (e: 'restored'): void}>()
 
 const versions = ref<HistoryEntry[]>([])
 /** Bodies are fetched only for the version the user is looking at. */
-const selectedBody = ref<string | null>(null)
+const loaded = ref<{path:string;documentId:string|null|undefined;id:string;hash:string;body:string}|null>(null)
 const loadingBody = ref(false)
 const bodyError = ref('')
 const selectedId = ref<string | null>(null)
+const restoring = ref(false)
+let listRequest = 0, bodyRequest = 0, restoreRequest = 0
 const viewMode = ref<'preview' | 'diff'>('preview')
 const diffLines = ref<DiffLine[]>([])
 
@@ -115,46 +118,63 @@ const currentPath = computed(() => props.filePath || '未命名文档')
 
 const selectedSnapshot = computed(() => {
   const entry = versions.value.find(item => item.id === selectedId.value) || null
-  return entry ? { ...entry, content: selectedBody.value ?? '' } : null
+  return entry
 })
+const selectedBody = computed(() => {
+  const body=loaded.value, entry=selectedSnapshot.value
+  return props.open && body && entry && body.path===props.filePath && body.documentId===props.documentId && body.id===entry.id && body.hash===entry.hash ? body.body : null
+})
+const hashBody = async (body:string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(body)))].map(byte=>byte.toString(16).padStart(2,'0')).join('')
+function invalidateBody() { bodyRequest++;restoreRequest++;loaded.value=null;loadingBody.value=false;restoring.value=false;diffLines.value=[] }
+function matches(path:string,id:typeof props.documentId) {return props.open && props.filePath===path && props.documentId===id}
 
 async function loadVersions() {
+  const request=++listRequest,path=props.filePath,documentId=props.documentId
+  invalidateBody();selectedId.value=null;versions.value=[]
   if (!props.open || !props.filePath) {
     versions.value = []
     selectedId.value = null
-    selectedBody.value = null
     return
   }
-  versions.value = await listVersions(props.filePath).catch(error => {
-    bodyError.value = `读取历史版本失败：${error instanceof Error ? error.message : String(error)}`
-    return []
-  })
+  let entries:HistoryEntry[]
+  try {entries=await listVersions(path)} catch(error) {
+    if(request===listRequest&&matches(path,documentId))bodyError.value = `读取历史版本失败：${error instanceof Error ? error.message : String(error)}`
+    return
+  }
+  if(request!==listRequest||!matches(path,documentId))return
+  versions.value=entries
   if (versions.value.length > 0) selectedId.value = versions.value[0].id
   else selectedId.value = null
 }
 
-watch(() => [props.open, props.filePath], async () => {
+watch(() => [props.open, props.filePath, props.documentId], async () => {
   bodyError.value = ''
   await loadVersions()
-}, { immediate: true })
+}, { immediate: true, flush:'sync' })
 
 watch(() => selectedId.value, async id => {
-  diffLines.value = []
-  selectedBody.value = null
+  invalidateBody()
   bodyError.value = ''
-  if (!id || !props.filePath) return
+  if (!id || !props.filePath || !props.open) return
+  const request=bodyRequest,path=props.filePath,documentId=props.documentId,entry=selectedSnapshot.value
+  if(!entry)return
+  const current=()=>request===bodyRequest&&matches(path,documentId)&&selectedId.value===id&&selectedSnapshot.value?.hash===entry.hash
   loadingBody.value = true
   try {
-    selectedBody.value = await readVersion(props.filePath, id)
+    const body=await readVersion(path,id)
+    if(!current())return
+    if(await hashBody(body)!==entry.hash)throw Error('版本内容哈希不匹配，已禁止恢复')
+    if(!current())return
+    loaded.value={path,documentId,id,hash:entry.hash,body}
     updateDiff()
   } catch (error) {
-    bodyError.value = `读取该版本失败：${error instanceof Error ? error.message : String(error)}`
+    if(current()){loaded.value=null;bodyError.value = `读取该版本失败：${error instanceof Error ? error.message : String(error)}`}
   } finally {
-    loadingBody.value = false
+    if(current())loadingBody.value = false
   }
-}, { immediate: true })
+}, { immediate: true, flush:'sync' })
 
-watch(() => viewMode.value, () => { if (viewMode.value === 'diff') updateDiff() })
+watch(() => [viewMode.value,props.currentContent], () => { if (viewMode.value === 'diff') updateDiff() })
 
 function formatTime(timestamp: number): string {
   const date = new Date(timestamp)
@@ -168,6 +188,7 @@ function originLabel(origin: HistoryEntry['origin']): string {
 }
 
 function selectSnapshot(entry: HistoryEntry) {
+  if(selectedId.value===entry.id && bodyError.value)selectedId.value=null
   selectedId.value = entry.id
 }
 
@@ -180,13 +201,17 @@ function updateDiff() {
 }
 
 function close() {
+  listRequest++;invalidateBody();selectedId.value=null;versions.value=[]
   emit('close')
 }
 
 async function restoreSelected() {
-  if (selectedBody.value === null || !props.manager || !props.documentId) return
-  const doc = props.manager.metadata(props.documentId)
-  if (!doc) return
+  if (restoring.value || loadingBody.value || selectedBody.value === null || !props.manager || !props.documentId || !selectedSnapshot.value || !loaded.value) return
+  const manager=props.manager,documentId=props.documentId,path=props.filePath,entry=selectedSnapshot.value,body=loaded.value
+  const doc = manager.metadata(documentId)
+  if (!doc || doc.readOnly || !doc.path || !sameFilePath(doc.path,path)) return
+  const original=manager.getState(documentId)?.doc,currentText=manager.getText(documentId)
+  if(!original || currentText===undefined)return
   // A restore is a destructive edit: say exactly what will happen before it does.
   const warning = doc.dirty
     ? '当前文档有未保存的修改，恢复后这些修改会被历史版本替换（可用撤销找回）。'
@@ -194,25 +219,30 @@ async function restoreSelected() {
   const ok = confirm(`${warning}\n\n确定恢复为 ${formatTime(selectedSnapshot.value?.createdAt ?? Date.now())} 的版本吗？`)
   if (!ok) return
 
-  const targetContent = selectedBody.value
+  const request=++restoreRequest
+  const current=()=>request===restoreRequest&&matches(path,documentId)&&selectedId.value===entry.id&&loaded.value===body&&props.manager===manager
+  restoring.value=true
+  const targetContent = body.body
   // Protection point first: the current text is recorded as a version so even a
   // failed restore can never cost the user their document.
   try {
-    await recordVersion(props.filePath, props.currentContent, 'manual', '恢复前保护点')
+    const protectedVersion=await recordVersion(path, currentText, 'manual', '恢复前保护点')
+    if(!protectedVersion)throw Error('历史存储不可用')
+    if(!current())return
+    const verified=await readVersion(path,entry.id)
+    if(verified!==targetContent||await hashBody(verified)!==entry.hash)throw Error('目标版本已改变或哈希不匹配')
+    if(!current())return
+    const latest=manager.metadata(documentId)
+    if(!latest||latest.readOnly||!latest.path||!sameFilePath(latest.path,path)||manager.getState(documentId)?.doc!==original)throw Error('当前文档在恢复期间发生变化，已取消恢复并保留新修改')
+    // Identity, selected version, bytes and the current immutable document are
+    // checked immediately before this single canonical transaction.
+    manager.dispatch(documentId, {changes:{from:0,to:original.length,insert:targetContent},userEvent:'input.history.restore'})
+    emit('restored');close()
   } catch (error) {
-    bodyError.value = `无法创建恢复保护点，已取消恢复：${error instanceof Error ? error.message : String(error)}`
-    return
+    if(current())bodyError.value = `已取消恢复：${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    if(request===restoreRequest)restoring.value=false
   }
-
-  const currentLength = props.manager.getText(props.documentId)?.length ?? 0
-  // A single canonical edit, so Undo restores the pre-restore text in one step.
-  props.manager.dispatch(props.documentId, {
-    changes: { from: 0, to: currentLength, insert: targetContent },
-    userEvent: 'input.history.restore',
-  })
-
-  emit('restored')
-  close()
 }
 
 function copySelected() {
@@ -221,19 +251,22 @@ function copySelected() {
 
 async function deleteSelected() {
   if (!selectedId.value || !props.filePath) return
-  await deleteVersion(props.filePath, selectedId.value).catch(() => {})
-  await loadVersions()
+  const path=props.filePath,id=selectedId.value,documentId=props.documentId
+  invalidateBody();selectedId.value=null
+  try {if(!await deleteVersion(path,id))throw Error('版本已不存在');if(matches(path,documentId))await loadVersions()}
+  catch(error){if(matches(path,documentId))bodyError.value=`删除历史版本失败：${String(error)}`}
 }
 
 async function clearAll() {
   if (!props.filePath) return
   const ok = confirm('确定清空该文件的所有历史版本记录吗？此操作不可撤销。')
   if (!ok) return
-  await clearVersions(props.filePath).catch(() => {})
-  versions.value = []
-  selectedId.value = null
-  selectedBody.value = null
+  const path=props.filePath,documentId=props.documentId
+  listRequest++;invalidateBody();selectedId.value=null
+  try {await clearVersions(path);if(matches(path,documentId))versions.value=[]}
+  catch(error){if(matches(path,documentId))bodyError.value=`清理历史版本失败：${String(error)}`}
 }
+onBeforeUnmount(()=>{listRequest++;invalidateBody()})
 </script>
 
 <style scoped>
