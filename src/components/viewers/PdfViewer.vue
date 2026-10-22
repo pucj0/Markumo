@@ -494,14 +494,20 @@ function onKeydown(event:KeyboardEvent){
 async function teardown(){
   ++searchGeneration;++navSequence;searching.value=false;passwordNeeded.value=false;passwordCallback=undefined;password.value=''
   ++positionEpoch;pendingAnchor=undefined;cancelAnimationFrame(anchorFrame);cancelAnimationFrame(scrollFrame);scrollFrame=0
-  const oldLoading=loading,oldWorker=worker,oldNative=nativeWorker,oldTransport=transport
+  const oldLoading=loading,oldWorker=worker,oldNative=nativeWorker,oldTransport=transport,oldApi=api.value
   loading=undefined;pdf.value=undefined;worker=undefined;nativeWorker=undefined;transport=undefined;oldTransport?.abort()
-  oldWorker?.destroy();oldNative?.terminate()
   await nextTick()
   let timeout:ReturnType<typeof setTimeout>|undefined
   try{if(oldLoading)await Promise.race([oldLoading.destroy(),new Promise<void>(resolve=>{timeout=setTimeout(resolve,1000)})])}
   catch{/* Already destroyed during load. */}
-  finally{if(timeout)clearTimeout(timeout)}
+  finally{
+    if(timeout)clearTimeout(timeout)
+    // PDF.js sends Terminate before clearing its font/TextLayer caches. Killing
+    // the port first strands that handshake and leaves hidden measurement
+    // canvases behind. Allow bounded graceful cleanup, then force termination.
+    oldWorker?.destroy();oldNative?.terminate()
+    oldApi?.TextLayer.cleanup()
+  }
 }
 async function load(){
   savePosition()

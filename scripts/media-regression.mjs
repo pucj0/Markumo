@@ -537,4 +537,12 @@ try{
   assert.deepEqual(errors,[])
   report.splitLayout=true
   fs.writeFileSync('.markumo-media-test/browser-metrics.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2))
-}catch(error){console.error(error);console.error(await page?.locator('body').innerText());throw error}finally{await browser?.close();await server.close()}
+}catch(error){
+  console.error(error);console.error(await page?.locator('body').innerText())
+  if(page)fs.writeFileSync('.markumo-media-test/failure-state.json',JSON.stringify(await page.evaluate(()=>({
+    documents:window.mediaTest?.manager.openedDocuments.map(d=>({id:d.id,name:d.name,kind:d.kind})),activeId:window.mediaTest?.manager.activeId,
+    workers:window.mediaTest?.workers.size,blobs:window.mediaTest?.blobs.size,
+    canvases:[...document.querySelectorAll('canvas')].map(c=>({html:c.outerHTML,parent:c.parentElement?.outerHTML.slice(0,1000)})),
+  })),null,2))
+  throw error
+}finally{await browser?.close();await server.close()}
