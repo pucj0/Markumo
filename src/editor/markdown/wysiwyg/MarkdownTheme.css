@@ -599,21 +599,34 @@ body.light .file-icon-gray { color: #6c7c92; }
   background: transparent;
   white-space: inherit;
 }
-.markdown-live .md-code-placeholder .md-code-line { display: flex; min-height: 1lh; }
-.markdown-live .md-code-placeholder .md-code-number {
-  display: none;
-  flex: none;
+.markdown-live .md-code-placeholder .md-code-line {
+  display: block;
+  position: relative;
   box-sizing: border-box;
-  min-width: calc(max(20px, var(--code-digits, 1) * 1ch + 8px) + 4px);
+  min-height: 1lh;
+  padding: 0 14px;
+}
+.markdown-live .md-code-placeholder > code.md-code-flat { position: relative; padding: 0 14px; }
+.markdown-live .md-code-placeholder.has-numbers .md-code-line,
+.markdown-live .md-code-placeholder.has-numbers > code.md-code-flat {
+  --static-gutter: calc(max(20px, var(--code-digits, 1) * 7.2px + 8px) + 4px);
+  padding-left: calc(14px + var(--static-gutter));
+}
+.markdown-live .md-code-placeholder.has-numbers .md-code-line::before,
+.markdown-live .md-code-placeholder.has-numbers > code.md-code-flat::before {
+  content: attr(data-line);
+  position: absolute;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  width: var(--static-gutter);
   padding: 0 3px 0 9px;
   text-align: right;
   font-size: 12px;
   color: var(--muted);
   user-select: none;
 }
-.markdown-live .md-code-placeholder.has-numbers .md-code-number { display: block; }
-.markdown-live .md-code-placeholder .md-code-text { display: block; padding: 0 14px; min-width: 0; }
-.markdown-live .md-code-placeholder:not(.is-wrapped) .md-code-text { flex: none; }
+.markdown-live .md-code-placeholder.has-numbers > code.md-code-flat::before { content: attr(data-line-numbers); white-space: pre; line-height: calc(var(--md-code-font-size) * var(--md-code-line-height)); }
 .markdown-live .md-code-block .md-code-placeholder.is-wrapped {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

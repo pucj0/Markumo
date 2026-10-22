@@ -2,7 +2,7 @@ import type { SyntaxSpan } from '../core/syntaxSpans'
 
 /** Split source ranges, never highlighted HTML. A multi-line token is closed
  * and reopened on each row; overlapping YAML/Lezer classes remain combined. */
-export function staticCodeLines(code: string, spans: readonly SyntaxSpan[], escape: (value: string) => string) {
+export function staticCodeLines(code: string, spans: readonly SyntaxSpan[], escape: (value: string) => string, compact = false) {
   const lines = code.split('\n'), starts = [0]
   for (let i = 0; i < lines.length - 1; i++) starts.push(starts[i] + lines[i].length + 1)
   const ranges: { from: number; to: number; classes: string }[][] = lines.map(() => [])
@@ -22,6 +22,7 @@ export function staticCodeLines(code: string, spans: readonly SyntaxSpan[], esca
       const classes = [...new Set(row.filter(range => range.from <= from && range.to >= to).flatMap(range => range.classes.split(' ')))].join(' ')
       html += classes ? `<span class="${escape(classes)}">${text}</span>` : text
     }
+    if (compact) return `<span class="md-code-line md-code-text" data-line="${index + 1}">${html}</span>`
     const number = String(index + 1).padStart(Math.max(2, String(lines.length).length), ' ')
     return `<span class="md-code-line"><span class="md-code-number" aria-hidden="true">${number}</span><span class="md-code-text">${html}</span></span>`
   }).join('')

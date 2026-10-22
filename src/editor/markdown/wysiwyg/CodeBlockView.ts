@@ -18,6 +18,9 @@ import { syntaxSpans } from '../../core/syntaxSpans'
 import { staticCodeLines } from '../staticCode'
 
 const escapeCode = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]!))
+// Recently released blocks may reuse static syntax. Never paint the entire
+// offscreen document just to replace a bounded number of live editors.
+const staticHighlightViews = new Set<CodeBlockView>()
 
 interface CodeSearchRange { from: number; to: number; current: boolean }
 const setCodeSearch = StateEffect.define<CodeSearchRange[]>()
@@ -290,6 +293,7 @@ export class CodeBlockView implements NodeView {
       return this.cmInstance
     }
     if (this.placeholder) {
+      staticHighlightViews.delete(this)
       this.placeholder.remove()
       this.placeholder = null
     }
@@ -417,10 +421,15 @@ export class CodeBlockView implements NodeView {
     this.highlightDoc = undefined
     this.cmInstance.destroy()
     this.cmInstance = null
-    if (!this.isMermaid) this.renderPlaceholder()
+    if (!this.isMermaid) this.renderPlaceholder(true)
   }
 
-  private renderPlaceholder() {
+  private renderPlaceholder(highlight = false) {
+    staticHighlightViews.delete(this)
+    if (highlight) {
+      staticHighlightViews.add(this)
+      if (staticHighlightViews.size > 8) staticHighlightViews.values().next().value?.renderPlaceholder()
+    }
     if (!this.placeholder) {
       this.placeholder = document.createElement('pre')
       this.placeholder.className = 'md-code-placeholder'
@@ -428,9 +437,13 @@ export class CodeBlockView implements NodeView {
     }
     const code = document.createElement('code')
     const source = this.node.textContent
-    code.innerHTML = staticCodeLines(source, [], escapeCode)
+    if (this.settings.codeWrap) code.innerHTML = staticCodeLines(source, [], escapeCode, true)
+    else {
+      code.className = 'md-code-flat md-code-text'
+      code.textContent = source || '\n'
+      code.dataset.lineNumbers = Array.from({ length: source.split('\n').length }, (_, index) => index + 1).join('\n')
+    }
     this.placeholder.style.setProperty('--code-digits', String(source.split('\n').length).length.toString())
-    code.querySelectorAll('.md-code-number').forEach((number, index) => { number.textContent = String(index + 1) })
     this.placeholder.replaceChildren(code)
     this.placeholder.classList.toggle('is-wrapped', this.settings.codeWrap)
     this.placeholder.classList.toggle('has-numbers', this.settings.codeLineNumbers)
@@ -438,10 +451,10 @@ export class CodeBlockView implements NodeView {
     const { language } = parseFenceInfo(this.node.attrs.params)
     // Reuse the same parser and token classes as preview/export, without CM state.
     // Do not parse giant fences just to decorate an offscreen placeholder.
-    if (language && source.length <= 64 * 1024) void loadLanguage(language.name, 'fence').then(support => {
+    if (highlight && language && source.length <= 64 * 1024) void loadLanguage(language.name, 'fence').then(support => {
       if (this.dead || this.cmInstance || generation !== this.placeholderGeneration || !(support instanceof LanguageSupport)) return
-      code.innerHTML = staticCodeLines(source, syntaxSpans(source, support), escapeCode)
-      code.querySelectorAll('.md-code-number').forEach((number, index) => { number.textContent = String(index + 1) })
+      code.className = ''
+      code.innerHTML = staticCodeLines(source, syntaxSpans(source, support), escapeCode, true)
     }).catch(() => { /* Plain source remains selectable on language load failure. */ })
   }
 
@@ -692,6 +705,7 @@ export class CodeBlockView implements NodeView {
   destroy() {
     if (this.renderTimer) clearTimeout(this.renderTimer)
     this.dead = true
+    staticHighlightViews.delete(this)
     window.removeEventListener('pointerup', this.releasePointer)
     window.removeEventListener('pointercancel', this.releasePointer)
     window.removeEventListener('pointermove', this.dragPlaceholder)
