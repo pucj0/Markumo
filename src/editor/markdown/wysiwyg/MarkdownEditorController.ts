@@ -697,7 +697,7 @@ export class MarkdownEditorController implements LiveEditor {
       if (!this.disposed) {
         const code = [...this.codeViews].find(c => c.getPos() === pos)
         if (code) {
-          code.cm.focus()
+          code.ensureEditor().focus()
           code.setSelection(0, 0)
         }
       }
@@ -728,7 +728,7 @@ export class MarkdownEditorController implements LiveEditor {
       if (!this.disposed) {
         const code = [...this.codeViews].find(c => c.getPos() === pos)
         if (code) {
-          code.cm.focus()
+          code.ensureEditor().focus()
           code.setSelection(0, 0)
         }
       }
@@ -788,7 +788,7 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   get composing() {
-    return this.compositionActive || this.view.composing || !!this.inlineSource?.composing || !!this.inlineSource?.pending || [...this.codeViews].some(code => code.cm.compositionStarted) || [...this.htmlViews].some(html=>html.composing)
+    return this.compositionActive || this.view.composing || !!this.inlineSource?.composing || !!this.inlineSource?.pending || [...this.codeViews].some(code => code.isComposing) || [...this.htmlViews].some(html=>html.composing)
   }
 
   get selection() {

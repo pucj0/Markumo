@@ -208,9 +208,10 @@ export class CodeBlockView implements NodeView {
     }
   }
 
-  get cm(): CMView {
-    return this.ensureEditor()
-  }
+  /** State queries must never allocate a virtualized editor. */
+  get existingEditor(): CMView | null { return this.cmInstance }
+  get isComposing(): boolean { return !!this.cmInstance?.compositionStarted }
+  get hasFocus(): boolean { return !!this.cmInstance?.hasFocus }
 
   ensureEditor(): CMView {
     if (this.cmInstance) {
@@ -412,13 +413,8 @@ export class CodeBlockView implements NodeView {
     queueMicrotask(() => {
       this.highlightScheduled = false
       if (this.dead) return
-      if (!this.cmInstance) {
-        if (ranges.length > 0) {
-          this.ensureEditor()
-        } else {
-          return
-        }
-      }
+      // Offscreen matches are retained as data and applied on explicit activation.
+      if (!this.cmInstance) return
       const key = JSON.stringify(this.pendingHighlights)
       if (key === this.highlightKey && this.highlightDoc === this.cmInstance?.state.doc) return
       if (this.cmInstance) {
