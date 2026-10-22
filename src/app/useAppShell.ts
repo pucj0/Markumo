@@ -1192,6 +1192,8 @@ export function useAppShell() {
         manager.setMarkdownMode(doc.id, payload.markdownMode as MarkdownMode, 'main')
       }
       manager.pin(doc.id)
+      manager.setSelectionOffsets(doc.id, payload.anchor, payload.head)
+      manager.restoreScroll(doc.id, payload.scrollTop, payload.scrollLeft)
       await commitDetach(handoffId).catch(() => {})
       return manager.metadata(doc.id)
     } catch (error) {

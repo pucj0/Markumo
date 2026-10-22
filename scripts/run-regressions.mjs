@@ -46,6 +46,7 @@ const SMOKE_TESTS = [
   'scripts/history-regression.mjs',
   'scripts/docx-regression.mjs',
   'scripts/workspace-dnd-regression.mjs',
+  'scripts/window-detach-regression.mjs',
   'scripts/slash-commands-regression.mjs',
   'scripts/math-editor-regression.mjs',
   'scripts/typewriter-focus-regression.mjs',
