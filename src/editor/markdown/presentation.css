@@ -245,3 +245,51 @@ body.light :is(.markdown-live, .split-preview-pane) {
   font-size: 12px;
   font-style: italic;
 }
+
+/* 脚注定义原生编辑卡片样式 */
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-footnote-def-node {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 1em 0;
+  padding: 8px 12px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-footnote-def-badge-wrap {
+  flex: none;
+  user-select: none;
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-footnote-def-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font: 600 12px var(--font-mono);
+  cursor: pointer;
+  transition: all .15s ease;
+}
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-footnote-def-badge:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-footnote-back-icon {
+  font-size: 11px;
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-footnote-def-content {
+  flex: 1 1 0%;
+  min-width: 0;
+  line-height: 1.6;
+}
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-footnote-def-content > :first-child { margin-top: 0; }
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-footnote-def-content > :last-child { margin-bottom: 0; }

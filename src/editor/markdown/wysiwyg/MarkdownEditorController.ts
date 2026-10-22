@@ -19,6 +19,7 @@ import { Decoration, DecorationSet } from 'prosemirror-view'
 import { CodeBlockView } from './CodeBlockView'
 import { CalloutNodeView } from './CalloutNodeView'
 import { TocNodeView } from './TocNodeView'
+import { FootnoteDefNodeView } from './FootnoteDefNodeView'
 import { LiveImageView } from './LiveImageView'
 import { ImagePreview } from './ImagePreview'
 import { FenceAutocomplete } from './FenceAutocomplete'
@@ -441,6 +442,7 @@ export class MarkdownEditorController implements LiveEditor {
           }
           return tocView
         },
+        footnote_definition: (node, view, getPos) => new FootnoteDefNodeView(node, view, getPos, () => !!this.options.readOnly?.()),
         code_block: (node, view, getPos) => {
           const code = new CodeBlockView(
             node,

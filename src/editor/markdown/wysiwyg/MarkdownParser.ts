@@ -175,7 +175,7 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
       }
       const reference = token.type === 'reference_definition'
       const footnote = reference && String(token.meta?.label || '').startsWith('^')
-      ranges.push({from:starts[token.map[0]],to,raw:token.type==='html_block'||reference,
+      ranges.push({from:starts[token.map[0]],to,raw:token.type==='html_block'||(reference && !footnote),
         kind: reference ? footnote ? 'footnote' : 'reference' : undefined,
         label: reference ? footnote ? '脚注定义' : '链接引用定义' : token.type==='html_block'?'HTML（安全源码）':'扩展语法（保留源码）'})
     }
@@ -195,11 +195,20 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
     let node:Node
     if(reused)node=reused.node
     else try {
-      const complex=raw || /(^|\n)(?:\[\^[^\]]+\]:| {0,3}\$\$|:::+)/i.test(original)
-      if(complex) node=s.nodes.protected_source.create({source:original,label,kind})
-      else {
-        node=markdownParser.parse(original,env).firstChild!
-        if(!node)node=s.nodes.protected_source.create({source:original,label,kind})
+      const fnMatch = kind === 'footnote' && /^\s*\[\^([^\]]+)\]:\s*([\s\S]*)$/.exec(original)
+      if (fnMatch) {
+        const label = fnMatch[1]
+        const body = fnMatch[2].trim() || ' '
+        const parsed = markdownParser.parse(body, env)
+        const content = parsed.childCount ? parsed.content : [s.nodes.paragraph.create()]
+        node = s.nodes.footnote_definition.create({ label }, content)
+      } else {
+        const complex=raw || /(^|\n)(?: {0,3}\$\$|:::+)/i.test(original)
+        if(complex) node=s.nodes.protected_source.create({source:original,label,kind})
+        else {
+          node=markdownParser.parse(original,env).firstChild!
+          if(!node)node=s.nodes.protected_source.create({source:original,label,kind})
+        }
       }
     }catch{node=s.nodes.protected_source.create({source:original,label,kind})}
     if(!reused)node=node.type.create({...node.attrs,sourceId:id},node.content,node.marks)

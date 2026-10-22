@@ -185,11 +185,15 @@ $$
     const result=await page.evaluate(()=>({
       kinds:window.t.live.bridge.blocks.filter(b=>b.node.type.name==='protected_source').map(b=>b.node.attrs.kind),
       hasNativeCallout:window.t.live.bridge.blocks.some(b=>b.node.type.name==='callout'),
+      hasNativeToc:window.t.live.bridge.blocks.some(b=>b.node.type.name==='toc'),
+      hasNativeFootnote:window.t.live.bridge.blocks.some(b=>b.node.type.name==='footnote_definition'),
       source:window.t.live.bridge.prepare(window.t.live.bridge.doc).source
     }))
     assert.equal(result.source,source)
-    assert.ok(result.hasNativeCallout, 'Callout must be upgraded to native structured node')
-    for(const kind of ['yaml','toc','footnote','extension'])assert.ok(result.kinds.includes(kind),kind)
+    assert.ok(result.hasNativeCallout, 'Callout upgraded to native node')
+    assert.ok(result.hasNativeToc, 'TOC upgraded to native node')
+    assert.ok(result.hasNativeFootnote, 'Footnote upgraded to native node')
+    for(const kind of ['yaml','extension'])assert.ok(result.kinds.includes(kind),kind)
     assert.ok(await page.locator('.markdown-live :is(.md-callout-node, .md-callout)').count() >= 1)
     assert.equal(await page.locator('.markdown-live .md-html-preview').count(),1)
     assert.equal(await page.locator('.md-reference-definition').count(),0)

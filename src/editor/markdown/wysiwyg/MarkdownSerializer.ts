@@ -23,6 +23,22 @@ export const markdownSerializer = new MarkdownSerializer({ ...defaultMarkdownSer
     })
     state.closeBlock(node)
   },
+  footnote_definition(state, node) {
+    const label = node.attrs.label || '1'
+    state.write(`[^${label}]: `)
+    if (node.childCount > 0 && node.child(0).type.name === 'paragraph') {
+      node.child(0).forEach((inlineNode, _, index) => {
+        state.render(inlineNode, node.child(0), index)
+      })
+      for (let i = 1; i < node.childCount; i++) {
+        state.write('\n    ')
+        state.render(node.child(i), node, i)
+      }
+    } else {
+      state.renderContent(node)
+    }
+    state.closeBlock(node)
+  },
   list_item(state,node){if(node.attrs.checked!==null)state.write(node.attrs.checked?'[x] ':'[ ] ');state.renderContent(node)},
   code_block(state,node){
     const char=node.attrs.fence?.[0]==='~'||String(node.attrs.params).includes('`')?'~':'`'

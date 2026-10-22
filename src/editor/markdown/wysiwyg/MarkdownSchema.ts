@@ -43,6 +43,25 @@ nodes.toc = {
   }],
   toDOM: node => ['div', { 'data-toc': 'true', 'data-toc-raw': node.attrs.raw, class: 'md-toc-block' }],
 }
+nodes.footnote_definition = {
+  group: 'block',
+  content: 'block+',
+  defining: true,
+  isolating: true,
+  attrs: {
+    sourceId: { default: null },
+    label: { default: '1' },
+  },
+  parseDOM: [{
+    tag: 'div[data-footnote-definition]',
+    getAttrs: dom => ({ label: (dom as HTMLElement).getAttribute('data-footnote-label') || '1' }),
+  }],
+  toDOM: node => ['div', {
+    class: 'md-footnote-definition-node',
+    'data-footnote-definition': 'true',
+    'data-footnote-label': node.attrs.label,
+  }, 0],
+}
 nodes.callout = {
   group: 'block',
   content: 'block+',
