@@ -6,8 +6,9 @@ import { releaseConversion } from './conversionLease'
 import { loadConversionSettings, saveLastExport, loadLastExport } from './conversionSettings'
 import { renderMarkdownForExport, extractDocumentTitle } from './ExportRenderer'
 import { buildCompleteHtml } from './ExportStyles'
-import { exportMarkdownToDocx } from './PandocBridge'
+import { exportMarkdownToDocx, getPandocStatus } from './PandocBridge'
 import { exportAppearance } from './ExportAppearance'
+import { exportMarkdownToNativeDocx } from './nativeDocxExport'
 
 export class ExportController {
   constructor(
@@ -66,7 +67,7 @@ export class ExportController {
       } else if (format === 'pdf') {
         await this.exportPdf(textSnapshot, docTitle, target, settings, doc.fileToken)
       } else if (format === 'docx') {
-        await this.exportDocx(textSnapshot, doc.path, target, doc.fileToken)
+        await this.exportDocx(textSnapshot, docTitle, doc.path, target, doc.fileToken)
       } else if (format === 'png') {
         await this.exportPng(textSnapshot, target, settings, doc.fileToken)
       }
@@ -157,13 +158,29 @@ export class ExportController {
 
   private async exportDocx(
     markdown: string,
+    title: string,
     docPath?: string,
     target?: ConversionSelection,
     documentToken?: string
   ): Promise<void> {
     if (!target) throw new Error('未指定导出路径')
-    const resourceDir = docPath ? docPath.replace(/[/\\][^/\\]+$/, '') : undefined
-    await exportMarkdownToDocx(markdown, target.path, resourceDir, target.token, documentToken)
+    const pandoc = await getPandocStatus().catch(() => ({ available: false }))
+    if (pandoc.available) {
+      const resourceDir = docPath ? docPath.replace(/[/\\][^/\\]+$/, '') : undefined
+      await exportMarkdownToDocx(markdown, target.path, resourceDir, target.token, documentToken)
+      return
+    }
+
+    const bytes = await exportMarkdownToNativeDocx(markdown, title)
+    if (isTauri()) {
+      await invoke('save_binary_file', {
+        token: target.token,
+        format: 'docx',
+        bytes: Array.from(bytes),
+      })
+    } else {
+      this.downloadBlob(new Blob([bytes as unknown as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }), target.path)
+    }
   }
 
   private async exportPng(

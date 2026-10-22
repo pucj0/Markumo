@@ -177,8 +177,8 @@ pub async fn save_binary_file(
     bytes: BinaryBytes,
 ) -> Result<(), String> {
     let purpose = Purpose::write(&format)?;
-    if !matches!(purpose, Purpose::Html | Purpose::Png) {
-        return Err("此命令只接受 HTML/PNG 授权".into());
+    if !matches!(purpose, Purpose::Html | Purpose::Png | Purpose::Docx) {
+        return Err("此命令只接受 HTML/PNG/DOCX 授权".into());
     }
     let op = store.begin(window.label(), &[(&token, purpose)])?;
     tauri::async_runtime::spawn_blocking(move || conversion::save_binary(&op, &bytes.0))

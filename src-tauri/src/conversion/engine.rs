@@ -471,7 +471,12 @@ pub fn save_binary(op: &Operation, bytes: &[u8]) -> Result<()> {
                 return Err("PNG 输出格式无效".into());
             }
         }
-        _ => return Err("二进制导出只允许 HTML/PNG 授权".into()),
+        Purpose::Docx => {
+            if !bytes.starts_with(b"PK\x03\x04") {
+                return Err("DOCX 输出格式无效，未检测到标准 PKZip 签名".into());
+            }
+        }
+        _ => return Err("二进制导出只允许 HTML/PNG/DOCX 授权".into()),
     }
     op.commit(0, bytes)
 }
