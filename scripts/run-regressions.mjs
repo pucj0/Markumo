@@ -10,6 +10,7 @@ const LOG_DIR = path.resolve(ROOT_DIR, 'test-results/regression-logs')
 
 // Smoke tests: fast, deterministic, core regressions covering Markdown, settings, updater, smooth caret, workspace, syntax, brackets
 const SMOKE_TESTS = [
+  'scripts/tab-navigation-regression.mjs',
   'scripts/outline-docking-regression.mjs',
   'scripts/code-structure-regression.mjs',
   'scripts/split-preview-regression.mjs',
@@ -44,6 +45,7 @@ const SMOKE_TESTS = [
 
 // Full regression suite: all existing regression scripts
 const FULL_REGRESSION_TESTS = [
+  'scripts/tab-navigation-regression.mjs',
   'scripts/outline-docking-regression.mjs',
   'scripts/code-structure-regression.mjs',
   'scripts/split-preview-regression.mjs',

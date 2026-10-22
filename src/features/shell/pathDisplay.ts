@@ -6,7 +6,7 @@ export function readablePath(path: string): string {
 }
 export function displayPathKey(path: string) {
   const value = readablePath(path).replace(/\\/g, '/').replace(/\/$/, '')
-  return /^[a-z]:\//i.test(value) || value.startsWith('//') ? value.toLowerCase() : value
+  return /^[a-z]:(?:\/|$)/i.test(value) || value.startsWith('//') ? value.toLowerCase() : value
 }
 export function displayFilePath(path: string, root?: { rootPath: string; name: string } | null, multiRoot = false) {
   const full = readablePath(path)

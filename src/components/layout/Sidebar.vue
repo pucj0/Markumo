@@ -621,7 +621,7 @@ function focusSearchInput() {
   })
 }
 
-defineExpose({ focusSearchInput })
+defineExpose({ focusSearchInput, locateCurrentFile })
 watch(() => [props.activePanel, props.workspace.searchFocusRevision], () => {
   if (props.activePanel === 'search') nextTick(() => {
     if (props.workspace.searchFocusReplace) replaceInputRef.value?.focus()
@@ -732,7 +732,7 @@ onUnmounted(() => {
 }
 .panel-body.files-body { overflow:hidden;display:flex;flex-direction:column;padding:0 }
 .files-body .treelist { flex:1;min-height:0;display:flex;flex-direction:column }
-.workspace-tree-container { flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain }
+.workspace-tree-container { flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;overflow-anchor:none }
 
 .treelist {
   font-size: var(--ui-font-size);

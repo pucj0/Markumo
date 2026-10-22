@@ -101,6 +101,9 @@ const definitions: Omit<KeybindingCommand,'executeId'|'supported'|'contexts'|'us
     defaultBinding: 'Mod+PageUp',
   },
 
+  { id:'recent-tab',label:'切换最近使用标签',category:'navigation',description:'切换到当前窗格最近使用的另一个标签；再次执行返回，与标签顺序切换独立',scope:'editor',defaultBinding:'Mod+Tab' },
+  { id:'show-open-tabs',label:'显示已打开文件',category:'navigation',description:'筛选当前窗格已打开的文件，按最近使用顺序显示',scope:'editor' },
+
   // --- 编辑类 (edit) ---
   {
     id: 'undo',
@@ -497,7 +500,7 @@ export const allCommands: KeybindingCommand[] = definitions.map(command => ({
   repeatable: codeCommands.has(command.id) || ['undo','redo','find-next','find-previous','next-tab','previous-tab','zoom-in','zoom-out'].includes(command.id),
   contexts: codeCommands.has(command.id) ? ['text','source','code-block']
     : command.category === 'markdown' ? (command.id.startsWith('md-mode-') || command.id === 'toggle-outline' ? ['shell','source','live','code-block'] : ['source','live'])
-    : command.scope === 'global' || command.scope === 'workspace' || command.category === 'file' || command.category === 'split' || ['next-tab','previous-tab'].includes(command.id) ? [...shellContexts]
+    : command.scope === 'global' || command.scope === 'workspace' || command.category === 'file' || command.category === 'split' || ['next-tab','previous-tab','recent-tab','show-open-tabs'].includes(command.id) ? [...shellContexts]
     : command.category === 'search' ? ['text','source','live','code-block','search'] : ['text','source','live','code-block'],
 }))
 

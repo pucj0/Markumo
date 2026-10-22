@@ -1,11 +1,44 @@
 <template>
   <footer class="status">
     <div class="stat-group left">
-      <span class="stat-item file-path" :title="readablePath(doc?.path || doc?.name || '未打开文件')" aria-label="当前文件路径">{{ displayFilePath(doc?.path || doc?.name || '未打开文件', root, multiRoot) }}</span>
+      <nav class="breadcrumb-trail" aria-label="文件路径层级">
+        <template v-if="crumbs.length">
+          <template v-for="(crumb, index) in crumbs" :key="crumb.path">
+            <span v-if="index" class="crumb-separator" aria-hidden="true">›</span>
+            <button
+              v-if="crumb.directory"
+              class="crumb-directory"
+              :class="{ 'crumb-root': index === 0, 'crumb-parent': index === crumbs.length - 2 }"
+              :title="readablePath(crumb.path)"
+              :aria-label="`浏览目录 ${crumb.name}`"
+              @click="openDirectory($event, crumb.path)"
+            >{{ crumb.name }}</button>
+            <span v-else class="crumb-file" :title="readablePath(doc?.path || '')">{{ crumb.name }}</span>
+          </template>
+        </template>
+        <template v-else>
+          <template v-for="(seg, index) in fallbackSegments" :key="index">
+            <span v-if="index" class="crumb-separator" aria-hidden="true">›</span>
+            <span :class="seg.directory ? 'crumb-segment' : 'crumb-file'" :title="readablePath(doc?.path || doc?.name || '')">{{ seg.name }}</span>
+          </template>
+        </template>
+        <template v-for="symbol in symbolChain" :key="symbol.id">
+          <span class="crumb-separator symbol-separator" aria-hidden="true">›</span>
+          <button
+            class="crumb-symbol"
+            :title="`${symbol.kind === 'heading' ? '标题' : '代码符号'}：${symbol.name}`"
+            @click="revealSymbol(symbol)"
+          >
+            <Icon :name="symbol.kind === 'heading' ? 'outline' : 'symbol-' + symbol.kind" size="small" />
+            <span>{{ symbol.name }}{{ ['method', 'function', 'constructor'].includes(symbol.kind || '') ? '()' : '' }}</span>
+          </button>
+        </template>
+      </nav>
+
       <span class="stat-item dirty-item" :class="{ dirty: isDirty }">
         {{ doc?.kind === 'javaClass' || isMedia(doc) ? '只读查看' : isDirty ? '● 未保存修改' : doc?.fileToken ? '已保存' : doc ? '未保存' : '' }}
       </span>
-      <span v-if="doc?.readOnly && doc.kind !== 'javaClass' && !isMedia(doc)" class="stat-item" title="原路径不可写，可另存为">不可写</span>
+      <span v-if="doc?.readOnly && doc.kind !== 'javaClass' && !isMedia(doc)" class="stat-item readonly-tag" title="原路径不可写，可另存为">不可写</span>
     </div>
 
     <div class="stat-group right">
@@ -42,15 +75,43 @@
       <span v-if="!isMedia(doc)" class="stat-item">{{ doc?.kind === 'javaClass' ? `${doc.classInfo?.byteLength.toLocaleString()} 字节` : `${charCount} 字符` }}</span>
     </div>
     <ContextMenu ref="encodingMenuRef" />
+    <NavigationPopup
+      v-if="menuAnchor"
+      :key="menuPath"
+      :anchor="menuAnchor"
+      :title="menuPath"
+      filter-label="筛选目录文件"
+      :items="menuItems"
+      :message="message"
+      :parent-label="parentPath"
+      action-label="在工作区文件树中定位当前文件"
+      @select="choose"
+      @parent="loadDirectory(parentPath!)"
+      @action="revealTree"
+      @close="closeMenu"
+    />
   </footer>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, inject, shallowRef, watch, onUnmounted } from 'vue'
 import { isMedia, mediaSize } from '../../features/files/media'
 import type { EditorDocument } from '../../types'
+import type { DocumentManager } from '../../editor/core/DocumentManager'
 import { languageNames, type LanguageName } from '../../editor/languages'
 import { readablePath, displayFilePath } from '../../features/shell/pathDisplay'
+import {
+  workspaceNavigationKey,
+  pathCrumbs,
+  navigationDirectory,
+  navigationParent,
+} from '../../features/workspace/navigation'
+import type { WorkspaceNode } from '../../features/workspace/contracts'
+import NavigationPopup from '../common/NavigationPopup.vue'
+import Icon from '../common/Icon.vue'
+import { useDocumentOutline } from '../../editor/outline/useDocumentOutline'
+import { useOutlineViewport } from '../../editor/outline/useOutlineViewport'
+import type { OutlineItem } from '../../editor/outline/outlineService'
 import ContextMenu from '../common/ContextMenu.vue'
 import { CommandRegistry, menuCommand as cmd, separator, type MenuNode } from '../../features/shell/menuModel'
 import type { Encoding, FileOpenEncoding } from '../../features/files/contracts'
@@ -70,7 +131,106 @@ const props = defineProps<{
   recoveryCount: number
   root?: { rootPath: string; name: string } | null
   multiRoot?: boolean
+  manager?: DocumentManager
 }>()
+
+const navigation = inject(workspaceNavigationKey, undefined)
+const crumbs = computed(() => {
+  if (props.doc?.path && navigation?.enabled()) {
+    return pathCrumbs(props.doc.path, navigation.workspace.roots)
+  }
+  return []
+})
+
+const fallbackSegments = computed(() => {
+  if (!props.doc) return [{ name: '未打开文件', directory: false }]
+  const raw = displayFilePath(props.doc.path || props.doc.name, props.root, props.multiRoot)
+  const parts = raw.split(/[\\/]/).filter(Boolean)
+  if (!parts.length) return [{ name: props.doc.name || '未命名', directory: false }]
+  return parts.map((name, index) => ({
+    name,
+    directory: index < parts.length - 1,
+  }))
+})
+
+const structure = useDocumentOutline(() => props.manager, () => props.doc, () => !!props.manager && (!props.doc?.kind || props.doc.kind === 'text'))
+const activeSymbol = useOutlineViewport(() => props.manager, () => props.doc?.id, () => structure.value.items)
+const symbolChain = computed(() => {
+  const items = structure.value.items, index = items.findIndex(item => item.id === activeSymbol.value)
+  if (index < 0) return []
+  const current = items[index], chain: OutlineItem[] = []
+  if (current.kind === 'heading') {
+    for (const item of items.slice(0, index + 1)) { while (chain.length && chain[chain.length - 1].level >= item.level) chain.pop(); chain.push(item) }
+  } else {
+    const byId = new Map(items.map(item => [item.id, item])); let item: OutlineItem | undefined = current
+    while (item) { chain.unshift(item); item = item.parentId ? byId.get(item.parentId) : undefined }
+  }
+  return chain.slice(-2)
+})
+
+function revealSymbol(item: OutlineItem) {
+  const m = props.manager
+  if (!m || !props.doc) return
+  m.revealOutline(props.doc.id, item)
+}
+
+const menuAnchor = shallowRef<HTMLElement | null>(null), menuPath = ref(''), nodes = shallowRef<WorkspaceNode[]>([]), message = ref('')
+let epoch = 0
+const menuItems = computed(() => nodes.value.map(node => ({ id: node.path, label: node.name, directory: node.isDirectory })))
+const parentPath = computed(() => navigationParent(menuPath.value, navigation?.workspace.rootForPath(menuPath.value) || null))
+
+function closeMenu(restore = false) {
+  ++epoch
+  const anchor = menuAnchor.value
+  menuAnchor.value = null
+  nodes.value = []
+  if (restore && anchor?.isConnected) anchor.focus()
+}
+
+function openDirectory(event: MouseEvent, path: string) {
+  closeMenu()
+  menuAnchor.value = event.currentTarget as HTMLElement
+  void loadDirectory(path)
+}
+
+async function loadDirectory(path: string) {
+  if (!navigation?.enabled()) return closeMenu()
+  const current = ++epoch
+  menuPath.value = path
+  nodes.value = []
+  message.value = '正在加载目录…'
+  try {
+    const result = await navigationDirectory(navigation.workspace, path)
+    if (current !== epoch) return
+    nodes.value = result.nodes
+    message.value = result.limited ? '目录较大，仅列出前 1000 项。' : result.nodes.length ? '' : '此目录没有可导航的文件。'
+  } catch (error) {
+    if (current === epoch) message.value = `无法加载目录：${String(error)}`
+  }
+}
+
+async function choose(path: string) {
+  const node = nodes.value.find(node => node.path === path)
+  if (!node || !navigation?.enabled() || !navigation.workspace.rootForPath(path)) return
+  if (node.isDirectory) return loadDirectory(path)
+  closeMenu()
+  await navigation.workspace.openFile(node)
+}
+
+async function revealTree() {
+  const path = props.doc?.path, current = epoch
+  if (!path || !navigation?.enabled()) return
+  const found = await navigation.reveal(path)
+  if (current !== epoch) return
+  if (found) closeMenu()
+  else message.value = '无法在当前工作区文件树中定位该文件。'
+}
+
+watch([() => props.doc?.id, () => props.doc?.path, () => navigation?.enabled(), () => navigation?.workspace.openRevision], () => closeMenu())
+onUnmounted(() => {
+  ++epoch
+  menuAnchor.value = null
+})
 
 const encodingMenuRef = ref<InstanceType<typeof ContextMenu> | null>(null)
 
@@ -209,7 +369,94 @@ function openEncodingMenu(event: MouseEvent | KeyboardEvent) {
 
 .stat-group.left { min-width: 0; flex: 1; }
 .stat-group.right { flex: none; }
-.file-path { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.breadcrumb-trail {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  max-width: min(650px, 60vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumb-directory, .crumb-segment {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 3px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+
+.crumb-directory:hover {
+  background: var(--hover);
+  color: var(--bright);
+}
+
+.crumb-separator {
+  opacity: .5;
+  flex: none;
+  margin: 0 1px;
+  color: var(--muted);
+  font-size: var(--ui-small-font-size);
+}
+
+.crumb-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 20px;
+  flex-shrink: 1;
+  color: var(--bright);
+  font-weight: 500;
+}
+
+.readonly-tag {
+  color: #d9534f;
+  font-weight: 500;
+  font-size: var(--ui-small-font-size);
+}
+
+.crumb-symbol {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 3px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+
+.crumb-symbol:hover {
+  background: var(--hover);
+  color: var(--bright);
+}
+
+.crumb-symbol :deep(.icon) {
+  flex: none;
+}
+
 .dirty-item { flex: none; }
 
 .dirty-item.dirty {

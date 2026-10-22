@@ -132,7 +132,7 @@ watch(() => props.pane, (pane, previous) => {
 watch(() => !!props.doc, (present, previous) => {
   if (present && !previous && props.manager.activePane === props.pane) props.manager.focusPane(props.pane)
 }, { flush: 'post' })
-onBeforeUnmount(() => { stopSplitResize?.(); props.manager.unmount(props.pane, host.value) })
+onBeforeUnmount(() => { stopSplitResize?.(); props.manager.unmount(props.pane, host.value, true) })
 </script>
 <style scoped>
 .pane-body { flex: 1; display: flex; min-width: 0; min-height: 0; position: relative; overflow: hidden }

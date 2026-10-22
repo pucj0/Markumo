@@ -40,6 +40,7 @@
 
       <!-- 工作区内容侧边栏；大纲由编辑容器统一停靠 -->
       <Sidebar
+        ref="navigationSidebar"
         v-if="leftSidebarOccupied"
         v-model:width="sidebarWidth"
         :active-panel="sidebarPanel"
@@ -96,6 +97,7 @@
     <StatusBar
       v-if="!focusMode"
       :doc="activeDoc"
+      :manager="manager"
       @set-language="setLanguage"
       @reopen-encoding="reopenEncoding"
       @convert-encoding="convertEncoding"
@@ -215,7 +217,8 @@ import Toast from './components/common/Toast.vue'
 import UpdatePanel from './components/common/UpdatePanel.vue'
 import UpdateConfirm from './components/modals/UpdateConfirm.vue'
 import RecoveryDialog from './components/modals/RecoveryDialog.vue'
-import { computed } from 'vue'
+import { computed, nextTick, provide, ref } from 'vue'
+import { workspaceNavigationKey } from './features/workspace/navigation'
 import { useAppShell } from './app/useAppShell'
 const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, typewriterMode, defaultMdMode, liveToolbar, externalFileMonitoring, autoReloadExternal, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, smartExpand, compactFolders, syntaxStyle, bracketMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
   paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
@@ -226,6 +229,19 @@ const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,update
   desktop, fileBusy, recentFiles, openFile, openRecent, saveActive, quitApp, startupLoading, startupError, settingsReady, updateInstalling,
   recoveryRecords, recoveryVisible, recoveryBusy, recoveryError, recoveryDiff, openRecovery, closeRecovery,
   restoreRecovery, discardRecovery, restoreAllRecovery, showRecoveryDiff, clearRecoveryDiff } = useAppShell()
+const navigationSidebar=ref<InstanceType<typeof Sidebar>>()
+provide(workspaceNavigationKey, {workspace,enabled:()=>appMode.value==='workspace',reveal:async(path)=>{
+  const id=manager.activeId,pane=manager.activePane,generation=workspace.openRevision
+  const valid=()=>appMode.value==='workspace'&&manager.activeId===id&&manager.activePane===pane&&workspace.openRevision===generation&&manager.activeDocument?.path===path
+  if(!valid())return false
+  const found=await workspace.revealFileInTree(path)
+  if(!found||!valid())return false
+  sidebarPanel.value='files';sidebarVisible.value=true
+  await nextTick()
+  if(!valid())return false
+  await navigationSidebar.value?.locateCurrentFile()
+  return valid()
+}})
 defineExpose({ settingsReady })
 function toggleOutline() { showOutline.value = !showOutline.value }
 function updateMarkdownWidth(width: number) {

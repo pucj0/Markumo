@@ -1,6 +1,7 @@
 <template>
-  <div ref="tabs" class="tabs" @wheel="scrollTabs">
-    <div class="tablist">
+  <div class="tabs">
+    <div ref="tabs" class="tabs-scroll" @wheel="scrollTabs">
+    <div class="tablist" role="tablist" aria-label="打开的文件">
       <div
         v-for="doc in docs"
         :key="doc.id"
@@ -9,10 +10,10 @@
         draggable="false"
         @pointerdown="onTabPointerDown($event, doc)"
         @dragstart.prevent
-        role="tab" tabindex="0" :aria-label="doc.name" :aria-selected="doc.id === activeId"
-        @keydown.enter.prevent="$emit('select-tab', doc.id)"
-        @keydown.space.prevent="$emit('select-tab', doc.id)"
-        @auxclick.middle.prevent="$emit('close-tab', doc.id)"
+        role="tab" tabindex="0" :aria-label="labels.get(doc.id) || doc.name" :aria-selected="doc.id === activeId"
+        @keydown.enter.prevent="selectTab(doc.id)"
+        @keydown.space.prevent="selectTab(doc.id)"
+        @auxclick.middle.prevent="closeTab(doc.id)"
         :class="{
           active: doc.id === activeId,
           temp: !doc.pinned,
@@ -21,26 +22,29 @@
           'drop-after': isDragInsertingAfter(doc.id),
           'is-dragging': tabDragService.isDragging.value && tabDragService.dragPayload.value?.fromPaneId === pane && tabDragService.dragPayload.value?.documentId === doc.id
         }"
-        :title="readablePath(doc.path)"
-        @click="$emit('select-tab', doc.id)"
+        :title="readablePath(doc.path) || doc.name"
+        @click="selectTab(doc.id)"
         @dblclick="$emit('pin-tab', doc.id)"
         @contextmenu.prevent.stop="openMenu($event, doc)"
         @keydown.shift.f10.prevent.stop="openMenu($event, doc)"
       >
         <FileIcon :name="doc.name" />
         <button v-if="files?.external.state(doc.id)?.conflictValid" class="external-mark" aria-label="文件存在外部变化，查看处理选项" title="外部变化尚未处理" @pointerdown.stop @click.stop="files.external.keep(doc.id, false); $emit('select-tab', doc.id)">⚠</button>
-        <span class="filename">{{ doc.name }}</span>
-        <span v-if="doc.dirty || !doc.path" class="unsaved" :title="doc.dirty ? '未保存修改' : '尚未保存'"></span>
+        <span class="filename">{{ labels.get(doc.id) || doc.name }}</span>
+        <span class="unsaved" :class="{ 'is-unsaved':doc.dirty || !doc.path }" :title="doc.dirty ? '未保存修改' : !doc.path ? '尚未保存' : undefined"></span>
         <button
           class="tinyclose"
           :title="`关闭 ${doc.name}`"
           :aria-label="`关闭 ${doc.name}`"
-          @click.stop="$emit('close-tab', doc.id)"
+          @click.stop="closeTab(doc.id)"
         >
           ✕
         </button>
       </div>
     </div>
+    </div>
+
+    <button ref="openButton" class="newtab open-tabs-button" title="显示已打开文件（最近使用）" aria-label="显示已打开文件" :aria-expanded="!!menuAnchor" @click="menuAnchor=menuAnchor ? null : openButton!">⌄</button>
 
     <button
       class="newtab"
@@ -51,6 +55,7 @@
     </button>
 
     <ContextMenu ref="contextMenu" />
+    <NavigationPopup v-if="menuAnchor" :anchor="menuAnchor" title="已打开文件 · 最近使用" filter-label="筛选已打开文件" :items="openItems" closable @select="selectFromMenu" @remove="closeTab" @close="closeFiles" />
   </div>
 </template>
 
@@ -59,8 +64,10 @@ import Icon from '../common/Icon.vue'
 import FileIcon from '../common/FileIcon.vue'
 import type { FileController } from '../../features/files/FileController'
 import type { EditorDocument } from '../../types'
-import { readablePath } from '../../features/shell/pathDisplay'
-import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { displayFilePath, readablePath } from '../../features/shell/pathDisplay'
+import { computed, ref, shallowRef, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import NavigationPopup from '../common/NavigationPopup.vue'
+import { tabLabels, type TabIdentity } from '../../features/tabs/tabLabels'
 import ContextMenu from '../common/ContextMenu.vue'
 import { CommandRegistry, menuCommand as cmd, separator, type MenuNode } from '../../features/shell/menuModel'
 import { textClipboard } from '../../features/shell/clipboard'
@@ -98,6 +105,30 @@ const emit = defineEmits<{
 
 const contextMenu = ref<InstanceType<typeof ContextMenu> | null>(null)
 const tabs = ref<HTMLElement | null>(null)
+const openButton=ref<HTMLButtonElement>(),menuAnchor=shallowRef<HTMLElement|null>(null)
+const identity=computed(()=>{
+  props.docs
+  return JSON.stringify((props.manager?.openedDocuments || props.docs).map(doc=>({id:doc.id,name:doc.name,path:doc.path})))
+})
+const labels=computed(()=>tabLabels(JSON.parse(identity.value) as TabIdentity[]))
+const openItems=computed(()=>{
+  const documents=new Map(props.docs.map(doc=>[doc.id,doc]))
+  const ids=props.manager?.paneGroup(props.pane).recentDocumentIds || props.docs.map(doc=>doc.id)
+  return ids.flatMap(id=>{const doc=documents.get(id);return doc ? [{id,label:labels.value.get(id)||doc.name,name:doc.name,detail:readablePath(doc.path),dirty:doc.dirty||!doc.path}] : []})
+})
+function closeFiles(restore:boolean){const anchor=menuAnchor.value;menuAnchor.value=null;if(restore&&anchor?.isConnected)anchor.focus()}
+function selectTab(id:string){
+  emit('select-tab',id)
+  void nextTick(()=>{if(props.manager?.activePane===props.pane&&props.manager.activeId===id)props.manager.focusPane(props.pane)})
+}
+function selectFromMenu(id:string){closeFiles(false);selectTab(id)}
+function closeTab(id:string){
+  emit('close-tab',id)
+  void nextTick(()=>{
+    const m=props.manager
+    if(m?.activePane===props.pane&&!m.paneGroup(props.pane).tabs.some(tab=>tab.documentId===id)&&document.activeElement===document.body&&!menuAnchor.value)m.focusPane(props.pane)
+  })
+}
 let observer: ResizeObserver | undefined
 
 const isDragInsertingBefore = (docId: string) => {
@@ -171,7 +202,7 @@ onMounted(() => {
   observer = new ResizeObserver(() => { void revealActiveTab() })
   if (tabs.value) observer.observe(tabs.value)
 })
-onUnmounted(() => observer?.disconnect())
+onUnmounted(() => { observer?.disconnect();menuAnchor.value=null })
 
 function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
   const currentIndex = props.docs.findIndex(d => d.id === doc.id)
@@ -181,7 +212,7 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
   const otherPanes = props.manager ? props.manager.layout.getAllLeafIds().filter(id => id !== props.pane) : []
 
   const commands = [
-    { id: 'tab-close', title: '关闭', enabled: true, run: () => emit('close-tab', doc.id) },
+    { id: 'tab-close', title: '关闭', enabled: true, run: () => closeTab(doc.id) },
     { id: 'tab-close-others', title: '关闭其他标签', enabled: hasMultiple, run: () => emit('close-others', doc.id) },
     { id: 'tab-close-right', title: '关闭右侧标签', enabled: hasRightTabs, run: () => emit('close-right', doc.id) },
     { id: 'tab-close-all', title: '关闭全部标签', enabled: props.docs.length > 0, run: () => emit('close-all') },
@@ -211,11 +242,7 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
 
     { id: 'tab-copy-path', title: '复制文件完整路径', enabled: !!doc.path, run: () => textClipboard.writeText(doc.path) },
     { id: 'tab-copy-relative', title: '复制文件相对路径', enabled: !!doc.path, run: () => {
-      let rel = doc.path
-      if (props.rootPath && rel.toLowerCase().startsWith(props.rootPath.toLowerCase())) {
-        rel = rel.slice(props.rootPath.length).replace(/^[\\/]/, '')
-      }
-      textClipboard.writeText(rel)
+      textClipboard.writeText(displayFilePath(doc.path,props.rootPath?{rootPath:props.rootPath,name:''}:null))
     }},
     { id: 'tab-reveal-explorer', title: '在系统文件管理器中显示', enabled: !!doc.fileToken && props.desktop, run: () => {
       if (doc.fileToken) emit('reveal-in-explorer', doc.fileToken)
@@ -272,18 +299,16 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
   align-items: center;
   border-bottom: 1px solid var(--line);
   padding: 0 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
+  min-width: 0;
   gap: 2px;
   flex: none;
   position: relative;
 }
-.tabs::-webkit-scrollbar { display: none; height: 0 }
+.tabs-scroll{flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;height:100%;scrollbar-width:none}
+.tabs-scroll::-webkit-scrollbar { display:none }
 
 .tablist {
-  flex: 0 1 auto;
+  width: max-content;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -295,7 +320,7 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
   flex: none;
   touch-action: none;
   height: var(--ui-control-height);
-  border-radius: 6px;
+  border-radius: 4px;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -304,7 +329,7 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
   font-size: var(--ui-font-size);
   cursor: pointer;
   border: 1px solid transparent;
-  transition: all 0.12s;
+  transition: background 0.12s,color 0.12s,border-color 0.12s;
   white-space: nowrap;
   position: relative;
   user-select: none;
@@ -319,7 +344,6 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
   background: var(--editor);
   color: var(--bright);
   border-color: var(--line);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
 }
 
 .tab.is-dragging {
@@ -330,7 +354,7 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
   font-style: italic;
 }
 
-.tab.temp:has(.unsaved) .filename {
+.tab.temp:has(.is-unsaved) .filename {
   font-style: normal;
 }
 
@@ -368,7 +392,10 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
   border-radius: 50%;
   background: var(--yellow);
   flex: none;
+  visibility: hidden;
 }
+.unsaved.is-unsaved{visibility:visible}
+.tab > .tinyclose{opacity:0}.tab:hover > .tinyclose,.tab.active > .tinyclose,.tab:focus-within > .tinyclose{opacity:1}
 
 .tinyclose {
   width: var(--ui-row-height);

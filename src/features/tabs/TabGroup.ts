@@ -3,7 +3,19 @@ export interface Tab { documentId: string; pinned: boolean }
 // A pane owns a tab group; document state stays in DocumentManager.
 export class TabGroup {
   readonly tabs: Tab[] = []
-  activeId: string | null = null
+  private currentId: string | null = null
+  private recent: string[] = []
+  get activeId() { return this.currentId }
+  set activeId(id: string | null) {
+    if (id === this.currentId) return
+    this.currentId = id
+    if (id) this.recent = [id, ...this.recent.filter(previous => previous !== id)]
+  }
+  get recentDocumentIds(): string[] {
+    const present = new Set(this.tabs.map(tab => tab.documentId))
+    this.recent = this.recent.filter(id => present.has(id))
+    return [...this.recent.filter(id => present.delete(id)), ...present]
+  }
   constructor(readonly id = 'main') {}
 
   open(documentId: string, preview = true, canReplace?: (docId: string) => boolean): string | null {
@@ -17,6 +29,7 @@ export class TabGroup {
         : -1
       if (previewIndex >= 0) {
         replaced = this.tabs[previewIndex].documentId
+        this.recent = this.recent.filter(id => id !== replaced)
         this.tabs.splice(previewIndex, 1, { documentId, pinned: false })
       } else {
         this.tabs.push({ documentId, pinned: !preview })
@@ -40,6 +53,7 @@ export class TabGroup {
     const index = this.tabs.findIndex(tab => tab.documentId === documentId)
     if (index < 0) return
     this.tabs.splice(index, 1)
+    this.recent = this.recent.filter(id => id !== documentId)
     if (this.activeId === documentId) this.activeId = this.tabs[Math.min(index, this.tabs.length - 1)]?.documentId || null
   }
 }

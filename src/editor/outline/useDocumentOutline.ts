@@ -12,7 +12,9 @@ export function useDocumentOutline(manager:()=>DocumentManager|undefined,doc:()=
   let unsubscribe:(()=>void)|undefined
   watch(manager,current=>{unsubscribe?.();unsubscribe=current?.subscribe(()=>revision.value++);revision.value++},{immediate:true})
   watch(()=>[enabled(),doc()?.id,revision.value],()=>{
-    const document=doc(),host=manager(),state=document&&host?.getState(document.id)
+    const document=doc(),host=manager(),canonical=document&&host?.getState(document.id)
+    const view=host?.activeId===document?.id?host?.activeEditorView:null
+    const state=view&&view.state.doc===canonical?.doc?view.state:canonical
     if(!enabled()||!document||!state){++epoch;clearTimeout(timer);previous=undefined;result.value={items:[],notice:''};return}
     const tree=syntaxTree(state),markdown=isMarkdownOutline(document)
     if(previous?.id===document.id && previous.text===state.doc && previous.language===document.language && previous.status===document.languageStatus && (markdown||previous.tree===tree))return
@@ -23,12 +25,13 @@ export function useDocumentOutline(manager:()=>DocumentManager|undefined,doc:()=
     let attempts=0
     const update=()=>{
       if(disposed||current!==epoch)return
-      const active=doc(),owner=manager(),snapshot=active&&owner?.getState(active.id)
+      const active=doc(),owner=manager(),canonical=active&&owner?.getState(active.id)
+      const view=owner?.activeId===active?.id?owner?.activeEditorView:null
+      const snapshot=view&&view.state.doc===canonical?.doc?view.state:canonical
       if(!active||!snapshot)return
       const parsed=outlineResult(active,snapshot)
       result.value=parsed
       if(parsed.notice.startsWith('语法解析尚未完成') && snapshot.doc.length<=MAX_CODE_OUTLINE_SIZE && attempts++<3){
-        const view=owner?.activeId===active.id?owner.activeEditorView:null
         if(view && view.state.doc===snapshot.doc){forceParsing(view,snapshot.doc.length,8);timer=setTimeout(update,80)}
       }
     }

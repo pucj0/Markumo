@@ -708,7 +708,7 @@ export class DocumentManager {
     }
     const shownView = view
     shownView.setState(record.state.update({ selection: record.panes[resolved].selection, annotations: Transaction.addToHistory.of(false) }).state)
-    const shownDocument = shownView.state.doc
+    const shownDocument = shownView.state.doc, shownNavigation = this.navigationRevision(resolved)
     const scroll = { ...record.panes[resolved] }
     // A raw scrollTop write is overridden by CM's new height-map anchor after
     // setState. Its snapshot restores the measured line and pixel offset after
@@ -720,10 +720,15 @@ export class DocumentManager {
     shownView.requestMeasure({
       read: () => scroll,
       write: saved => {
-        if (this.paneView(resolved) === shownView && this.paneGroup(resolved).activeId === targetId && shownView.state.doc === shownDocument) {
+        // Initial/restored tabs have pixel coordinates but no measured snapshot.
+        // Finish the height-map measure before turning those pixels into CM's
+        // own scroll target; a raw write during measurement is anchored again.
+        queueMicrotask(() => {
+          if (this.paneView(resolved) !== shownView || this.paneGroup(resolved).activeId !== targetId || shownView.state.doc !== shownDocument || this.navigationRevision(resolved) !== shownNavigation || !shownView.state.selection.eq(saved.selection)) return
           shownView.scrollDOM.scrollTop = saved.top
           shownView.scrollDOM.scrollLeft = saved.left
-        }
+          shownView.dispatch({effects:shownView.scrollSnapshot(),annotations:Transaction.addToHistory.of(false)})
+        })
       },
     })
   }

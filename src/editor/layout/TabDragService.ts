@@ -182,7 +182,7 @@ export class TabDragService {
 
   private autoScroll = () => {
     if (!this.isDragging.value) return
-    const tabBar = document.elementFromPoint(this.lastX, this.lastY)?.closest<HTMLElement>('.tabs')
+    const tabBar = document.elementFromPoint(this.lastX, this.lastY)?.closest<HTMLElement>('.tabs')?.querySelector<HTMLElement>('.tabs-scroll')
     if (tabBar && tabBar.scrollWidth > tabBar.clientWidth) {
       const rect = tabBar.getBoundingClientRect()
       const edge = Math.min(40, rect.width / 4)

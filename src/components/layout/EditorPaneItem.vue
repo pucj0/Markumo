@@ -39,7 +39,6 @@
       @reveal-in-explorer="$emit('reveal-in-explorer', $event)"
     />
 
-    <Breadcrumb v-if="!focusMode" :doc="activeDoc" />
     <ExternalFileBanner v-if="activeDoc && files" :files="files" :id="activeDoc.id" />
 
     <WelcomePage
@@ -81,7 +80,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import TabBar from './TabBar.vue'
-import Breadcrumb from './Breadcrumb.vue'
 import ExternalFileBanner from './ExternalFileBanner.vue'
 import EditorPane from './EditorPane.vue'
 import WelcomePage from './WelcomePage.vue'
@@ -306,6 +304,7 @@ function handleDrop(event: DragEvent) {
 
 <style scoped>
 .pane {
+  container-type: inline-size;
   flex: 1;
   min-height: 0;
   min-width: 0;

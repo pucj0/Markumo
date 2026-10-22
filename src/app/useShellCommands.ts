@@ -276,6 +276,15 @@ export function useShellCommands(host: ShellCommandsHost) {
           }
         },
       },
+      { id: 'recent-tab', title: '切换最近使用标签', detail: '', category: 'action', action: () => {
+        const pane=host.manager.activePane,group=host.manager.paneGroup(pane)
+        const id=group.recentDocumentIds.find(id=>id!==group.activeId)
+        if(id){host.manager.select(id,pane);host.manager.focusPane(pane)}
+      } },
+      { id: 'show-open-tabs', title: '显示已打开文件', detail: '', category: 'action', action: () => {
+        const pane=[...document.querySelectorAll<HTMLElement>('[data-pane-id]')].find(element=>element.dataset.paneId===host.manager.activePane)
+        pane?.querySelector<HTMLButtonElement>('.open-tabs-button')?.click()
+      } },
       { id: 'toggle-outline', title: '显示/隐藏大纲', detail: '', category: 'action', action: () => { host.showOutline.value = !host.showOutline.value } },
       { id: 'toggle-focus', title: '切换专注模式', detail: 'F8', category: 'action', action: host.toggleFocus },
       { id: 'toggle-typewriter', title: '切换打字机模式', detail: 'F9', category: 'action', action: host.toggleTypewriter },
