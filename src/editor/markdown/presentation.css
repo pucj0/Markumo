@@ -293,3 +293,53 @@ body.light :is(.markdown-live, .split-preview-pane) {
 }
 :is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-footnote-def-content > :first-child { margin-top: 0; }
 :is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-footnote-def-content > :last-child { margin-bottom: 0; }
+
+/* 图片悬浮工具栏 (选中时呈现) */
+.md-image-preview.md-live-image {
+  position: relative;
+}
+
+.md-image-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  z-index: 50;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.md-img-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink);
+  font: 500 12px var(--font-sans);
+  cursor: pointer;
+  transition: all .12s ease;
+}
+.md-img-tool-btn:hover {
+  background: var(--hover);
+  color: var(--bright);
+}
+
+.md-img-tool-sep {
+  display: inline-block;
+  width: 1px;
+  height: 14px;
+  background: var(--line);
+  margin: 0 2px;
+}

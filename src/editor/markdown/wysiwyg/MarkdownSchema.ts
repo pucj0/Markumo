@@ -92,9 +92,30 @@ Object.assign(nodes, tableNodes({ tableGroup:'block', cellContent:'paragraph', c
   align: {default:null, getFromDOM: dom => dom.style.textAlign || null, setDOMAttr: (value, attrs) => { if (value) attrs.style = `text-align:${value}` }},
 } }))
 nodes.table.attrs = { sourceId: { default: null } }
-// HTML from the clipboard is parsed by the schema. Image URLs are only assigned
-// by our budgeted image NodeView; links never receive executable protocols.
-nodes.image.toDOM = node => ['span', { 'data-image-source': node.attrs.src }, node.attrs.alt || '图片']
+nodes.image = {
+  ...nodes.image,
+  attrs: {
+    ...nodes.image.attrs,
+    width: { default: null },
+    align: { default: null },
+  },
+  parseDOM: [
+    {
+      tag: 'img[src]',
+      getAttrs: dom => {
+        const el = dom as HTMLElement
+        return {
+          src: el.getAttribute('src'),
+          title: el.getAttribute('title') || null,
+          alt: el.getAttribute('alt') || null,
+          width: el.getAttribute('width') || el.style.width || null,
+          align: el.getAttribute('align') || (el.style.textAlign || el.style.float || null),
+        }
+      },
+    },
+  ],
+  toDOM: node => ['span', { 'data-image-source': node.attrs.src, width: node.attrs.width || undefined, align: node.attrs.align || undefined }, node.attrs.alt || '图片'],
+}
 export const markdownSchema = new Schema({ nodes, marks: commonmark.spec.marks.append({
   strike: {parseDOM:[{tag:'s'},{tag:'del'}], toDOM:()=>['s',0]},
 }).update('link', { ...commonmark.spec.marks.get('link')!, toDOM: mark => ['a', {href:safeMarkdownURL(mark.attrs.href) || undefined, 'data-href':mark.attrs.href, title:mark.attrs.title},0] }) })

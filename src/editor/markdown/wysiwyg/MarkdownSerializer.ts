@@ -39,6 +39,18 @@ export const markdownSerializer = new MarkdownSerializer({ ...defaultMarkdownSer
     }
     state.closeBlock(node)
   },
+  image(state, node) {
+    if (node.attrs.width || node.attrs.align) {
+      const alt = node.attrs.alt ? ` alt="${state.esc(node.attrs.alt)}"` : ''
+      const title = node.attrs.title ? ` title="${state.esc(node.attrs.title)}"` : ''
+      const width = node.attrs.width ? ` width="${node.attrs.width}"` : ''
+      const align = node.attrs.align ? ` align="${node.attrs.align}"` : ''
+      state.write(`<img src="${node.attrs.src}"${alt}${title}${width}${align} />`)
+    } else {
+      state.write("![" + state.esc(node.attrs.alt || "") + "](" + node.attrs.src +
+                  (node.attrs.title ? ' "' + String(node.attrs.title).replace(/"/g, '\\"') + '"' : "") + ")")
+    }
+  },
   list_item(state,node){if(node.attrs.checked!==null)state.write(node.attrs.checked?'[x] ':'[ ] ');state.renderContent(node)},
   code_block(state,node){
     const char=node.attrs.fence?.[0]==='~'||String(node.attrs.params).includes('`')?'~':'`'
