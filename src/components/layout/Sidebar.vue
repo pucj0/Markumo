@@ -234,6 +234,8 @@
           <OutlineView
             :items="outlineItems"
             :is-markdown="isMarkdownDoc"
+            :manager="manager"
+            :document-id="activeDocId"
             @select-item="$emit('select-outline', $event)"
           />
         </div>

@@ -27,6 +27,7 @@ export interface LiveToolbarState {
 }
 export interface MarkdownToolbarState extends LiveToolbarState { canUndo: boolean; canRedo: boolean }
 export interface LiveEditor {
+  viewportSourcePosition?(): number | null
   readonly composing:boolean
   readonly selection:{anchor:number;head:number}
   sync(source:string,update?:unknown):void

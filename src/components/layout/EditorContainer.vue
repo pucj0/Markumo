@@ -55,6 +55,8 @@
         :items="outlineItems"
         :is-markdown="isMarkdownDoc"
         :notice="outlineNotice"
+        :manager="manager"
+        :document-id="doc?.id"
         @select-item="handleSelectOutline"
       />
     </aside>

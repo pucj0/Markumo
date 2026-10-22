@@ -19,18 +19,19 @@ manager.open('md',false);manager.setMarkdownMode('md','live');
 const rev=ref(0);manager.subscribe(()=>rev.value++);
 createApp({render(){rev.value;return [
  h('aside',{class:'left-outline',style:'width:180px;flex:none;display:flex;flex-direction:column'},[
- h(OutlineView,{items:extractOutline(manager.activeDocument,manager.getState('md')),isMarkdown:true,onSelectItem:item=>manager.revealOutline('md',item)})]),
+ h(OutlineView,{manager,documentId:'md',items:extractOutline(manager.activeDocument,manager.getState('md')),isMarkdown:true,onSelectItem:item=>manager.revealOutline('md',item)})]),
  h(EditorContainer,{manager,doc:manager.activeDocument,showOutline:true,desktop:false})];}}).mount('#app');
 window.f={manager,items:()=>extractOutline(manager.activeDocument,manager.getState('md'))};document.body.classList.add('light');
 `)
-const server = await createServer({server:{port:1429,strictPort:true}});await server.listen()
+const server = await createServer({server:{host:'127.0.0.1',port:0,hmr:false,watch:null}});await server.listen()
+const port = server.httpServer.address().port
 let browser
 const results=[]
 try {
   browser=await chromium.launch({headless:true,...(process.env.MARKUMO_CHROME?{executablePath:process.env.MARKUMO_CHROME}:{})})
   const page=await browser.newPage({viewport:{width:1360,height:700}}),errors=[]
   page.on('pageerror',e=>errors.push(e.message))
-  await page.goto(`http://localhost:1429/${output}/index.html`)
+  await page.goto(`http://127.0.0.1:${port}/${output}/index.html`)
   await page.waitForFunction(()=>window.f?.items().length===12&&document.querySelector('.md-prose h2')).catch(async error=>{
     console.error(errors,await page.evaluate(()=>({html:document.body.innerText.slice(0,1200),items:window.f?.items().length,doc:window.f?.manager.activeDocument})));throw error
   })
@@ -152,7 +153,7 @@ try {
   await test('outline width persists through actual app settings and reload',async()=>{
     const app=await browser.newPage({viewport:{width:1200,height:800}})
     app.on('pageerror',e=>errors.push(e.message))
-    await app.goto('http://localhost:1429/')
+    await app.goto(`http://127.0.0.1:${port}/`)
     await app.getByTitle('设置',{exact:true}).click()
     await app.locator('#settings-outline').scrollIntoViewIfNeeded();await app.locator('#settings-outline').check()
     await app.getByRole('button',{name:'完成',exact:true}).click()
@@ -183,6 +184,61 @@ try {
     assert.ok(Math.abs((await position(other,3)).offset-24)<2)
     assert.ok(Math.abs((await position('main',0)).top-main)<2)
     await page.screenshot({path:`${output}/split-navigation.png`})
+  })
+  const activeHeading=async title=>{
+    for(const side of ['.outline-sidebar','.left-outline']){
+      await page.waitForFunction(({side,title})=>document.querySelector(side+' [aria-current="location"] .outline-label')?.textContent===title,{side,title})
+      assert.equal(await page.locator(side+' [aria-current="location"] .outline-label').evaluate(el=>getComputedStyle(el).fontWeight),'700')
+    }
+  }
+  const scrollLive=async(pane,index)=>page.locator(`[data-pane-id="${pane}"] .markdown-live`).evaluate((root,index)=>{
+    root.scrollTop+=root.querySelectorAll('h2')[index].getBoundingClientRect().top-root.getBoundingClientRect().top-22
+  },index)
+  await test('manual Live scrolling bolds both outlines for the active pane, without moving its caret or dirtying text',async()=>{
+    await page.evaluate(()=>window.f.manager.focusPane('main',false))
+    const before=await page.evaluate(()=>({selection:window.f.manager.activeLiveEditor.selection,text:window.f.manager.getText('md'),dirty:window.f.manager.activeDocument.dirty}))
+    await scrollLive('main',8);await activeHeading('标题 9')
+    assert.equal(await page.locator('.outline-sidebar .outline-item').filter({hasText:'标题 8L'}).locator('.outline-label').evaluate(el=>getComputedStyle(el).fontWeight),'400')
+    const other=await page.evaluate(()=>window.f.other)
+    await scrollLive(other,10);await page.waitForTimeout(80);await activeHeading('标题 9')
+    assert.deepEqual(await page.evaluate(()=>({selection:window.f.manager.activeLiveEditor.selection,text:window.f.manager.getText('md'),dirty:window.f.manager.activeDocument.dirty})),before)
+    await page.evaluate(()=>window.f.manager.focusPane(window.f.other,false));await activeHeading('标题 11')
+    await page.evaluate(()=>{window.f.manager.closePane(window.f.other);window.f.manager.focusPane('main',false)})
+  })
+  await test('Source scrolling tracks the visible heading independently of the caret, including the final section',async()=>{
+    await page.evaluate(()=>window.f.manager.setMarkdownMode('md','source','main'))
+    await page.locator('.cm-content').waitFor()
+    const before=await page.evaluate(()=>window.f.manager.activeEditorView.state.selection.main.head)
+    await page.evaluate(()=>{
+      const v=window.f.manager.activeEditorView,item=window.f.items()[5]
+      v.scrollDOM.scrollTop+=v.lineBlockAt(item.from).top+v.documentTop-v.scrollDOM.getBoundingClientRect().top-22
+    })
+    await activeHeading('标题 6')
+    await page.locator('.cm-scroller').evaluate(el=>el.scrollTop=el.scrollHeight)
+    await activeHeading('标题 12')
+    assert.equal(await page.evaluate(()=>window.f.manager.activeEditorView.state.selection.main.head),before)
+  })
+  await test('scrolling the Split preview updates bold headings in both outlines',async()=>{
+    await page.evaluate(()=>window.f.manager.setMarkdownMode('md','split','main'))
+    await page.locator('.split-preview-content h2').nth(6).waitFor()
+    await page.waitForTimeout(80) // Let the existing initial Split scroll synchronization settle.
+    await page.locator('.split-preview-content').evaluate(root=>{
+      root.scrollTop+=root.querySelectorAll('h2')[6].getBoundingClientRect().top-root.getBoundingClientRect().top-22
+    })
+    await activeHeading('标题 7')
+    await page.screenshot({path:`${output}/scroll-active-heading.png`})
+  })
+  await test('a folded active descendant marks its visible ancestor without expanding the user fold',async()=>{
+    await page.evaluate(()=>{
+      const m=window.f.manager,text=m.getText('md').replace('## 标题 8\n','### 标题 8\n')
+      m.dispatch('md',{changes:{from:0,to:m.getState('md').doc.length,insert:text}});m.setMarkdownMode('md','live','main')
+    })
+    await page.locator('.md-prose h3').waitFor()
+    await page.locator('.markdown-live').evaluate(root=>root.scrollTop+=root.querySelector('h3').getBoundingClientRect().top-root.getBoundingClientRect().top-22)
+    await activeHeading('标题 8')
+    for(const side of ['.outline-sidebar','.left-outline'])await page.locator(side+' .outline-item').filter({hasText:'标题 7L'}).getByRole('button',{name:'折叠标题'}).click()
+    await activeHeading('标题 7')
+    assert.equal(await page.locator('.outline-sidebar .outline-item').filter({hasText:'标题 8L'}).count(),0)
   })
   assert.deepEqual(errors,[])
   fs.writeFileSync(`${output}/results.json`,JSON.stringify({passed:results,errors},null,2))

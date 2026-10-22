@@ -882,6 +882,18 @@ export class MarkdownEditorController implements LiveEditor {
     this.view.focus()
   }
 
+  /** Reading anchor shared with outline navigation, without changing selection. */
+  viewportSourcePosition(): number | null {
+    const bounds = this.dom.getBoundingClientRect()
+    const content = this.view.dom.getBoundingClientRect()
+    if (bounds.height <= 0 || bounds.width <= 0) return null
+    const found = this.view.posAtCoords({
+      left: Math.max(bounds.left + 1, Math.min(bounds.right - 1, content.left + 8)),
+      top: Math.min(bounds.bottom - 1, bounds.top + 24),
+    })
+    return found ? this.bridge.sourcePosition(found.pos) : null
+  }
+
   reveal(position: number, align: 'nearest' | 'start' = 'nearest') {
     cancelSmoothScroll(this.dom)
     const before = this.dom.scrollTop

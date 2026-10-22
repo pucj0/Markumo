@@ -12,7 +12,8 @@
         v-for="item in visibleItems"
         :key="item.id"
         class="outline-item"
-        :class="[`level-${item.level}`, item.kind]"
+        :class="[`level-${item.level}`, item.kind, { active: item.id === visibleActiveId }]"
+        :aria-current="item.id === visibleActiveId ? 'location' : undefined"
         :style="{ paddingLeft: `${(item.level - 1) * 12 + 10}px` }"
         :title="`跳转至第 ${item.lineNumber} 行: ${item.name}`"
         @click="$emit('select-item', item)"
@@ -42,13 +43,18 @@
 
 <script setup lang="ts">
 import type { OutlineItem } from '../../editor/outline/outlineService'
+import type { DocumentManager } from '../../editor/core/DocumentManager'
+import { useOutlineViewport } from '../../editor/outline/useOutlineViewport'
 import { computed,ref } from 'vue'
 
 const props=defineProps<{
   items: OutlineItem[]
   isMarkdown: boolean
   notice?: string
+  manager?: DocumentManager
+  documentId?: string | null
 }>()
+const activeId = useOutlineViewport(() => props.manager, () => props.documentId, () => props.items)
 const collapsed=ref(new Set<string>())
 const hasChildren=(item:OutlineItem)=>{const next=props.items[props.items.indexOf(item)+1];return !!next&&next.level>item.level}
 function toggle(id:string){const next=new Set(collapsed.value);if(next.has(id))next.delete(id);else next.add(id);collapsed.value=next}
@@ -59,6 +65,19 @@ const visibleItems=computed(()=>{
     hiddenLevel=collapsed.value.has(item.id)?item.level:Infinity
     return true
   })
+})
+const visibleActiveId = computed(() => {
+  const visible = new Set(visibleItems.value.map(item => item.id))
+  let index = props.items.findIndex(item => item.id === activeId.value)
+  if (index < 0) return null
+  let level = Infinity
+  for (; index >= 0; index--) {
+    const item = props.items[index]
+    if (item.level >= level) continue
+    if (visible.has(item.id)) return item.id
+    level = item.level
+  }
+  return null
 })
 
 defineEmits<{
@@ -139,6 +158,8 @@ defineEmits<{
 .outline-label :deep(s) {text-decoration:line-through}
 .outline-label :deep(code) {font:90% var(--font-mono);padding:1px 3px;background:var(--soft);border-radius:3px}
 .outline-item.heading.level-1 .outline-label {font-weight:600}
+.outline-item.heading.active .outline-label {font-weight:700;color:var(--bright)}
+.outline-item.heading.active .outline-label :deep(code) {font-weight:700}
 
 .kind-badge {
   font-size: var(--ui-small-font-size);

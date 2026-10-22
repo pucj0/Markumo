@@ -110,6 +110,29 @@ export class DocumentManager {
   get activeDocument() { return this.activeId ? this.metadata(this.activeId) : null }
   get activeEditorView() { return this.views.get(this.layout.activePaneId) || null }
   get activeLiveEditor() { return this.liveViews.get(this.layout.activePaneId)?.editor || null }
+  /** Source offset at the active pane's reading anchor; independent of its caret. */
+  outlineViewportPosition(): number | null {
+    const live = this.activeLiveEditor
+    if (live) return live.viewportSourcePosition?.() ?? null
+    // Split's source/preview interpolation can differ around block margins.
+    // Read the rendered heading boundaries directly for the reading surface.
+    const preview = this.hosts.get(this.activePane)?.parentElement?.querySelector<HTMLElement>('.split-preview-content')
+    const document = this.activeId && this.getState(this.activeId)?.doc
+    if (preview && document) {
+      const top = preview.getBoundingClientRect().top + 24
+      let line = 1
+      for (const heading of Array.from(preview.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')).slice(0, 1000)) {
+        if (heading.getBoundingClientRect().top > top) break
+        const number = Number(heading.closest<HTMLElement>('[data-source-line]')?.dataset.sourceLine)
+        if (Number.isInteger(number) && number > 0) line = number
+      }
+      return document.line(Math.min(document.lines, line)).from
+    }
+    const view = this.activeEditorView
+    if (!view || !view.dom.isConnected || view.scrollDOM.clientHeight <= 0) return null
+    const height = Math.max(0, view.scrollDOM.getBoundingClientRect().top + 24 - view.documentTop)
+    return view.lineBlockAtHeight(height).from
+  }
   get view() { return this.views.get('main') || this.views.get(this.layout.activePaneId) || null }
   get secondaryView() {
     const leaves = this.layout.getAllLeafIds()
