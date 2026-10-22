@@ -7,7 +7,10 @@ import { chromium } from 'playwright'
 const out = 'test-results/phase07/diagram-security'
 fs.mkdirSync(out, { recursive: true })
 fs.writeFileSync(`${out}/index.html`, '<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><div id="diagram"></div><script type="module">import {renderDiagram} from "/src/editor/markdown/wysiwyg/renderers.ts";import {renderMarkdownForExport} from "/src/features/document-conversion/ExportRenderer.ts";window.diagram=renderDiagram;window.exportDiagram=renderMarkdownForExport;</script>')
-const server = await createServer({ server: { host: '127.0.0.1', port: 1493, strictPort: true, hmr: false, watch: null } })
+const server = await createServer({
+  // Test-only seam for SVG resource semantics not emitted by every Mermaid type.
+  plugins:[{name:'namespace-svg-test',enforce:'post',transform(code,id){if(id.replaceAll('\\','/').endsWith('/wysiwyg/renderers.ts'))return code+'\nwindow.__mountSanitizedDiagram=mountDiagram;'}}],
+  server: { host: '127.0.0.1', port: 1493, strictPort: true, hmr: false, watch: null } })
 await server.listen()
 let browser, timer
 try {
@@ -74,6 +77,22 @@ try {
   })
   assert.notEqual(duplicates[0].fill,duplicates[1].fill,'Theme-specific cache changes diagram styling')
   assert.equal(duplicates[0].fill,duplicates[2].fill,'Light-theme cache hit restores original styling')
+  const resources = await page.evaluate(async()=>{
+    const {default:purify}=await import('/node_modules/dompurify/dist/purify.es.mjs')
+    const svg=purify.sanitize(`<svg xmlns="http://www.w3.org/2000/svg" id="test-chart"><style>#test-chart .shape {fill:url(#gradient);clip-path:url(#clip)}</style><defs><linearGradient id="gradient"><stop offset="0" stop-color="red"/></linearGradient><clipPath id="clip"><rect width="10" height="10"/></clipPath><marker id="arrow"><path d="M0 0L10 5L0 10"/></marker></defs><path class="shape" marker-end="url(#arrow)" d="M0 0L100 0"/></svg>`,{USE_PROFILES:{svg:true,svgFilters:true}})
+    const ids=[]
+    for(let i=0;i<10;i++){
+      const host=document.createElement('div');document.body.append(host);window.__mountSanitizedDiagram(host,svg)
+      const shape=host.querySelector('.shape'),style=getComputedStyle(shape)
+      for(const [value,tag] of [[style.fill,'linearGradient'],[style.clipPath,'clipPath'],[style.markerEnd,'marker']]){
+        const match=/#([^)'"\s]+)/.exec(value)
+        if(!match||host.querySelector('[id="'+CSS.escape(match[1])+'"]')?.localName!==tag)throw Error('Broken '+tag+' reference: '+value)
+      }
+      ids.push(...[...host.querySelectorAll('[id]')].map(el=>el.id))
+    }
+    return ids.length===new Set(ids).size
+  })
+  assert.equal(resources,true,'Gradients, clip paths and markers keep per-mount CSS/attribute references')
   fs.writeFileSync(`${out}/result.json`, JSON.stringify({ passed: true, result, radar, exported, blocked, packageVersion: JSON.parse(fs.readFileSync('node_modules/mermaid/package.json', 'utf8')).version }, null, 2))
   console.log('PASS actual Mermaid renderer: normal flow/XY, invalid XY range settles, CSS guard preserved')
 } finally { clearTimeout(timer); await browser?.close(); await server.close() }

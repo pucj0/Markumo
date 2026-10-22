@@ -40,6 +40,7 @@ try {
   assert.ok(initial.total < 20, `Initial allocations must be viewport bounded: ${JSON.stringify(initial)}`)
   assert.ok(initial.peak < 20)
   assert.equal(initial.roots, true, 'Each observer must use its Live Pane scroller')
+  assert.equal(await page.evaluate(()=>[...window.f.live().codeViews].filter(code=>!code.existingEditor).every(code=>code.placeholder.querySelectorAll('*').length===1)),true,'Cold non-wrapping placeholders keep one code element; no eager token/line-number DOM')
   const result = await page.evaluate(async () => {
     const f = window.f, live = f.live(), codes = [...live.codeViews]
     let created = 0
@@ -67,8 +68,16 @@ try {
   assert.equal(await page.evaluate(() => window.f.source()), source)
   await page.locator('.md-prose > p').first().click()
   await page.keyboard.press('End')
-  await page.keyboard.type(' continuous ordinary input')
-  await page.waitForFunction(() => window.f.source().includes('continuous ordinary input'))
+  await page.evaluate(()=>{
+    const live=window.f.live();window.inputDurations=[];let start=0
+    live.view.dom.addEventListener('beforeinput',()=>{start=performance.now()},{capture:true})
+    live.view.dom.addEventListener('input',()=>queueMicrotask(()=>window.inputDurations.push(performance.now()-start)))
+    window.beforeTypingAllocations=window.allocations.total
+  })
+  await page.keyboard.type('x'.repeat(1000))
+  await page.waitForFunction(() => window.f.source().includes('x'.repeat(1000)))
+  const input=await page.evaluate(()=>({samples:window.inputDurations,created:window.allocations.total-window.beforeTypingAllocations}))
+  assert.equal(input.created,0,'1000 ordinary paragraph keystrokes must not instantiate code editors')
   await page.evaluate(() => window.f.undo())
   await page.waitForFunction(source => window.f.source() === source, source)
   // Scroll to distant blocks and back: near blocks mount, old blocks release.
@@ -92,9 +101,9 @@ try {
   })
   const cold=page.locator('.md-code-block').nth(100)
   await cold.scrollIntoViewIfNeeded()
-  await cold.locator('.md-code-text').nth(1).waitFor()
-  const point=await cold.locator('.md-code-text').nth(1).evaluate(el=>{
-    const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);let text,remaining=7
+  await cold.locator('.md-code-placeholder code').waitFor()
+  const point=await cold.locator('.md-code-placeholder code').evaluate(el=>{
+    const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);let text,remaining=el.textContent.indexOf('\n')+1+7
     while((text=walker.nextNode())&&text.length<remaining) remaining-=text.length
     const range=document.createRange();range.setStart(text,remaining);range.collapse(true)
     const r=range.getBoundingClientRect();return {x:r.x+1,y:(r.top+r.bottom)/2,left:el.getBoundingClientRect().left,font:getComputedStyle(el).font,padding:getComputedStyle(el).padding}
@@ -163,6 +172,7 @@ try {
   // Geometry is derived by normal layout; changing width/wrap/numbers must not
   // leave a stale min-height from the previous live view.
   const geometry=[]
+  await page.evaluate(()=>document.body.classList.add('light'))
   for(const width of [1280,600]) {
     await page.setViewportSize({width,height:850})
     const text='Visual paragraph.\n\n```js\n'+Array.from({length:8},(_,i)=>`const longLine${i} = "${'word '.repeat(30)}";`).join('\n')+'\n```\n'
@@ -184,8 +194,20 @@ try {
       geometry.push({width,wrap,numbers,...sizes})
       assert.ok(Math.abs(sizes.before-sizes.after)<=2,`Placeholder/live height parity: ${JSON.stringify(geometry.at(-1))}`)
     }
+    await page.evaluate(()=>{const c=[...window.f.live().codeViews][0];c.inViewport=false;c.detachEditor()})
+    await page.screenshot({path:`${output}/${width===600?'narrow':'wide'}-static.png`})
+    await page.evaluate(()=>[...window.f.live().codeViews][0].ensureEditor())
     await page.screenshot({path:`${output}/${width===600?'narrow':'wide'}.png`})
   }
+  const resizedTypography=await page.evaluate(async()=>{
+    const live=window.f.live(),code=[...live.codeViews][0]
+    live.typography({...live.settings,fontSize:20,lineHeight:1.9,codeWrap:true,codeLineNumbers:true})
+    code.inViewport=false;code.detachEditor()
+    const before=code.cmContainer.offsetHeight;code.ensureEditor()
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))
+    return{before,after:code.cmContainer.offsetHeight}
+  })
+  assert.ok(Math.abs(resizedTypography.before-resizedTypography.after)<=2,'Font and line-height updates keep placeholder geometry current')
   await page.setViewportSize({width:1280,height:850})
   await page.evaluate(()=>window.f.split())
   await page.waitForFunction(()=>window.f.panes.length===2&&window.f.ready())
@@ -207,6 +229,6 @@ try {
   assert.equal(await page.evaluate(()=>window.f.source()),'Paragraph.\n\n```js\nread only\n```')
   await page.evaluate(()=>window.f.dispose())
   assert.deepEqual(errors, [])
-  fs.writeFileSync(`${output}/state-queries.json`, JSON.stringify({ initial, ...result,clicked,geometry }, null, 2))
+  fs.writeFileSync(`${output}/state-queries.json`, JSON.stringify({ initial, ...result,clicked,geometry,input }, null, 2))
   console.log('PASS 200 code blocks: 1000 state queries, search decorations, ordinary typing and canonical undo')
 } finally { await browser?.close(); await server.close() }

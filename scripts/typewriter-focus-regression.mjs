@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict'
+import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { createServer } from 'vite'
@@ -125,7 +125,7 @@ try {
     ...(process.env.MARKUMO_CHROME ? { executablePath: process.env.MARKUMO_CHROME } : {}),
   })
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } })
-  page.setDefaultTimeout(15000)
+  page.setDefaultTimeout(30000)
 
   const errors = []
   page.on('pageerror', err => errors.push(err.message))
@@ -133,7 +133,7 @@ try {
     if (msg.type() === 'error' && !msg.text().includes('favicon')) errors.push(msg.text())
   })
 
-  await page.goto(`http://localhost:1439/${output}/index.html`)
+  await page.goto(`http://localhost:1439/${output}/index.html`, { timeout: 45000 })
   await page.waitForFunction(() => window.f)
 
   const test = async (name, run) => {

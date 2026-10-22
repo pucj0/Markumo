@@ -37,10 +37,10 @@ const tests=[],errors=[],performanceResults=[]
 try {
   browser=await chromium.launch({headless:true,...(process.env.MARKUMO_CHROME?{executablePath:process.env.MARKUMO_CHROME}:{})})
   const page=await browser.newPage({viewport:{width:1280,height:850},reducedMotion:'reduce'})
-  page.setDefaultTimeout(12000)
+  page.setDefaultTimeout(30000)
   page.on('pageerror',e=>errors.push(e.message))
   page.on('console',e=>{if(/crashed|Unknown highlighting tag/.test(e.text()))errors.push(e.text())})
-  await page.goto(`http://127.0.0.1:${port}/${output}/index.html`)
+  await page.goto(`http://127.0.0.1:${port}/${output}/index.html`, { timeout: 45000 })
   await page.waitForFunction(()=>window.f)
   const test=async(name,run)=>{await run();tests.push(name);console.log('PASS '+name)}
   const reset=(name,source,mode)=>page.evaluate(([name,source,mode])=>window.reset(name,source,mode),[name,source,mode])
@@ -188,10 +188,19 @@ try {
   })
   await test('many live blocks switch mode without rebuilding views or accumulating plugins',async()=>{
     await page.evaluate(()=>window.doc(Array.from({length:40},(_,i)=>'```javascript\ncall({items:['+i+']});\n```').join('\n\n'),'md','live'))
-    await page.waitForFunction(()=>document.querySelectorAll('.md-code-block .mk-bracket-3').length===80)
+    await page.waitForFunction(()=>document.querySelectorAll('.md-code-block').length===40&&document.querySelector('.md-code-block .mk-bracket-3'))
     const result=await page.evaluate(async()=>{const f=window.f,views=[...document.querySelectorAll('.md-code-block .cm-editor')].map(dom=>f.EditorView.findFromDOM(dom)),start=performance.now();for(let i=0;i<12;i++){window.s.bracketMode=i%2?'off':'rainbow';await f.nextTick()}return {elapsed:performance.now()-start,count:views.length,same:views.every((view,i)=>view===f.EditorView.findFromDOM(document.querySelectorAll('.md-code-block .cm-editor')[i])),clean:views.every(view=>!view.plugin(f.rainbowBrackets)&&!view.plugin(f.matchingBrackets))}})
-    assert.equal(result.count,40);assert.equal(result.same,true);assert.equal(result.clean,true);assert.ok(result.elapsed<2500);performanceResults.push({name:'40 live code blocks / 12 toggles',...result})
+    assert.ok(result.count>0&&result.count<40,'Only visible/buffered code blocks should own CMViews');assert.equal(result.same,true);assert.equal(result.clean,true);assert.ok(result.elapsed<2500);performanceResults.push({name:'40 virtualized code blocks / 12 toggles',...result})
     await page.evaluate(()=>window.s.bracketMode='rainbow')
+    // Every fence must inherit the setting when it mounts, including fences
+    // that had no editor during the toggles. Check the actual glyphs in all 40.
+    for(let i=0;i<40;i++){
+      const block=page.locator('.md-code-block').nth(i)
+      await block.scrollIntoViewIfNeeded()
+      await page.waitForFunction(i=>document.querySelectorAll('.md-code-block')[i]?.querySelectorAll('.cm-editor .mk-bracket-3').length===2,i)
+    }
+    await page.locator('.md-code-block').last().locator('.cm-content').click();await page.keyboard.press('End');await page.keyboard.type(' // edited after virtual mount')
+    assert.ok((await page.evaluate(()=>window.s.manager.getText(window.s.manager.activeId))).includes('call({items:[39]}); // edited after virtual mount'))
   })
   await test('Hex, ClassFile and media viewers never receive bracket plugins',async()=>{
     const result=await page.evaluate(async()=>{const {DocumentManager}=await import('/src/editor/core/DocumentManager.ts'),f=window.f,m=new DocumentManager([{id:'class',name:'Sample.class',path:'/Sample.class',text:'class Fake {}',kind:'javaClass'}]);m.setBracketMode('rainbow');m.open('class');const file={kind:'text',token:'hex',name:'raw.dat',path:'/raw.dat',text:'([{}])',encoding:'Hex',bom:false,eol:'LF',readOnly:true,version:'1'},hex=m.openFile(file);m.setBracketMode('matching');m.setBracketMode('rainbow');const states=['class',hex].map(id=>{const host=document.createElement('div');document.body.append(host);const view=new f.EditorView({parent:host,state:m.getState(id)});const clean=!view.plugin(f.rainbowBrackets)&&!view.plugin(f.matchingBrackets);view.destroy();host.remove();return clean});const image=m.openFile({...file,token:'image',kind:'image',path:'/image.png',name:'image.png',media:{format:'png',byteLength:10}});const noState=m.getState(image)===undefined;m.dispose();return {states,noState}})

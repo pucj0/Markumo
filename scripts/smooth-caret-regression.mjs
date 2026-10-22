@@ -48,7 +48,7 @@ try {
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   page.on('console', message => { if (message.type() === 'error' && !message.text().includes('favicon')) errors.push(message.text()) })
-  await page.goto('http://localhost:1431/' + output + '/index.html')
+  await page.goto('http://localhost:1431/' + output + '/index.html', { timeout: 45000 })
   await page.waitForFunction(() => window.f)
   const test = async (name, run) => { await run(); results.push(name); console.log('PASS ' + name) }
   const aligned = () => page.waitForFunction(() => window.f.aligned())

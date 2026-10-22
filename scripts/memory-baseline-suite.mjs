@@ -1,15 +1,20 @@
-// Comprehensive WebView2 Memory Baseline and Leak Diagnostic Suite
+// Chromium component-host memory probe. This never measures native WebView2.
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createServer } from 'vite'
 import { chromium } from 'playwright'
 import { createHash } from 'node:crypto'
-import { execFileSync, spawn } from 'node:child_process'
-import { once } from 'node:events'
+import { execFileSync } from 'node:child_process'
 
 const outDir = path.resolve('test-results/performance-baseline')
 fs.mkdirSync(outDir, { recursive: true })
+const harness = path.join(outDir, 'component-harness.html')
+fs.writeFileSync(harness, `<!doctype html><meta charset="utf-8"><div id="app" style="display:flex;height:720px"></div><script type="module">
+import '/scripts/fixtures/markdown-live-controller.js'
+import {DocumentManager} from '/src/editor/core/DocumentManager.ts'
+window.audit={DocumentManager};window.f.reset('# Ready\\n\\nComponent fixture.\\n')
+</script>`)
 
 const sha256 = text => createHash('sha256').update(text).digest('hex')
 
@@ -94,13 +99,13 @@ const server = await createServer({
 await server.listen()
 
 const report = {
-  suite: 'WebView2 Full-Stack Memory Baseline and Leak Diagnosis',
+  suite: 'Chromium component host / Vite development modules',
   startedAt: new Date().toISOString(),
   platform: process.platform,
   commit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   benchmarks: {},
   lifecycle50: {},
-  nativeSummary: {},
+  nativeSummary: { status: 'not-measured', command: 'node scripts/memory-native-ab.mjs --label=before|after', reason: 'Native Release data must be freshly sampled and binary/commit identified; historical Phase 07 JSON is not imported.' },
   leaksIdentified: [],
   hotspots: []
 }
@@ -109,12 +114,13 @@ let browser
 try {
   browser = await chromium.launch({
     headless: true,
-    executablePath: process.env.MARKUMO_CHROME || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    executablePath: process.env.MARKUMO_CHROME,
     args: ['--js-flags=--expose-gc', '--disable-background-timer-throttling', '--disable-renderer-backgrounding']
   })
 
   const page = await browser.newPage({ viewport: { width: 1280, height: 850 } })
-  await page.goto('http://127.0.0.1:1495/test-results/phase07/browser-harness.html')
+  report.browser = browser.version()
+  await page.goto('http://127.0.0.1:1495/test-results/performance-baseline/component-harness.html')
   await page.waitForFunction(() => !!window.f?.ready())
 
   const cdp = await page.context().newCDPSession(page)
@@ -165,7 +171,9 @@ try {
   }
 
   // 1. Empty / Baseline
-  await collectMetrics('Empty', { description: 'Blank editor, no active file' })
+  await page.evaluate(() => window.f.dispose())
+  assert.equal(await page.locator('.cm-editor,.markdown-live').count(), 0)
+  await collectMetrics('Empty-component-host', { description: 'Disposed component host with no editor; not blank native app startup' })
 
   // 2. TXT Scenarios (100, 1000, 10000, 50000 lines) in native Plain Text / CodeMirror
   for (const lines of [100, 1000, 10000, 50000]) {
@@ -286,7 +294,7 @@ try {
 
   // 12. 50-Cycle Document Lifecycle (Leak Detection)
   console.log('[LEAK] Starting 50 Document Lifecycle Cycles...')
-  await page.goto('http://127.0.0.1:1495/test-results/phase07/browser-harness.html')
+  await page.goto('http://127.0.0.1:1495/test-results/performance-baseline/component-harness.html')
   await page.waitForFunction(() => !!window.f?.ready())
 
   const cycleSamples = []
@@ -348,31 +356,7 @@ try {
   fs.writeFileSync(snapshotPath, snapshotChunks.join(''), 'utf8')
   console.log(`[SNAPSHOT] Saved heap snapshot: ${snapshotPath} (${(fs.statSync(snapshotPath).size / (1024 * 1024)).toFixed(2)} MB)`)
 
-  // 14. Real Windows Native WebView2 Process Group Measurement
-  console.log('[NATIVE] Measuring real Windows WebView2 & Rust process tree...')
-  try {
-    const nativeScript = path.resolve('scripts/phase07-native-startup.mjs')
-    if (fs.existsSync(nativeScript)) {
-      const nativeDataPath = path.resolve('test-results/phase07/native-startup-baseline/results.json')
-      if (fs.existsSync(nativeDataPath)) {
-        const nativeResults = JSON.parse(fs.readFileSync(nativeDataPath, 'utf8'))
-        report.nativeSummary = {
-          source: 'phase07-native-startup-baseline',
-          samples: nativeResults.samples?.map(s => ({
-            scenario: s.scenario,
-            rustPrivateMiB: Number(((s.nativeMemory?.native?.PrivateMemorySize64 || 0) / (1024 * 1024)).toFixed(2)),
-            rustWorkingSetMiB: Number(((s.nativeMemory?.native?.WorkingSet64 || 0) / (1024 * 1024)).toFixed(2)),
-            webviewPrivateBytesSumMiB: Number(((s.nativeMemory?.webviewPrivateBytesSum || 0) / (1024 * 1024)).toFixed(2)),
-            webviewWorkingSetSumMiB: Number(((s.nativeMemory?.webviewWorkingSetSum || 0) / (1024 * 1024)).toFixed(2)),
-            webviewProcessCount: s.nativeMemory?.webviewProcessCount || 6,
-            handles: s.nativeMemory?.native?.HandleCount || 0
-          }))
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('[NATIVE] Native summary read failed:', err.message)
-  }
+  console.log('[NATIVE] Not measured by this Chromium component suite. Run memory-native-ab.mjs separately.')
 
   // Save final json report
   fs.writeFileSync(path.join(outDir, 'memory-baseline.json'), JSON.stringify(report, null, 2), 'utf8')

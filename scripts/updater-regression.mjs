@@ -70,7 +70,8 @@ try{
   browser=await chromium.launch({headless:true,...(process.env.MARKUMO_CHROME?{executablePath:process.env.MARKUMO_CHROME}:{})})
   const page=await browser.newPage({viewport:{width:1100,height:780}}),errors=[];page.setDefaultTimeout(10000)
   page.on('pageerror',error=>errors.push(error.message))
-  await page.goto(`http://localhost:1433/${output}/index.html`);await page.waitForFunction(()=>window.f)
+  // Cold Vite compilation is fixture setup; interaction deadlines stay at 10s.
+  await page.goto(`http://localhost:1433/${output}/index.html`,{timeout:45000});await page.waitForFunction(()=>window.f)
   const test=async(name,run)=>{await run();passed.push(name);console.log('PASS '+name)}
   const setup=options=>page.evaluate(options=>{window.f.setup(options)},options)
   const check=()=>page.evaluate(()=>window.f.item.manager.checkForUpdates())
