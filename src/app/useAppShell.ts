@@ -46,7 +46,6 @@ export function useAppShell() {
   const sidebarPanel = ref<SidebarPanel>('files')
   const focusMode = ref(false)
   const savedSidebarVisible = ref<boolean | null>(null)
-  const savedShowOutline = ref<boolean | null>(null)
 
   // --- Modal & Tool Component Refs ---
   const paletteRef = ref<InstanceType<typeof CommandPalette> | null>(null)
@@ -128,6 +127,12 @@ export function useAppShell() {
     revision,
     getActiveDoc: () => activeDoc.value,
   })
+
+  // Only a rendered workspace content panel occupies the left dock. The rail
+  // and the outline itself never feed back into sidebar preferences.
+  const leftSidebarOccupied = computed(() => !focusMode.value && appMode.value === 'workspace' && sidebarVisible.value && (sidebarPanel.value === 'files' || sidebarPanel.value === 'search'))
+  const effectiveOutlinePosition = computed(() => leftSidebarOccupied.value ? 'right' as const : 'left' as const)
+  const outlineVisible = computed(() => preferences.showOutline.value && !focusMode.value)
 
   watch([preferences.externalFileMonitoring, preferences.autoReloadExternal, preferences.settingsReady], () => {
     files.external.configure(desktop && preferences.settingsReady.value && preferences.externalFileMonitoring.value, preferences.autoReloadExternal.value)
@@ -696,10 +701,12 @@ export function useAppShell() {
   }
 
   function toggleSidebar() {
+    if (appMode.value === 'single') { appMode.value = 'workspace'; sidebarVisible.value = true; return }
     sidebarVisible.value = !sidebarVisible.value
   }
 
   function handleSelectPanel(panel: SidebarPanel) {
+    if (panel === 'outline') { preferences.showOutline.value = !preferences.showOutline.value; return }
     if (sidebarPanel.value === panel && sidebarVisible.value) sidebarVisible.value = false
     else {
       sidebarPanel.value = panel
@@ -711,9 +718,7 @@ export function useAppShell() {
     const activePane = manager.activePane
     if (!focusMode.value) {
       savedSidebarVisible.value = sidebarVisible.value
-      savedShowOutline.value = preferences.showOutline.value
       sidebarVisible.value = false
-      preferences.showOutline.value = false
       focusMode.value = true
       toast('专注模式 · Esc 退出')
     } else {
@@ -721,10 +726,6 @@ export function useAppShell() {
       if (savedSidebarVisible.value !== null) {
         sidebarVisible.value = savedSidebarVisible.value
         savedSidebarVisible.value = null
-      }
-      if (savedShowOutline.value !== null) {
-        preferences.showOutline.value = savedShowOutline.value
-        savedShowOutline.value = null
       }
       toast('已退出专注模式')
     }
@@ -1309,6 +1310,9 @@ export function useAppShell() {
     setMode,
     toggleSidebar,
     handleSelectPanel,
+    leftSidebarOccupied,
+    effectiveOutlinePosition,
+    outlineVisible,
     toggleTheme: preferences.toggleTheme,
     toggleFocus,
     toggleTypewriter,

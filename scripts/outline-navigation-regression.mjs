@@ -160,7 +160,7 @@ try {
     const create=async()=>{await app.getByRole('menuitem',{name:'文件',exact:true}).click();await app.getByRole('menuitem',{name:'新建 Markdown',exact:true}).click();await app.locator('.md-prose').waitFor()}
     await create()
     const handle=app.getByRole('separator',{name:'调整大纲宽度'}),box=await handle.boundingBox()
-    await app.mouse.move(box.x+2,box.y+80);await app.mouse.down();await app.mouse.move(box.x-93,box.y+80,{steps:5});await app.mouse.up()
+    await app.mouse.move(box.x+2,box.y+80);await app.mouse.down();await app.mouse.move(box.x+97,box.y+80,{steps:5});await app.mouse.up()
     await app.waitForFunction(()=>JSON.parse(localStorage.getItem('markumo.settings.v1')||'{}').outlineWidth===335)
     await app.reload();await create()
     assert.equal(Math.round((await app.locator('.outline-sidebar').boundingBox()).width),335)

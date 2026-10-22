@@ -62,6 +62,8 @@ export class MarkdownEditorController implements LiveEditor {
   readonly view: EditorView
   bridge: MarkdownSourceBridge
   readonly dom = document.createElement('div')
+  private outlineHeadingDoc?: Node
+  private outlineHeadingPositions: number[] = []
   private tableToolbar: LiveTableToolbar
   private imagePreview: ImagePreview
   private properties = document.createElement('div')
@@ -887,6 +889,23 @@ export class MarkdownEditorController implements LiveEditor {
     const bounds = this.dom.getBoundingClientRect()
     const content = this.view.dom.getBoundingClientRect()
     if (bounds.height <= 0 || bounds.width <= 0) return null
+    // Heading line boxes can begin above their glyphs (especially H4–H6).
+    // Hit-testing text alone can select the preceding paragraph at the anchor.
+    if (this.outlineHeadingDoc !== this.view.state.doc) {
+      this.outlineHeadingDoc = this.view.state.doc
+      this.outlineHeadingPositions = []
+      this.view.state.doc.descendants((node, position) => {
+        if (node.type === s.nodes.heading && this.outlineHeadingPositions.length < 1000) this.outlineHeadingPositions.push(position)
+        return !node.isTextblock && this.outlineHeadingPositions.length < 1000
+      })
+    }
+    let low = 0, high = this.outlineHeadingPositions.length - 1, index = -1
+    while (low <= high) {
+      const middle = (low + high) >>> 1, element = this.view.nodeDOM(this.outlineHeadingPositions[middle])
+      if (element instanceof HTMLElement && element.getBoundingClientRect().top <= bounds.top + 24) { index = middle; low = middle + 1 }
+      else high = middle - 1
+    }
+    if (index >= 0) return this.bridge.sourcePosition(this.outlineHeadingPositions[index] + 1)
     const found = this.view.posAtCoords({
       left: Math.max(bounds.left + 1, Math.min(bounds.right - 1, content.left + 8)),
       top: Math.min(bounds.bottom - 1, bounds.top + 24),

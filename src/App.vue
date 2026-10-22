@@ -32,13 +32,15 @@
         :ui-font-size="uiFontSize"
         :active-panel="sidebarPanel"
         :sidebar-visible="sidebarVisible"
+        :outline-visible="showOutline"
         @select-panel="handleSelectPanel"
+        @toggle-outline="toggleOutline"
         @open-settings="openSettings"
       />
 
-      <!-- 侧边栏 (Explorer / Search / Outline) -->
+      <!-- 工作区内容侧边栏；大纲由编辑容器统一停靠 -->
       <Sidebar
-        v-if="!focusMode && sidebarVisible"
+        v-if="leftSidebarOccupied"
         v-model:width="sidebarWidth"
         :active-panel="sidebarPanel"
         :active-doc-id="activeDocId"
@@ -56,7 +58,6 @@
         @toggle-side="toggleSidebar"
         @new-doc="createNewDoc"
         @select-doc="handleSelectDoc"
-        @select-outline="activeDocId && manager.revealOutline(activeDocId, $event)"
       />
 
       <!-- 编辑主体区 -->
@@ -66,7 +67,8 @@
           v-model:outline-width="outlineWidth"
           :doc="activeDoc"
           :manager="manager"
-          :show-outline="showOutline"
+          :show-outline="outlineVisible"
+          :outline-position="effectiveOutlinePosition"
           :focus-mode="focusMode"
           :desktop="desktop"
           :word-wrap="wordWrap"
@@ -217,7 +219,7 @@ import { computed } from 'vue'
 import { useAppShell } from './app/useAppShell'
 const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, typewriterMode, defaultMdMode, liveToolbar, externalFileMonitoring, autoReloadExternal, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, smartExpand, compactFolders, syntaxStyle, bracketMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
   paletteRef, settingsRef, discardRef, toastRef, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
-  setMode, toggleSidebar, handleSelectPanel, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
+  setMode, toggleSidebar, handleSelectPanel, leftSidebarOccupied, effectiveOutlinePosition, outlineVisible, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,
   reopenEncoding, convertEncoding, saveAsEncoding,
   gotoLineRef, handleGotoLine, revealInExplorerToken,

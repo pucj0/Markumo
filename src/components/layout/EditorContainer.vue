@@ -1,5 +1,5 @@
 <template>
-  <div ref="container" class="editor-container" :data-revision="revision">
+  <div ref="container" class="editor-container" :data-revision="revision" :data-outline-position="outlinePosition">
     <div class="editor-main" :class="{ 'is-split-pane': manager.isSplit }">
       <div v-if="doc?.languageStatus === 'error'" class="language-message" role="status">
         {{ doc.languageError }}
@@ -33,15 +33,18 @@
       </div>
     </div>
 
-    <div v-if="showOutline && !focusMode && doc" class="outline-resizer" role="separator" aria-label="调整大纲宽度" aria-orientation="vertical" tabindex="0"
+    <div v-show="docked" class="outline-resizer" role="separator" aria-label="调整大纲宽度" aria-orientation="vertical" tabindex="0"
       :aria-valuenow="visibleOutlineWidth" :aria-valuemin="160" :aria-valuemax="maxOutlineWidth" title="拖动调整大纲宽度，双击恢复默认"
-      @pointerdown="startOutlineResize" @lostpointercapture="stopOutlineResize" @dblclick="setOutlineWidth(240)"
-      @keydown.left.prevent="setOutlineWidth(visibleOutlineWidth + 10)" @keydown.right.prevent="setOutlineWidth(visibleOutlineWidth - 10)"
+      @pointerdown="startOutlineResize" @lostpointercapture="cancelOutlineResize" @dblclick="setOutlineWidth(240)"
+      @keydown.left.prevent="setOutlineWidth(visibleOutlineWidth + (outlinePosition === 'right' ? 10 : -10))" @keydown.right.prevent="setOutlineWidth(visibleOutlineWidth + (outlinePosition === 'left' ? 10 : -10))"
       @keydown.home.prevent="setOutlineWidth(160)" @keydown.end.prevent="setOutlineWidth(maxOutlineWidth)"
     ></div>
-    <aside v-if="showOutline && !focusMode && doc" class="outline-sidebar" :style="{ width: `${visibleOutlineWidth}px` }">
+    <aside v-show="docked" class="outline-sidebar" :style="{ width: `${visibleOutlineWidth}px` }" aria-label="文档大纲">
       <div class="outline-head">
         <span>大纲</span>
+        <div class="outline-actions">
+        <button class="tinyclose" aria-label="全部展开大纲" title="全部展开" @click="outlineView?.expandAll()">⊞</button>
+        <button class="tinyclose" aria-label="全部收起大纲" title="全部收起" @click="outlineView?.collapseAll()">⊟</button>
         <button
           class="tinyclose"
           aria-label="关闭大纲"
@@ -50,8 +53,10 @@
         >
           ✕
         </button>
+        </div>
       </div>
       <OutlineView
+        ref="outlineView"
         :items="outlineItems"
         :is-markdown="isMarkdownDoc"
         :notice="outlineNotice"
@@ -78,6 +83,7 @@ const props = withDefaults(defineProps<{
   doc: EditorDocument | null
   manager: DocumentManager
   showOutline: boolean
+  outlinePosition?: 'left' | 'right'
   focusMode?: boolean
   outlineWidth?: number
   desktop: boolean
@@ -88,7 +94,7 @@ const props = withDefaults(defineProps<{
   rootPath?: string | null
   liveToolbar?: boolean
   markdownWidth?: number
-}>(), { liveToolbar: true })
+}>(), { liveToolbar: true, outlinePosition: 'right' })
 
 const emit = defineEmits<{
   (e: 'new-doc'): void
@@ -108,47 +114,77 @@ const emit = defineEmits<{
 
 const revision = ref(0)
 const unsubscribe = props.manager.subscribe(() => revision.value++)
-const container = ref<HTMLElement | null>(null), containerWidth = ref(800), localOutlineWidth = ref(240)
-const maxOutlineWidth = computed(() => Math.max(160, Math.min(520, containerWidth.value - 244)))
-const visibleOutlineWidth = computed(() => Math.min(maxOutlineWidth.value, Math.max(160, props.outlineWidth ?? localOutlineWidth.value)))
+const container = ref<HTMLElement | null>(null), containerWidth = ref(0), localOutlineWidth = ref(240)
+const outlineView = ref<InstanceType<typeof OutlineView> | null>(null)
+const dragWidth = ref<number | null>(null), spaceCollapsed = ref(true)
+const minimumEditorWidth = computed(() => {
+  revision.value
+  const width = (node: typeof props.manager.layout.root): number => {
+    if (node.type === 'leaf') {
+      const id = props.manager.paneGroup(node.id).activeId
+      return id && props.manager.getMarkdownMode(id, node.id) === 'split' ? 420 : 280
+    }
+    if (node.orientation !== 'horizontal') return Math.max(width(node.first), width(node.second))
+    const ratio = Math.max(.05, Math.min(.95, node.ratio))
+    return Math.max(width(node.first) / ratio, width(node.second) / (1 - ratio)) + 4
+  }
+  const maximized = props.manager.layout.maximizedPaneId
+  return width(maximized ? { type: 'leaf', id: maximized } : props.manager.layout.root)
+})
+const maxOutlineWidth = computed(() => Math.max(160, Math.min(520, containerWidth.value - minimumEditorWidth.value - 4)))
+const visibleOutlineWidth = computed(() => Math.min(maxOutlineWidth.value, Math.max(160, dragWidth.value ?? props.outlineWidth ?? localOutlineWidth.value)))
+const docked = computed(() => props.showOutline && !props.focusMode && !!props.doc && !spaceCollapsed.value)
+watch([containerWidth, minimumEditorWidth], ([available, minimum]) => {
+  const threshold = minimum + 164
+  if (available < threshold) spaceCollapsed.value = true
+  else if (available >= threshold + 32) spaceCollapsed.value = false
+}, { immediate: true })
 let observer: ResizeObserver | undefined
-let resize: { pointer: number; x: number; width: number; cursor: string; selection: string; handle: HTMLElement } | null = null
+let resize: { pointer: number; x: number; width: number; cursor: string; selection: string; handle: HTMLElement; moved: boolean } | null = null
 function setOutlineWidth(width: number) {
-  const value = Math.round(Math.max(160, Math.min(maxOutlineWidth.value, width)))
+  const value = Math.round(Math.max(160, Math.min(520, width)))
   localOutlineWidth.value = value
   emit('update:outlineWidth', value)
 }
 function startOutlineResize(event: PointerEvent) {
   if (event.button !== 0) return
-  stopOutlineResize()
+  cancelOutlineResize()
   event.preventDefault()
   const handle = event.currentTarget as HTMLElement
-  resize = {pointer:event.pointerId,x:event.clientX,width:visibleOutlineWidth.value,cursor:document.body.style.cursor,selection:document.body.style.userSelect,handle}
+  resize = {pointer:event.pointerId,x:event.clientX,width:visibleOutlineWidth.value,cursor:document.body.style.cursor,selection:document.body.style.userSelect,handle,moved:false}
   handle.setPointerCapture(event.pointerId)
   document.body.style.cursor = 'col-resize'
   document.body.style.userSelect = 'none'
   window.addEventListener('pointermove', moveOutlineResize)
   window.addEventListener('pointerup', stopOutlineResize)
-  window.addEventListener('pointercancel', stopOutlineResize)
-  window.addEventListener('blur', stopOutlineResize)
+  window.addEventListener('pointercancel', cancelOutlineResize)
+  window.addEventListener('blur', cancelOutlineResize)
 }
 function moveOutlineResize(event: PointerEvent) {
-  if (resize && event.pointerId === resize.pointer) setOutlineWidth(resize.width + resize.x - event.clientX)
+  if (resize && event.pointerId === resize.pointer) {
+    const delta = (event.clientX - resize.x) * (props.outlinePosition === 'left' ? 1 : -1)
+    resize.moved ||= Math.abs(delta) > 1
+    dragWidth.value = Math.round(Math.max(160, Math.min(maxOutlineWidth.value, resize.width + delta)))
+  }
 }
-function stopOutlineResize(event?: Event) {
+function cancelOutlineResize(event?: Event) { stopOutlineResize(event, false) }
+function stopOutlineResize(event?: Event, save = true) {
   if (!resize) return
   if (event instanceof PointerEvent && event.pointerId !== resize.pointer) return
-  const {handle, pointer} = resize
+  const {handle, pointer, moved} = resize
+  const finalWidth = dragWidth.value
   document.body.style.cursor = resize.cursor
   document.body.style.userSelect = resize.selection
   resize = null
+  dragWidth.value = null
+  if (save && moved && finalWidth !== null) setOutlineWidth(finalWidth)
   if (handle.hasPointerCapture(pointer)) handle.releasePointerCapture(pointer)
   window.removeEventListener('pointermove', moveOutlineResize)
   window.removeEventListener('pointerup', stopOutlineResize)
-  window.removeEventListener('pointercancel', stopOutlineResize)
-  window.removeEventListener('blur', stopOutlineResize)
+  window.removeEventListener('pointercancel', cancelOutlineResize)
+  window.removeEventListener('blur', cancelOutlineResize)
 }
-watch(() => props.showOutline && !!props.doc, shown => { if (!shown) stopOutlineResize() })
+watch([docked, () => props.outlinePosition], () => cancelOutlineResize())
 onMounted(() => {
   if (!container.value) return
   containerWidth.value = container.value.clientWidth
@@ -172,7 +208,7 @@ const isMarkdownDoc = computed(() => {
 })
 
 const outlineItems = computed<OutlineItem[]>(() => {
-  if (!props.doc) return []
+  if (!props.doc || !props.showOutline || props.focusMode) return []
   const state = props.manager.getState(props.doc.id)
   revision.value
   return extractOutline(props.doc, state)
@@ -184,14 +220,13 @@ const outlineNotice = computed(() => {
   if (props.doc && ['Plain Text','CSV','Log','INI','TOML','JSONC'].includes(props.doc.language)) return '当前语言未提供结构大纲。'
   return ''
 })
-
 function handleSelectOutline(item: OutlineItem) {
   if (props.doc) props.manager.revealOutline(props.doc.id, item)
 }
 
 onUnmounted(() => {
   observer?.disconnect()
-  stopOutlineResize()
+  cancelOutlineResize()
   unsubscribe()
 })
 </script>
@@ -207,6 +242,7 @@ onUnmounted(() => {
 }
 
 .editor-main {
+  order: 0;
   min-width: 0;
   flex-direction: column;
   flex: 1;
@@ -232,12 +268,17 @@ onUnmounted(() => {
 }
 
 .outline-sidebar {
-  background: var(--side);
+  order: 2;
+  min-width: 0;
+  background: var(--sidebar);
   display: flex;
   flex-direction: column;
   flex: none;
 }
-.outline-resizer {width:4px;flex:none;background:var(--line);cursor:col-resize;touch-action:none;user-select:none;position:relative;z-index:3}
+.outline-resizer {order:1;width:4px;flex:none;background:var(--line);cursor:col-resize;touch-action:none;user-select:none;position:relative;z-index:3}
+.editor-container[data-outline-position="left"] .outline-sidebar {order:0}
+.editor-container[data-outline-position="left"] .editor-main {order:2}
+.outline-actions {display:flex;gap:6px}
 .outline-resizer:hover,.outline-resizer:focus-visible {background:var(--accent);outline:none}
 
 .outline-head {

@@ -229,16 +229,6 @@
           </div>
         </div>
 
-        <!-- 3. 大纲面板 (Phase 6 真实 Lezer AST 接入) -->
-        <div v-else-if="activePanel === 'outline'" class="outline-wrapper">
-          <OutlineView
-            :items="outlineItems"
-            :is-markdown="isMarkdownDoc"
-            :manager="manager"
-            :document-id="activeDocId"
-            @select-item="$emit('select-outline', $event)"
-          />
-        </div>
       </div>
 
     </div>
@@ -268,8 +258,6 @@ import FileIcon from '../common/FileIcon.vue'
 import Icon from '../common/Icon.vue'
 import TreeNodeItem from './TreeNodeItem.vue'
 import WorkspaceOperationDialog from '../modals/WorkspaceOperationDialog.vue'
-import OutlineView from './OutlineView.vue'
-import { extractOutline, type OutlineItem } from '../../editor/outline/outlineService'
 import type { SidebarPanel, EditorDocument } from '../../types'
 import type { WorkspaceController } from '../../features/workspace/WorkspaceController'
 import type { WorkspaceNode, WorkspaceInfo } from '../../features/workspace/contracts'
@@ -310,22 +298,7 @@ const emit = defineEmits<{
   (e: 'new-doc'): void
   (e: 'select-doc', id: string, preview?: boolean): void
   (e: 'open-recent', path: string): void
-  (e: 'select-outline', item: OutlineItem): void
 }>()
-
-const activeDoc = computed(() => {
-  return props.openDocs.find(d => d.id === props.activeDocId) || null
-})
-
-const isMarkdownDoc = computed(() => {
-  return (!activeDoc.value?.kind || activeDoc.value.kind === 'text') && /\.(md|markdown)$/i.test(activeDoc.value?.name || '')
-})
-
-const outlineItems = computed<OutlineItem[]>(() => {
-  if (!activeDoc.value || !props.manager) return []
-  const state = props.manager.getState(activeDoc.value.id)
-  return extractOutline(activeDoc.value, state)
-})
 
 const searchInputRef = ref<HTMLInputElement | null>(null)
 const replaceInputRef = ref<HTMLInputElement | null>(null)

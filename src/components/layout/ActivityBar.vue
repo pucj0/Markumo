@@ -20,9 +20,10 @@
 
     <button
       class="ib"
-      :class="{ on: activePanel === 'outline' && sidebarVisible }"
+      :class="{ on: outlineVisible }"
+      :aria-pressed="outlineVisible"
       title="文档大纲"
-      @click="$emit('select-panel', 'outline')"
+      @click="$emit('toggle-outline')"
     >
       <Icon name="outline" />
     </button>
@@ -46,11 +47,13 @@ import type { SidebarPanel } from '../../types'
 defineProps<{
   activePanel: SidebarPanel
   sidebarVisible: boolean
+  outlineVisible?: boolean
 }>()
 
 defineEmits<{
   (e: 'select-panel', panel: SidebarPanel): void
   (e: 'open-settings'): void
+  (e: 'toggle-outline'): void
 }>()
 </script>
 
