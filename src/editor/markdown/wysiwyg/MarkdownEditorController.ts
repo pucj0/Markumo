@@ -32,6 +32,7 @@ import { inlineHtmlRanges } from './HtmlSourceRanges'
 import { markdownParser, parseMarkdown } from './MarkdownParser'
 import { reuseSourceBlocks } from './reuseSourceBlocks'
 import { serializeBlock } from './MarkdownSerializer'
+import { createAutoLinkPlugin } from './AutoLinkSync'
 import { createLiveSearchPlugin } from './plugins/LiveSearch'
 import { LiveSearchController } from './LiveSearchController'
 import { createNodeTargetPlugin, nodeTargetKey, type NodeTarget } from './plugins/NodeTarget'
@@ -234,6 +235,7 @@ export class MarkdownEditorController implements LiveEditor {
           rules,
           createLiveSearchPlugin(),
           createNodeTargetPlugin(),
+          createAutoLinkPlugin(() => this.composing),
           new Plugin({ props: { decorations: state => {
             const decorations = this.inlineSource?.decorations(state.doc).find() || []
             const { $from } = state.selection

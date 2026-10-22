@@ -1,7 +1,64 @@
 import { MarkdownSerializer, defaultMarkdownSerializer } from 'prosemirror-markdown'
-import type { Node } from 'prosemirror-model'
+import type { Mark, Node } from 'prosemirror-model'
 import { markdownSchema } from './MarkdownSchema'
 import { tableRow } from '../tableModel'
+
+type LinkKind = 'bare' | 'angle' | 'none'
+
+/**
+ * A bare link may omit its delimiters only while its text still *is* the
+ * destination: either the exact URL, or the `www.` form linkify normalizes to
+ * an http(s) href. Anything else falls back to `[text](href)` so an edited
+ * target is never silently dropped.
+ */
+function matchesBareDestination(text: string, href: unknown): boolean {
+  const target = String(href ?? '')
+  if (text === target) return true
+  // Markdown-it normalizes the destination of every linkified URL, which
+  // percent-encodes non-ASCII and spaces. The painted text stays as typed, so a
+  // bare link must compare equal to its own decoded destination too.
+  if (text === safeDecodeURI(target)) return true
+  if (/^www\./i.test(text)) return target === `http://${text}` || target === `https://${text}` || safeDecodeURI(target) === `http://${text}` || safeDecodeURI(target) === `https://${text}`
+  return false
+}
+
+function safeDecodeURI(value: string): string {
+  try {
+    return decodeURI(value)
+  } catch {
+    return value
+  }
+}
+
+function isPlainAutolink(mark: Mark, parent: Node, index: number): boolean {
+  const kind = mark.attrs.autolink as LinkKind
+  if (kind === 'none' || mark.attrs.title) return false
+  const content = parent.child(index)
+  if (!content.isText || !matchesBareDestination(content.text ?? '', mark.attrs.href)) return false
+  if (content.marks[content.marks.length - 1] !== mark) return false
+  // A link that continues into the next text node cannot be a self-contained
+  // autolink: the delimiters would be read back as part of the URL.
+  return index === parent.childCount - 1 || !mark.isInSet(parent.child(index + 1).marks)
+}
+
+/** Serializes links by the spelling the source used, never by accident. */
+const markumoLink = {
+  open(state: { write: (text: string) => void } & Record<string, unknown>, mark: Mark, parent: Node, index: number) {
+    const plain = isPlainAutolink(mark, parent, index)
+    const kind: LinkKind = plain ? (mark.attrs.autolink as LinkKind) : 'none'
+    state.markumoLinkKind = kind
+    return kind === 'angle' ? '<' : kind === 'bare' ? '' : '['
+  },
+  close(state: Record<string, unknown>, mark: Mark) {
+    const kind = state.markumoLinkKind as LinkKind | undefined
+    state.markumoLinkKind = undefined
+    if (kind === 'angle') return '>'
+    if (kind === 'bare') return ''
+    return '](' + String(mark.attrs.href ?? '').replace(/[()"]/g, '\\$&') +
+      (mark.attrs.title ? ` "${String(mark.attrs.title).replace(/"/g, '\\"')}"` : '') + ')'
+  },
+  mixable: true,
+}
 
 export const markdownSerializer = new MarkdownSerializer({ ...defaultMarkdownSerializer.nodes,
   soft_break(state){state.write('\n')},
@@ -60,7 +117,7 @@ export const markdownSerializer = new MarkdownSerializer({ ...defaultMarkdownSer
     state.write(fence+node.attrs.params+'\n');state.text(node.textContent,false);state.write('\n'+fence);state.closeBlock(node)
   },
   table(state,node){state.write(serializeTable(node));state.closeBlock(node)},
-}, {...defaultMarkdownSerializer.marks,strike:{open:'~~',close:'~~',mixable:true,expelEnclosingWhitespace:true}})
+}, {...defaultMarkdownSerializer.marks, link: markumoLink as never, strike:{open:'~~',close:'~~',mixable:true,expelEnclosingWhitespace:true}})
 export function serializeBlock(node:Node){return markdownSerializer.serialize(markdownSchema.nodes.doc.create(null,node))}
 export function serializeCell(node:Node){return markdownSerializer.serialize(markdownSchema.nodes.doc.create(null,node.content)).replace(/\\\n/g,'<br>').replace(/\n/g,'<br>').replace(/\|/g,'\\|')}
 export function serializeTable(node:Node){

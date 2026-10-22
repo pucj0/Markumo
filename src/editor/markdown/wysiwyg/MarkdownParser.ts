@@ -29,6 +29,14 @@ const tokens = { ...defaultMarkdownParser.tokens,
   list_item:{block:'list_item',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({checked:tok.meta?.checked ?? null})},
   callout:{block:'callout',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({calloutType:tok.meta?.calloutType || 'NOTE',title:tok.meta?.title || ''})},
   toc:{node:'toc',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({raw:tok.content || '[TOC]'})},
+  // Keep the spelling of every link so the serializer can round-trip it. A
+  // linkified bare URL stays bare; `<...>` keeps its brackets; an explicit
+  // `[text](href)` keeps its own label instead of being rewritten as a URL.
+  link:{mark:'link',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({
+    href:tok.attrGet('href'),
+    title:tok.attrGet('title') || null,
+    autolink:tok.markup==='linkify'?'bare':tok.markup==='autolink'?'angle':'none',
+  })},
 }
 tokenizer.inline.ruler.before('escape','markumo_footnotes',(state,silent)=>{
   const note=/^\[\^([^\]\n]+)\]/.exec(state.src.slice(state.pos))

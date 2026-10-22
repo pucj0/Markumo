@@ -116,6 +116,19 @@ nodes.image = {
   ],
   toDOM: node => ['span', { 'data-image-source': node.attrs.src, width: node.attrs.width || undefined, align: node.attrs.align || undefined }, node.attrs.alt || '图片'],
 }
+const baseLink = commonmark.spec.marks.get('link')!
 export const markdownSchema = new Schema({ nodes, marks: commonmark.spec.marks.append({
   strike: {parseDOM:[{tag:'s'},{tag:'del'}], toDOM:()=>['s',0]},
-}).update('link', { ...commonmark.spec.marks.get('link')!, toDOM: mark => ['a', {href:safeMarkdownURL(mark.attrs.href) || undefined, 'data-href':mark.attrs.href, title:mark.attrs.title},0] }) })
+}).update('link', {
+  ...baseLink,
+  // `autolink` records how the source spelled this link so serialization can
+  // put it back unchanged: a bare linkified URL must stay bare, an angle
+  // autolink keeps its brackets, and an explicit `[text](href)` keeps both.
+  attrs: { ...baseLink.attrs, autolink: { default: 'none' } },
+  toDOM: mark => ['a', {
+    href: safeMarkdownURL(mark.attrs.href) || undefined,
+    'data-href': mark.attrs.href,
+    'data-autolink': mark.attrs.autolink,
+    title: mark.attrs.title,
+  }, 0],
+}) })
