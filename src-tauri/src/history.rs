@@ -209,6 +209,16 @@ impl HistoryStore {
         origin: &str,
         label: Option<String>,
     ) -> Result<HistoryRecordResult, String> {
+        self.record_inner(path, text, origin, label, true)
+    }
+
+    /// Imports must never evict an earlier imported body: the legacy source is
+    /// the retry journal until every record has been durably accepted.
+    pub fn import_legacy(&self, path: &str, text: &str, label: Option<String>) -> Result<HistoryRecordResult, String> {
+        self.record_inner(path, text, "manual", label, false)
+    }
+
+    fn record_inner(&self, path: &str, text: &str, origin: &str, label: Option<String>, allow_eviction: bool) -> Result<HistoryRecordResult, String> {
         let key = file_key(path);
         if !valid_key(&key) {
             return Err("文件标识无效".into());
@@ -237,6 +247,17 @@ impl HistoryStore {
             });
         }
 
+        if !allow_eviction {
+            if entries.len() >= MAX_ENTRIES_PER_FILE {
+                return Err("迁移超出单文件历史配额，旧来源已保留，请清理历史后重试".into());
+            }
+            let references = referenced_hashes(&index);
+            let additional = if references.contains(&hash) { 0 } else { bytes as u64 };
+            if self.usage_of(&references)? + additional > MAX_TOTAL_BYTES as u64 {
+                return Err("迁移超出历史总配额，旧来源已保留，请清理历史后重试".into());
+            }
+        }
+        let entries = index.files.get_mut(&key).unwrap();
         let object = self.object_path(&hash)?;
         if !object.is_file() {
             write_atomic(&object, text.as_bytes())?;
@@ -445,6 +466,21 @@ mod tests {
         let second = store.record("/docs/a.md", "same", "saved", None).unwrap();
         assert!(second.duplicated);
         assert_eq!(store.list("/docs/a.md").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn legacy_import_is_retryable_without_eviction_or_duplicate_ids() {
+        let (store, _dir) = store();
+        for index in 0..MAX_ENTRIES_PER_FILE {
+            store.import_legacy("/legacy.md", &format!("legacy {index}"), None).unwrap();
+        }
+        let before = store.list("/legacy.md").unwrap();
+        assert!(store.import_legacy("/legacy.md", "over quota", None).unwrap_err().contains("配额"));
+        assert_eq!(store.list("/legacy.md").unwrap().iter().map(|entry| &entry.id).collect::<Vec<_>>(), before.iter().map(|entry| &entry.id).collect::<Vec<_>>());
+        let retry = store.import_legacy("/legacy.md", "legacy 0", None).unwrap();
+        assert!(retry.duplicated);
+        assert_eq!(retry.entry.id, before.last().unwrap().id);
+        assert_eq!(store.list("/legacy.md").unwrap().len(), MAX_ENTRIES_PER_FILE);
     }
 
     #[test]

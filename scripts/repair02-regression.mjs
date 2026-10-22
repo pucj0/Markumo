@@ -12,21 +12,23 @@ const output = 'test-results/repair02'
 fs.mkdirSync(output, { recursive: true })
 fs.writeFileSync(`${output}/fixture.js`, `
 import { mockIPC } from '@tauri-apps/api/mocks'
-const store = new Map()
+const store = new Map(JSON.parse(localStorage.getItem('test-native-history') || '[]'))
 const calls = []
 window.__history = { store, calls, failRead: false, failRecord: null }
-mockIPC((command, args) => {
+mockIPC(async (command, args) => {
   calls.push({ command, args })
   if (!command.startsWith('history_')) throw new Error('unexpected ' + command)
   const path = args.path
   const list = () => store.get(path) || (store.set(path, []), store.get(path))
-  if (command === 'history_record') {
+  if (command === 'history_record' || command === 'history_import') {
     if (window.__history.failRecord) throw new Error(window.__history.failRecord)
+    if (window.__history.failTexts?.includes(args.text)) throw new Error('history storage/quota failure')
     const entries = list()
-    const hash = 'h' + args.text.length + '-' + args.text.slice(0, 8)
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(args.text)))].map(byte=>byte.toString(16).padStart(2,'0')).join('')
     if (entries.some(e => e.hash === hash)) return { entry: entries.find(e => e.hash === hash), duplicated: true, warnings: [] }
     const entry = { id: 'id-' + entries.length + '-' + args.origin, hash, bytes: args.text.length, createdAt: Date.now(), origin: args.origin, label: args.label || null }
     entries.unshift(entry)
+    localStorage.setItem('test-native-history', JSON.stringify([...store]))
     return { entry, duplicated: false, warnings: [] }
   }
   if (command === 'history_list') return list().map(e => ({ ...e }))
@@ -225,6 +227,46 @@ try {
       return JSON.stringify(file?.items || []).includes('"history"')
     })
     assert.equal(has, true)
+  })
+
+  await test('9. partial legacy migration keeps failed sources and retries after restart without duplicate versions', async () => {
+    const first=await page.evaluate(async()=>{
+      const service=await import('/src/features/history/historyService.ts')
+      window.__history.store.clear()
+      const records=[{path:'C:/migration.md',content:'successful one'},{path:'C:/migration.md',content:'blocked entry'},{path:'C:/migration.md',content:'successful two'}]
+      const raw=JSON.stringify(records)
+      localStorage.setItem('markumo:history:snapshots:mixed',raw)
+      localStorage.setItem('markumo:history:snapshots:invalid','{"not":"an array"}')
+      localStorage.setItem('markumo:history:migrated','done')
+      window.__history.failTexts=['blocked entry']
+      const messages=[]
+      const migrated=await service.migrateLegacyHistory(message=>messages.push(message))
+      const entries=await service.listVersions('C:/migration.md')
+      return{migrated,flag:localStorage.getItem('markumo:history:migrated'),raw,remaining:localStorage.getItem('markumo:history:snapshots:mixed'),invalid:localStorage.getItem('markumo:history:snapshots:invalid'),ids:entries.map(e=>e.id),messages}
+    })
+    assert.notEqual(first.flag,'done');assert.equal(first.migrated,2);assert.equal(first.remaining,first.raw);assert.equal(first.invalid,'{"not":"an array"}');assert.equal(first.ids.length,2);assert.match(first.messages.join('\n'),/下次启动.*重试/)
+    // The mock native database survives a real page reload; the injected
+    // transient failure does not. Invalid source stays until explicitly fixed.
+    await page.evaluate(()=>localStorage.setItem('markumo:history:snapshots:invalid','[]'))
+    await page.reload();await page.waitForFunction(()=>window.f?.ready())
+    const second=await page.evaluate(async()=>{
+      const service=await import('/src/features/history/historyService.ts')
+      const migrated=await service.migrateLegacyHistory()
+      return{migrated,flag:localStorage.getItem('markumo:history:migrated'),remaining:Object.keys(localStorage).filter(key=>key.startsWith('markumo:history:snapshots:')),ids:(await service.listVersions('C:/migration.md')).map(e=>e.id),again:await service.migrateLegacyHistory()}
+    })
+    assert.equal(second.migrated,1);assert.equal(second.flag,'done');assert.deepEqual(second.remaining,[]);assert.equal(second.ids.length,3);assert(first.ids.every(id=>second.ids.includes(id)));assert.equal(second.again,0)
+  })
+
+  await test('10. invalid legacy fields remain untouched and never reach native import',async()=>{
+    const result=await page.evaluate(async()=>{
+      const service=await import('/src/features/history/historyService.ts')
+      const raw=JSON.stringify([{path:42,content:'body'},{path:'C:/bad.md',content:{}},{path:'C:/bad.md',content:'body',label:99},{path:'C:/bad.md',content:'body',timestamp:-1}])
+      localStorage.setItem('markumo:history:snapshots:untrusted',raw)
+      const before=window.__history.calls.filter(call=>call.command==='history_import').length,messages=[]
+      await service.migrateLegacyHistory(message=>messages.push(message))
+      return{raw,left:localStorage.getItem('markumo:history:snapshots:untrusted'),flag:localStorage.getItem('markumo:history:migrated'),calls:window.__history.calls.filter(call=>call.command==='history_import').length-before,messages}
+    })
+    assert.equal(result.left,result.raw);assert.notEqual(result.flag,'done');assert.equal(result.calls,0);assert.match(result.messages.join('\n'),/旧来源保留/)
   })
 
   console.log('========================================')

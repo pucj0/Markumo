@@ -100,54 +100,54 @@ export async function migrateLegacyHistory(
   notify: (message: string) => void = () => {},
 ): Promise<number> {
   if (!nativeBridge()) return 0
-  try {
-    if (localStorage.getItem(MIGRATION_FLAG) === 'done') return 0
-  } catch {
-    return 0
-  }
-  let migrated = 0
+  let migrated = 0, failed = 0
   const keys: string[] = []
   try {
     for (let index = 0; index < localStorage.length; index++) {
       const key = localStorage.key(index)
       if (key?.startsWith(LEGACY_PREFIX)) keys.push(key)
     }
-  } catch {
-    return 0
-  }
+    // Old releases could leave `done` alongside failed legacy keys. The keys,
+    // rather than that stale flag, are the authoritative remaining work.
+    if (!keys.length) { localStorage.setItem(MIGRATION_FLAG, 'done'); return 0 }
+    localStorage.removeItem(MIGRATION_FLAG)
+  } catch { notify('无法读取旧历史存储，迁移未完成；旧数据未删除。'); return 0 }
   for (const key of keys) {
-    let records: { path?: string; content?: string; label?: string; timestamp?: number }[] = []
-    try {
-      const raw = localStorage.getItem(key)
-      records = raw ? (JSON.parse(raw) as typeof records) : []
-    } catch {
-      // Unreadable legacy data cannot be migrated; keep the key for diagnosis.
-      continue
-    }
+    let raw: string | null = null
     let complete = true
-    for (const record of records) {
-      if (!record?.path || typeof record.content !== 'string') continue
-      try {
-        await recordVersion(record.path, record.content, 'manual', record.label)
-        migrated++
-      } catch {
-        complete = false
-        break
+    try {
+      raw = localStorage.getItem(key)
+      if (raw === null) continue
+      if (raw.length > 16 * 1024 * 1024) throw Error('旧历史数据过大')
+      const records: unknown = JSON.parse(raw)
+      if (!Array.isArray(records) || records.length > 4096) throw Error('旧历史格式或记录数量无效')
+      for (const value of records) {
+        try {
+          if (!value || typeof value !== 'object') throw Error('旧记录不是对象')
+          const record = value as Record<string, unknown>
+          if (typeof record.path !== 'string' || !record.path.trim() || record.path.length > 32768 || record.path.includes('\0')) throw Error('旧记录路径无效')
+          if (typeof record.content !== 'string' || record.content.length > 8 * 1024 * 1024 || new TextEncoder().encode(record.content).length > 8 * 1024 * 1024) throw Error('旧正文超过配额或格式无效')
+          if (record.label !== undefined && (typeof record.label !== 'string' || record.label.length > 256)) throw Error('旧记录标签无效')
+          if (record.timestamp !== undefined && (typeof record.timestamp !== 'number' || !Number.isSafeInteger(record.timestamp) || record.timestamp < 0)) throw Error('旧记录时间无效')
+          const result = await invoke<{ duplicated: boolean }>('history_import', {path:record.path,text:record.content,label:record.label ?? null})
+          if (!result.duplicated) migrated++
+        } catch { complete = false; failed++ }
       }
-    }
-    if (complete) {
-      try {
-        localStorage.removeItem(key)
-      } catch {}
-    }
+      // Other windows can migrate concurrently or append data. Never remove a
+      // source that has changed since this attempt read it.
+      if (complete && localStorage.getItem(key) === raw) localStorage.removeItem(key)
+      else complete = false
+    } catch { complete = false; failed++ }
+    if (!complete && failed === 0) failed++
   }
-  if (migrated > 0) notify(`已迁移 ${migrated} 个历史版本到新的本地存储`)
   try {
-    localStorage.setItem(MIGRATION_FLAG, 'done')
-  } catch {}
+    const remaining = Object.keys(localStorage).some(key => key.startsWith(LEGACY_PREFIX))
+    if (!remaining && failed === 0) localStorage.setItem(MIGRATION_FLAG, 'done')
+  } catch { failed++ }
+  if (migrated > 0) notify(`已迁移 ${migrated} 个历史版本到新的本地存储`)
+  if (failed > 0) notify(`历史迁移尚未完成（${failed} 项失败或超出配额）；旧来源保留，下次启动会重试，已迁移正文不会重复创建。`)
   return migrated
 }
-
 /**
  * Line diff with bounded cost.
  *

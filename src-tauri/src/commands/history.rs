@@ -28,6 +28,14 @@ pub async fn history_record(
 
 /// Metadata only: bodies are fetched on demand by `history_read`.
 #[tauri::command]
+pub async fn history_import(
+    store: State<'_, HistoryHandle>, path: String, text: String, label: Option<String>,
+) -> Result<HistoryRecordResult, String> {
+    with_store(&store, |history| history.import_legacy(&path, &text, label))
+}
+
+/// Metadata only: bodies are fetched on demand by `history_read`.
+#[tauri::command]
 pub async fn history_list(
     store: State<'_, HistoryHandle>,
     path: String,

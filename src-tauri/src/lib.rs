@@ -280,7 +280,7 @@ pub fn run() {
             commands::session::initialize_launch,commands::session::persist_session,
             commands::detach::detach_tab_to_window, commands::detach::take_detached_document,
             commands::detach::commit_detach, commands::detach::cancel_detach,
-            commands::history::history_record, commands::history::history_list,
+            commands::history::history_record, commands::history::history_import, commands::history::history_list,
             commands::history::history_read, commands::history::history_delete,
             commands::history::history_clear, commands::history::history_usage,
             commands::recovery::recovery_list, commands::recovery::recovery_read,
