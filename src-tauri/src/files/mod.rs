@@ -426,8 +426,29 @@ impl FileService {
         self.image_inputs.retain(|_, (o, _)| o != owner);
         self.grants.retain(|_, grant| grant.owner != owner);
     }
-    pub fn session_path(&self, token: &str) -> Result<PathBuf> {
+    /// Moves one document grant to another window.
+    ///
+    /// A detached tab keeps the same token, canonical path, writability and file
+    /// identity; only the owning window changes. `from` must currently own the
+    /// token, so a compromised window cannot steal another window's document.
+    pub fn transfer_grant(&mut self, token: &str, from: &str, to: &str) -> Result<()> {
+        if to.is_empty() || from == to {
+            return fail("transfer", "目标窗口无效");
+        }
         let grant = self
+            .grants
+            .get_mut(token)
+            .ok_or_else(|| FileError::new("transfer", "文件访问授权已失效"))?;
+        if grant.owner != from {
+            return fail("transfer", "文件不属于当前窗口");
+        }
+        grant.owner = to.to_owned();
+        Ok(())
+    }
+    pub fn grant_owner(&self, token: &str) -> Option<&str> {
+        self.grants.get(token).map(|grant| grant.owner.as_str())
+    }
+    pub fn session_path(&self, token: &str) -> Result<PathBuf> {        let grant = self
             .grants
             .get(token)
             .filter(|grant| grant.owner == self.current_owner)

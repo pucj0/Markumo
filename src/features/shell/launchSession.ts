@@ -8,7 +8,7 @@ import { sameFilePath } from '../files/pathKey'
 export interface EditorSessionLayout { root: SerializedLayoutNode; activePane: string; maximizedPane: string | null; modes?:Record<string,Record<string,string>> }
 
 export interface LaunchResult {
-  kind: 'app' | 'file'; ownsSession: boolean; files: OpenBatch; roots: WorkspaceInfo[]
+  kind: 'app' | 'file' | 'detached'; ownsSession: boolean; files: OpenBatch; roots: WorkspaceInfo[]
   activePath: string | null; layout: Preferences['layout']; warnings: string[]
   editorLayout?: EditorSessionLayout | null
 }

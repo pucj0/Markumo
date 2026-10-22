@@ -651,6 +651,66 @@ export class DocumentManager {
       if (resolved === 'main') record.scroll = { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }
     }
   }
+  /**
+   * Snapshot of one pane's caret and scroll for a document handoff. Capturing
+   * first means a detach carries the live selection rather than a stale one.
+   */
+  paneSnapshot(id: string, pane: Pane = this.activePane) {
+    const resolved = this.resolvePaneId(pane)
+    this.captureScroll(resolved)
+    const record = this.records.get(id)
+    const state = record?.panes[resolved]
+    const selection = state?.selection?.main
+    return {
+      anchor: selection?.anchor ?? 0,
+      head: selection?.head ?? 0,
+      top: state?.top ?? 0,
+      left: state?.left ?? 0,
+      mode: this.getMarkdownMode(id, resolved),
+    }
+  }
+  /**
+   * Places the caret of an adopted document without creating an undo step and
+   * without scrolling the view: a handoff restores absolute offsets instead of
+   * a line/column pair, so the original caret survives exactly.
+   */
+  setSelectionOffsets(id: string, anchor: number, head: number, pane: Pane = this.activePane) {
+    const resolved = this.resolvePaneId(pane)
+    const record = this.records.get(id)
+    if (!record || this.disposed) return false
+    const size = record.state.doc.length
+    const clamp = (value: number) => Math.max(0, Math.min(size, Math.round(value)))
+    const selection = EditorSelection.single(clamp(anchor), clamp(head))
+    // Only the pane snapshot is written: the view restores it on the next
+    // `showActive`, exactly like every other position restoration in this class.
+    record.panes[resolved] = { ...record.panes[resolved], selection, top: record.panes[resolved]?.top ?? 0, left: record.panes[resolved]?.left ?? 0 }
+    const view = this.paneView(resolved)
+    if (view && this.paneGroup(resolved).activeId === id) {
+      view.dispatch({ selection: EditorSelection.single(clamp(anchor), clamp(head)) })
+    }
+    this.notify()
+    return true
+  }
+
+  /** Restores the scroll offset captured by a handoff on the next paint. */
+  restoreScroll(id: string, top: number, left = 0, pane: Pane = this.activePane) {
+    const resolved = this.resolvePaneId(pane)
+    const record = this.records.get(id)
+    if (!record || this.disposed) return false
+    if (record.panes[resolved]) record.panes[resolved] = { ...record.panes[resolved], top, left }
+    else record.panes[resolved] = { selection: record.state.selection, top, left }
+    const scroll = () => {
+      const root = this.hosts.get(resolved)?.querySelector<HTMLElement>('.markdown-live, .cm-scroller')
+      if (root) {
+        root.scrollTop = top
+        root.scrollLeft = left
+      }
+    }
+    scroll()
+    requestAnimationFrame(scroll)
+    return true
+  }
+
   private showActive(pane: Pane = this.activePane, restoreFocus = false) {
     const resolved = this.resolvePaneId(pane)
     let view = this.paneView(resolved)

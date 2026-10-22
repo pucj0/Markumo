@@ -73,6 +73,7 @@ import { CommandRegistry, menuCommand as cmd, separator, type MenuNode } from '.
 import { textClipboard } from '../../features/shell/clipboard'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import { tabDragService } from '../../editor/layout/TabDragService'
+import { requestDetachToWindow, defaultDetachDropPoint } from '../../features/windows/tabDetach'
 
 const props = withDefaults(defineProps<{
   files?: FileController
@@ -155,6 +156,12 @@ function onTabPointerDown(event: PointerEvent, doc: EditorDocument) {
       if (!manager) return
       const { documentId, fromPaneId, isCopy } = result.payload
       let transferred = false
+      // A release outside the window with no in-window target detaches the tab
+      // into a new native window instead of dropping it nowhere.
+      if (result.outside && !result.paneDrop && !result.tabInsert) {
+        requestDetachToWindow(documentId, fromPaneId, result.outside)
+        return
+      }
       if (result.paneDrop) {
         const { paneId, zone } = result.paneDrop
         transferred = manager.transferTab(documentId, fromPaneId, paneId, {
@@ -230,6 +237,12 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
     { id: 'tab-split-up', title: '向上拆分', enabled: true, run: () => emit('split-tab', { id: doc.id, direction: 'top', duplicate: false }) },
 
     { id: 'tab-move-other', title: '移动到另一分栏', enabled: isSplit, run: () => emit('move-other', doc.id) },
+    {
+      id: 'tab-detach-window',
+      title: '移动到新窗口',
+      enabled: props.desktop,
+      run: () => requestDetachToWindow(doc.id, props.pane, defaultDetachDropPoint()),
+    },
     ...otherPanes.map(targetPaneId => ({
       id: `tab-move-to-${targetPaneId}`,
       title: `移动到分栏 (${targetPaneId})`,
@@ -280,6 +293,8 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
     cmd('tab-close-pane'),
     cmd('tab-merge-splits'),
     separator('tab-layout-section'),
+    cmd('tab-detach-window'),
+    separator('tab-window-section'),
     cmd('tab-copy-path'),
     cmd('tab-copy-relative'),
     cmd('tab-reveal-explorer'),

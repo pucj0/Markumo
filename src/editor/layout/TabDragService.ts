@@ -24,6 +24,13 @@ export interface TabDragResult {
   payload: TabDragPayload
   paneDrop: PaneDropTarget | null
   tabInsert: TabInsertTarget | null
+  /**
+   * Set only when the pointer was actually released outside this window's
+   * viewport and no in-window target received it. This is the single condition
+   * that may detach the tab into a new native window: a lost pointer, a blur or
+   * an Escape never produces it.
+   */
+  outside: { x: number; y: number } | null
 }
 
 // Use the closest proportional edge at corners, so left/right do not mask top/bottom.
@@ -34,6 +41,12 @@ export function resolvePaneDropZone(rect: Pick<DOMRect, 'left' | 'top' | 'width'
   const edges: [DropZone, number][] = [['top', ry], ['bottom', 1 - ry], ['left', rx], ['right', 1 - rx]]
   const closest = edges.reduce((a, b) => b[1] < a[1] ? b : a)
   return closest[1] < 0.28 ? closest[0] : 'center'
+}
+
+/** True when a viewport-relative point lies outside the window contents. */
+export function isPointerOutside(x: number, y: number, width = window.innerWidth, height = window.innerHeight): boolean {
+  const margin = 2
+  return x < -margin || y < -margin || x > width + margin || y > height + margin
 }
 
 export class TabDragService {
@@ -85,10 +98,18 @@ export class TabDragService {
       this.updateCopy(event)
       // Pointerup can arrive at a different position from the last move event.
       this.detectDropTarget()
+      const hasTarget = !!(this.activePaneDrop.value || this.activeTabInsert.value)
+      // Leaving the window is not a drop by itself: the platform must also have
+      // delivered the release. Both conditions are required to detach.
+      const outside =
+        !hasTarget && isPointerOutside(this.lastX, this.lastY)
+          ? { x: this.lastX, y: this.lastY }
+          : null
       result = {
         payload: { ...this.dragPayload.value },
         paneDrop: this.activePaneDrop.value,
         tabInsert: this.activeTabInsert.value,
+        outside,
       }
       event.preventDefault()
     }

@@ -16,6 +16,15 @@ import { openDroppedDirectories, type NativeDropInput } from '../features/files/
 import { sameFilePath } from '../features/files/pathKey'
 import { isMedia } from '../features/files/media'
 import { AutoSaveController } from '../features/files/AutoSaveController'
+import {
+  cancelDetach,
+  commitDetach,
+  detachDocumentToWindow,
+  listenDetachCommitted,
+  setDetachRequestHandler,
+  takeDetachedDocument,
+} from '../features/windows/tabDetach'
+import type { EditorDocument } from '../types'
 import { RecoveryController } from '../features/recovery/RecoveryController'
 import { tauriRecovery } from '../features/recovery/tauriRecovery'
 import { tauriFiles } from '../features/files/tauriFiles'
@@ -1142,6 +1151,55 @@ export function useAppShell() {
   })
 
   // --- Global Lifecycle (Mount / Unmount) ---
+
+  /**
+   * Target side of a tab handoff. The body already exists in this process, so
+   * nothing is read from disk: unsaved text, encoding, mode, caret and scroll all
+   * come from the source window. Only after this window really mounted the
+   * document does it tell the source to release its tab.
+   */
+  async function adoptDetachedDocument(): Promise<EditorDocument | null> {
+    const adopted = await takeDetachedDocument().catch(() => null)
+    if (!adopted) return null
+    const { handoffId, payload } = adopted
+    try {
+      const accepted = files.accept(
+        {
+          token: payload.fileToken || `detached-${payload.documentId}`,
+          path: payload.path || '',
+          name: payload.name,
+          text: payload.text,
+          encoding: payload.encoding as unknown as Encoding,
+          bom: payload.bom,
+          eol: payload.eol as EditorDocument['eol'],
+          readOnly: payload.readOnly,
+          version: payload.version || '',
+        },
+        false,
+        'main',
+        false,
+      )
+      if (!accepted) return null
+      const doc =
+        manager.openedDocuments.find(item => item.fileToken === payload.fileToken && payload.fileToken) ||
+        manager.openedDocuments.find(item => item.name === payload.name)
+      if (!doc) return null
+      // `restoreRecoveredText` applies the transferred body without adding an
+      // undo step and marks the document dirty, which is exactly the state the
+      // source had (its undo history stays behind by design).
+      if (payload.dirty) manager.restoreRecoveredText(doc.id, payload.text)
+      if (payload.markdownMode) {
+        manager.setMarkdownMode(doc.id, payload.markdownMode as MarkdownMode, 'main')
+      }
+      manager.pin(doc.id)
+      await commitDetach(handoffId).catch(() => {})
+      return manager.metadata(doc.id)
+    } catch (error) {
+      await cancelDetach(handoffId).catch(() => {})
+      throw error
+    }
+  }
+
   const startup = new DesktopStartup({
     protect: scope => scope.register('close', async () =>
       (await import('@tauri-apps/api/window')).getCurrentWindow().onCloseRequested(async event => {
@@ -1154,11 +1212,15 @@ export function useAppShell() {
     adopt: async (launch, current) => {
       if (launch.kind === 'app' && !launch.ownsSession) throw Error('主会话所有权未确认，已停止恢复。')
       workspace.restoreSession(launch.roots)
-      files.acceptBatch(launch.files)
-      const selected = manager.openedDocuments.find(doc => doc.path === launch.activePath) || manager.openedDocuments[0]
+      // A detached window boots with nothing restored: its body arrives through
+      // the detach handshake instead of the session or the disk.
+      const adopted = launch.kind === 'detached' ? await adoptDetachedDocument() : null
+      if (!adopted) files.acceptBatch(launch.files)
+      const selected = adopted
+        || manager.openedDocuments.find(doc => doc.path === launch.activePath) || manager.openedDocuments[0]
       if (selected) manager.select(selected.id, 'main')
       restoreEditorLayout(manager, launch.editorLayout)
-      appMode.value = launch.kind === 'file' ? 'single' : launch.layout.mode
+      appMode.value = launch.kind === 'app' ? launch.layout.mode : 'single'
       sidebarWidth.value = launch.layout.sidebarWidth
       sidebarVisible.value = launch.kind === 'app' && !!workspace.rootPath && launch.layout.sidebarVisible && !wasNarrow
       if (launch.warnings.length) toast(launch.warnings.join('\n'))
@@ -1190,6 +1252,10 @@ export function useAppShell() {
 
   onMounted(async () => {
     if (desktop) await files.external.start()
+    // The tab bar only raises the intent; the shell owns the transfer.
+    setDetachRequestHandler((documentId, paneId, drop) => {
+      void detachDocumentToWindow(manager, documentId, paneId, drop, toast)
+    })
     window.addEventListener('editor-notice', editorNotice)
     window.addEventListener('markdown-open-relative', openRelativeLink)
     window.addEventListener('paste', imagePaste, true)
@@ -1212,6 +1278,18 @@ export function useAppShell() {
         if (!alive || !launchReady) return
         await startup.listeners.register('drop', async () => (await import('@tauri-apps/api/window')).getCurrentWindow().listen<{ inputs: NativeDropInput[]; x: number; y: number }>('native-file-drop', event => {
           void nativeFileDrop(event.payload).catch(error => toast(fileError(error)))
+        }))
+        if (!alive || !launchReady) return
+        await startup.listeners.register('detach', async () => listenDetachCommitted(({ documentId }) => {
+          // The target window adopted the body: only now may the source drop
+          // its tab. Nothing is discarded if this event never arrives.
+          const panes = manager.layout.getAllLeafIds()
+          for (const pane of panes) {
+            if (manager.paneGroup(pane).tabs.some(tab => tab.documentId === documentId)) {
+              manager.close(documentId, true, pane)
+              break
+            }
+          }
         }))
         if (!alive || !launchReady) return
         const prefs = await tauriFiles.preferences()

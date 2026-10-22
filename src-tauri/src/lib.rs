@@ -1,5 +1,6 @@
 mod commands;
 mod conversion;
+mod detach;
 mod files;
 mod profile_migration;
 mod recovery;
@@ -43,8 +44,38 @@ fn register_window(app: &tauri::AppHandle, label: &str, paths: Vec<PathBuf>) -> 
     Ok(())
 }
 
-fn cleanup_window(app: &tauri::AppHandle, label: &str) {
-    app.state::<conversion::ConversionStore>().close(label);
+/// Registers a window created by detaching a tab.
+///
+/// It owns no session and keeps no workspace persistence of its own, so the new
+/// window cannot overwrite the main session or duplicate the workspace index.
+pub(crate) fn register_detached_window(
+    app: &tauri::AppHandle,
+    label: &str,
+) -> Result<(), String> {
+    let updates = app.state::<commands::update::UpdateStore>();
+    let coordinator = updates.lock().map_err(|e| e.to_string())?;
+    if coordinator.owner.is_some() {
+        return Err("正在安装更新，请重启后再移动标签。".into());
+    }
+    drop(coordinator);
+    let mut ws = workspace::WorkspaceService::default();
+    ws.configure(
+        app.path()
+            .app_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("workspaces.json"),
+    );
+    ws.disable_persistence();
+    app.state::<WorkspaceStore>().insert(label, ws)?;
+    app.state::<session::LaunchStore>()
+        .lock()
+        .map_err(|_| "启动状态不可用".to_string())?
+        .insert_detached(label.into());
+    app.state::<conversion::ConversionStore>().register(label);
+    Ok(())
+}
+
+fn cleanup_window(app: &tauri::AppHandle, label: &str) {    app.state::<conversion::ConversionStore>().close(label);
     if let Ok(mut registry) = app.state::<session::LaunchStore>().lock() {
         registry.remove(label);
     }
@@ -178,6 +209,7 @@ pub fn run() {
         .manage(conversion::ConversionStore::default())
         .manage(recovery::RecoveryStore::default())
         .manage(search_manager)
+        .manage(commands::detach::DetachStore::default())
         .setup(move |app| {
             let store = app.state::<FileStore>();
             let mut service = store.lock().map_err(|_| std::io::Error::other("文件服务状态损坏"))?;
@@ -222,6 +254,12 @@ pub fn run() {
                 app.state::<WorkspaceStore>().remove(window.label());
                 if let Ok(mut registry)=app.state::<session::LaunchStore>().lock(){registry.windows.remove(window.label());}
                 if let Ok(mut files)=app.state::<FileStore>().lock(){files.release_owner(window.label());}
+                // A detached window that closed before adopting must not leak
+                // the document body or keep the source tab blocked.
+                commands::detach::forget_window(
+                    &app.state::<commands::detach::DetachStore>().inner().clone(),
+                    window.label(),
+                );
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -231,6 +269,8 @@ pub fn run() {
             commands::app::get_app_version,
             commands::app::ensure_update_window,
             commands::session::initialize_launch,commands::session::persist_session,
+            commands::detach::detach_tab_to_window, commands::detach::take_detached_document,
+            commands::detach::commit_detach, commands::detach::cancel_detach,
             commands::recovery::recovery_list, commands::recovery::recovery_read,
             commands::recovery::recovery_save, commands::recovery::recovery_delete,
             commands::app::open_external_link,

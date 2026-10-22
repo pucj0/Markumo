@@ -1,5 +1,6 @@
 pub mod app;
 pub mod conversion;
+pub mod detach;
 pub mod files;
 pub mod recovery;
 pub mod session;

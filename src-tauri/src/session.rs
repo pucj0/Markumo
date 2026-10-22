@@ -12,6 +12,9 @@ use std::{
 pub enum LaunchKind {
     App,
     File,
+    /// A window created by detaching a tab. It owns no session and restores no
+    /// workspace index: it only adopts the document handed to it.
+    Detached,
 }
 #[derive(Clone)]
 pub struct WindowLaunch {
@@ -33,6 +36,14 @@ impl LaunchRegistry {
         } else {
             LaunchKind::File
         };
+        self.insert_kind(label, kind, paths)
+    }
+    /// Registers a window that only adopts a detached document: it never owns
+    /// the session and never restores a workspace.
+    pub fn insert_detached(&mut self, label: String) {
+        self.insert_kind(label, LaunchKind::Detached, Vec::new())
+    }
+    fn insert_kind(&mut self, label: String, kind: LaunchKind, paths: Vec<PathBuf>) {
         if !self.windows.contains_key(&label) {
             self.order.push(label.clone());
         }
@@ -90,15 +101,12 @@ impl LaunchRegistry {
     }
     pub fn next_label(&mut self, kind: LaunchKind) -> String {
         self.next += 1;
-        format!(
-            "{}-{}",
-            if kind == LaunchKind::File {
-                "file"
-            } else {
-                "app"
-            },
-            self.next
-        )
+        let prefix = match kind {
+            LaunchKind::File => "file",
+            LaunchKind::Detached => "detached",
+            LaunchKind::App => "app",
+        };
+        format!("{prefix}-{}", self.next)
     }
 }
 pub type LaunchStore = Mutex<LaunchRegistry>;
