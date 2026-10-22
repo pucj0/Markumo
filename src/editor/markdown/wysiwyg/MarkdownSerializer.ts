@@ -10,6 +10,10 @@ export const markdownSerializer = new MarkdownSerializer({ ...defaultMarkdownSer
   html_block(state,node){state.write(node.attrs.source);state.closeBlock(node)},
   html_inline(state,node){state.write(node.attrs.source)},
   protected_source(state,node){state.write(node.attrs.source);state.closeBlock(node)},
+  toc(state, node) {
+    state.write(node.attrs.raw || '[TOC]')
+    state.closeBlock(node)
+  },
   callout(state, node) {
     const type = (node.attrs.calloutType || 'NOTE').toUpperCase()
     const title = node.attrs.title ? ` ${node.attrs.title}` : ''

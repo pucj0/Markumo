@@ -129,5 +129,36 @@ export function createMarkdownRenderer(onLanguageReady: () => void = () => {}, p
   }
   md.renderer.rules.html_block = (tokens, index) => sanitizeHtml(tokens[index].content)
   md.renderer.rules.html_inline = (tokens, index) => sanitizeHtml(tokens[index].content)
+
+  md.core.ruler.after('block', 'markumo_toc', state => {
+    const tokens = state.tokens
+    for (let i = 0; i < tokens.length - 2; i++) {
+      if (tokens[i].type === 'paragraph_open' && tokens[i + 1].type === 'inline' && tokens[i + 2].type === 'paragraph_close') {
+        const text = tokens[i + 1].content.trim()
+        if (/^\[toc\]$/i.test(text)) {
+          const tok = new state.Token('toc', 'nav', 0)
+          tok.content = text
+          tokens.splice(i, 3, tok)
+        }
+      }
+    }
+  })
+
+  md.renderer.rules.toc = (_tokens, _index, _options, env) => {
+    const headings: { level: number; text: string }[] = []
+    const envTokens = (env?.tokens as any[]) || _tokens || []
+    for (let i = 0; i < envTokens.length; i++) {
+      if (envTokens[i].type === 'heading_open') {
+        const level = Number(envTokens[i].tag.slice(1)) || 1
+        const inline = envTokens[i + 1]
+        headings.push({ level, text: inline?.content || '' })
+      }
+    }
+    const itemsHtml = headings.length
+      ? headings.map(h => `<div class="md-toc-item" style="padding-left:${(h.level - 1) * 16}px"><span class="md-toc-text">${md.utils.escapeHtml(h.text)}</span></div>`).join('')
+      : '<p class="md-toc-empty">（文档中暂无标题）</p>'
+    return `<nav class="md-toc-block md-toc" aria-label="内容目录"><div class="md-toc-header"><span class="md-toc-title">目录</span></div><div class="md-toc-list">${itemsHtml}</div></nav>`
+  }
+
   return md
 }

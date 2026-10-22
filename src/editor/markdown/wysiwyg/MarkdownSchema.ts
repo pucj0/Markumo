@@ -28,6 +28,21 @@ nodes.protected_source = {
   attrs: { sourceId: {default:null}, source: {default:''}, label: {default:'受保护源码'}, kind: {default:'unknown'} },
   toDOM: node => ['pre', {'data-protected-source':'true'}, node.attrs.source],
 }
+nodes.toc = {
+  group: 'block',
+  atom: true,
+  selectable: true,
+  isolating: true,
+  attrs: {
+    sourceId: { default: null },
+    raw: { default: '[TOC]' },
+  },
+  parseDOM: [{
+    tag: 'div[data-toc]',
+    getAttrs: dom => ({ raw: (dom as HTMLElement).getAttribute('data-toc-raw') || '[TOC]' }),
+  }],
+  toDOM: node => ['div', { 'data-toc': 'true', 'data-toc-raw': node.attrs.raw, class: 'md-toc-block' }],
+}
 nodes.callout = {
   group: 'block',
   content: 'block+',

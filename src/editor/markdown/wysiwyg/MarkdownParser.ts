@@ -28,6 +28,7 @@ const tokens = { ...defaultMarkdownParser.tokens,
   bullet_list:{...defaultMarkdownParser.tokens.bullet_list,getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({bullet:tok.markup,tight:true})},
   list_item:{block:'list_item',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({checked:tok.meta?.checked ?? null})},
   callout:{block:'callout',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({calloutType:tok.meta?.calloutType || 'NOTE',title:tok.meta?.title || ''})},
+  toc:{node:'toc',getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({raw:tok.content || '[TOC]'})},
 }
 tokenizer.inline.ruler.before('escape','markumo_footnotes',(state,silent)=>{
   const note=/^\[\^([^\]\n]+)\]/.exec(state.src.slice(state.pos))
@@ -125,6 +126,20 @@ tokenizer.core.ruler.after('markumo_cells', 'markumo_callouts', state => {
     }
   }
 })
+tokenizer.core.ruler.after('markumo_callouts', 'markumo_toc', state => {
+  const tokens = state.tokens
+  for (let i = 0; i < tokens.length - 2; i++) {
+    if (tokens[i].type === 'paragraph_open' && tokens[i + 1].type === 'inline' && tokens[i + 2].type === 'paragraph_close') {
+      const text = tokens[i + 1].content.trim()
+      if (/^\[toc\]$/i.test(text)) {
+        const token = new state.Token('toc', 'div', 0)
+        token.content = text
+        token.map = tokens[i].map
+        tokens.splice(i, 3, token)
+      }
+    }
+  }
+})
 // prosemirror-markdown still declares markdown-it 14 types; the shared runtime
 // is markdown-it 15. Only this official adapter boundary needs a type bridge.
 export const markdownParser = new MarkdownParser(s, tokenizer as unknown as ConstructorParameters<typeof MarkdownParser>[1], tokens as unknown as ConstructorParameters<typeof MarkdownParser>[2])
@@ -180,7 +195,7 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
     let node:Node
     if(reused)node=reused.node
     else try {
-      const complex=raw || /(^|\n)(?:\[\^[^\]]+\]:| {0,3}\$\$|\[toc\]|:::+)/i.test(original)
+      const complex=raw || /(^|\n)(?:\[\^[^\]]+\]:| {0,3}\$\$|:::+)/i.test(original)
       if(complex) node=s.nodes.protected_source.create({source:original,label,kind})
       else {
         node=markdownParser.parse(original,env).firstChild!

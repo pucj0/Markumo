@@ -156,3 +156,92 @@ body.light :is(.markdown-live, .split-preview-pane) {
   --callout-color: #ef4444;
   --callout-bg: color-mix(in srgb, #ef4444 8%, var(--paper));
 }
+
+/* 原生动态 TOC 目录组件样式 (Live与Split完全一致) */
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) :is(.md-toc-block, .md-toc) {
+  margin: 1.4em 0;
+  padding: 12px 16px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-toc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  user-select: none;
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-toc-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--bright);
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-toc-icon {
+  color: var(--accent);
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-toc-delete-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-toc-delete-btn:hover {
+  background: color-mix(in srgb, var(--red, #ef4444) 15%, transparent);
+  color: var(--red, #ef4444);
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-toc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-toc-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 3px 8px;
+  transition: all .12s ease;
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-toc-item:hover {
+  background: var(--hover);
+  color: var(--accent);
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-toc-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:is(.markdown-live .md-document .md-prose, .split-preview-pane .split-preview-content) .md-toc-empty {
+  margin: 4px 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+}

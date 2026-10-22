@@ -38,6 +38,7 @@ const SMOKE_TESTS = [
   'scripts/conversion-regression.mjs',
   'scripts/recovery-regression.mjs',
   'scripts/callout-regression.mjs',
+  'scripts/toc-regression.mjs',
   'scripts/slash-commands-regression.mjs',
   'scripts/math-editor-regression.mjs',
   'scripts/typewriter-focus-regression.mjs',

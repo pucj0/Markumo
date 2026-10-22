@@ -18,6 +18,7 @@ import { InlineSourceView, inlineSourceRange } from './InlineSourceView'
 import { Decoration, DecorationSet } from 'prosemirror-view'
 import { CodeBlockView } from './CodeBlockView'
 import { CalloutNodeView } from './CalloutNodeView'
+import { TocNodeView } from './TocNodeView'
 import { LiveImageView } from './LiveImageView'
 import { ImagePreview } from './ImagePreview'
 import { FenceAutocomplete } from './FenceAutocomplete'
@@ -429,6 +430,17 @@ export class MarkdownEditorController implements LiveEditor {
       nodeViews: {
         table: node => new TableView(node, 60),
         callout: (node, view, getPos) => new CalloutNodeView(node, view, getPos, () => !!this.options.readOnly?.()),
+        toc: (node, view, getPos) => {
+          const tocView = new TocNodeView(node, view, getPos, () => !!this.options.readOnly?.())
+          const refresh = () => tocView.refreshHeadings()
+          this.extensionViews.add(refresh)
+          const origDestroy = tocView.destroy.bind(tocView)
+          tocView.destroy = () => {
+            this.extensionViews.delete(refresh)
+            origDestroy()
+          }
+          return tocView
+        },
         code_block: (node, view, getPos) => {
           const code = new CodeBlockView(
             node,
