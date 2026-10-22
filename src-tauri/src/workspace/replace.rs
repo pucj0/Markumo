@@ -1,4 +1,5 @@
 //! Workspace replace uses the searcher's Rust regex and line boundaries. No JS regex runs.
+use crate::display::display_path;
 use super::{
     guard::validate_under_root,
     ignore::IgnoreRuleSet,
@@ -80,12 +81,18 @@ pub fn allowed_path(
     path: &Path,
     query: &SearchQuery,
 ) -> Result<PathBuf, String> {
+    // The UI works with display paths (`E:\...`) while authorized roots are
+    // canonical (`\\?\E:\...`). Compare canonical forms, exactly as the workspace
+    // guard does, so authorization never depends on which spelling was sent.
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| "文件不在授权工作区".to_string())?;
     let root = roots
         .iter()
-        .filter(|root| path.starts_with(root))
+        .filter(|root| canonical.starts_with(root))
         .max_by_key(|root| root.components().count())
         .ok_or("文件不在授权工作区")?;
-    let valid = validate_under_root(root, path).map_err(|e| e.to_string())?;
+    let valid = validate_under_root(root, &canonical).map_err(|e| e.to_string())?;
     if !in_directory(&valid, query) || IgnoreRuleSet::new(root, false).is_ignored(&valid, false) {
         return Err("文件在搜索范围之外或被忽略".into());
     }
@@ -244,15 +251,13 @@ fn preview_single_file(
     if read_only {
         return Err("文件没有写入权限".into());
     }
-    let buffer = query.buffers.iter().find(|b| {
-        let bp = Path::new(&b.path);
-        bp == path
-            || bp == Path::new(target_str)
-            || b.path
-                .replace('/', "\\")
-                .trim_start_matches(r"\\?\")
-                .eq_ignore_ascii_case(path.to_string_lossy().replace('/', "\\").trim_start_matches(r"\\?\"))
-    });
+    // The buffer path arrives from the UI, which uses display paths, while this
+    // function holds the canonical path. One shared comparison accepts either
+    // spelling so the open document's text is always the authoritative one.
+    let buffer = query
+        .buffers
+        .iter()
+        .find(|b| super::search::same_file(&b.path, &path) || Path::new(&b.path) == Path::new(target_str));
     let (disk, encoding, bom) = codec::decode_with_path(
         &bytes,
         buffer.and_then(|b| b.encoding.as_deref()),
@@ -490,7 +495,7 @@ mod tests {
         ReplaceApply {
             query,
             replacement: replacement.into(),
-            path: path.to_string_lossy().into(),
+            path: display_path(&path),
             version: read_disk(path).unwrap().1,
             selected,
         }
@@ -764,7 +769,8 @@ mod tests {
         std::fs::write(&path, codec::encode("中文", "UTF-16LE", false).unwrap()).unwrap();
         let mut q = query("中文");
         q.buffers.push(super::super::search::SearchBuffer {
-            path: path.to_string_lossy().into(),
+            // The UI sends the display spelling; matching must accept it.
+            path: display_path(&path),
             text: "中文 中文".into(),
             encoding: Some("UTF-16LE".into()),
         });

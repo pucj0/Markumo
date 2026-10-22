@@ -6,6 +6,8 @@ use std::{
     time::UNIX_EPOCH,
 };
 
+use crate::display::display_path;
+
 use super::{
     guard::{relative_slash_path, validate_name, validate_under_root},
     ignore::IgnoreRuleSet,
@@ -148,7 +150,7 @@ impl WorkspaceService {
         self.preferences.active_roots = self
             .roots()
             .iter()
-            .map(|path| path.to_string_lossy().into_owned())
+            .map(|path| display_path(path))
             .collect();
         self.save_preferences()
     }
@@ -217,7 +219,7 @@ impl WorkspaceService {
                 return Err(error);
             }
         };
-        let root_path = root.to_string_lossy().into_owned();
+        let root_path = display_path(&root);
         self.preferences
             .recent_workspaces
             .retain(|item| item != &root_path);
@@ -257,7 +259,7 @@ impl WorkspaceService {
             self.preferences.active_roots = self
                 .roots()
                 .iter()
-                .map(|root| root.to_string_lossy().into_owned())
+                .map(|root| display_path(&root))
                 .collect();
             return Err(error);
         }
@@ -279,7 +281,7 @@ impl WorkspaceService {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "workspace".into());
 
-        let root_str = canonical_root.to_string_lossy().to_string();
+        let root_str = display_path(&canonical_root);
 
         let previous_roots = std::mem::take(&mut self.additional_roots);
         let previous_root = self.current_root.replace(canonical_root.clone());
@@ -416,7 +418,7 @@ impl WorkspaceService {
             nodes.push(WorkspaceNode {
                 id: rel_path.clone(),
                 name,
-                path: path.to_string_lossy().to_string(),
+                path: display_path(&path),
                 relative_path: rel_path,
                 is_directory,
                 is_symlink,
@@ -461,7 +463,7 @@ impl WorkspaceService {
         Ok(WorkspaceNode {
             id: rel_path.clone(),
             name: file_name.to_string(),
-            path: target_path.to_string_lossy().to_string(),
+            path: display_path(&target_path),
             relative_path: rel_path,
             is_directory: false,
             is_symlink: false,
@@ -499,7 +501,7 @@ impl WorkspaceService {
         Ok(WorkspaceNode {
             id: rel_path.clone(),
             name: dir_name.to_string(),
-            path: target_path.to_string_lossy().to_string(),
+            path: display_path(&target_path),
             relative_path: rel_path,
             is_directory: true,
             is_symlink: false,

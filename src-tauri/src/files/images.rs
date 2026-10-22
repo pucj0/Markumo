@@ -1,4 +1,5 @@
 //! Document-scoped raster import and preview. Never expose general file writes.
+use crate::display::display_path;
 use super::{checked_path, fail, FileError, FileService, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
@@ -46,9 +47,11 @@ mod dropped_directory_tests {
         let info = workspace
             .add_workspace(files.take_dropped_directory(&inputs[0].token).unwrap())
             .unwrap();
+        // The workspace root is reported in display form (no `\\?\` prefix), as
+        // every UI-facing path is; compare the same spelling.
         assert_eq!(
-            PathBuf::from(info.root_path),
-            folder.canonicalize().unwrap()
+            PathBuf::from(&info.root_path),
+            PathBuf::from(crate::display::display_path(&folder.canonicalize().unwrap()))
         );
         workspace
             .add_workspace(files.take_dropped_directory(&inputs[2].token).unwrap())
@@ -749,7 +752,7 @@ impl FileService {
             reads.push(target.clone());
         }
         Ok(ImportedImage {
-            path: target.to_string_lossy().into_owned(),
+            path: display_path(&target),
             name: target.file_name().unwrap().to_string_lossy().into_owned(),
         })
     }

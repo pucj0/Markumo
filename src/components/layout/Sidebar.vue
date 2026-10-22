@@ -305,7 +305,8 @@ const replaceInputRef = ref<HTMLInputElement | null>(null)
 const operationDialog = ref<InstanceType<typeof WorkspaceOperationDialog> | null>(null)
 const contextMenu = ref<InstanceType<typeof ContextMenu> | null>(null)
 async function copyPath(path: string) {
-  try { await textClipboard.writeText(path) }
+  // A clipboard value is consumed by other programs: never the verbatim form.
+  try { await textClipboard.writeText(readablePath(path)) }
   catch (error) { window.dispatchEvent(new CustomEvent('editor-notice',{detail:`复制失败：${String(error)}`})) }
 }
 function rootMenu(event: MouseEvent | KeyboardEvent, root: WorkspaceInfo) {

@@ -51,6 +51,7 @@ const SMOKE_TESTS = [
   'scripts/repair01-regression.mjs',
   'scripts/repair02-regression.mjs',
   'scripts/repair03-regression.mjs',
+  'scripts/path-display-regression.mjs',
   'scripts/slash-commands-regression.mjs',
   'scripts/math-editor-regression.mjs',
   'scripts/typewriter-focus-regression.mjs',
@@ -117,6 +118,7 @@ const FULL_REGRESSION_TESTS = [
   'scripts/repair02-regression.mjs',
   'scripts/repair03-regression.mjs',
   'scripts/repair04-outline-regression.mjs',
+  'scripts/path-display-regression.mjs',
   'scripts/release-regression.mjs'
 ]
 

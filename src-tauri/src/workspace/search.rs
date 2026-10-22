@@ -2,6 +2,9 @@ use super::{
     guard::{relative_slash_path, validate_under_root},
     ignore::IgnoreRuleSet,
 };
+use crate::display::display_path;
+use crate::display::display_text;
+
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -15,6 +18,19 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
+/// True when a path string from the UI and a canonical path name the same file.
+///
+/// Windows resolves the same file to `E:\dir\a.md`, `\\?\E:\dir\a.md` and any
+/// letter case; all of them must identify one open buffer.
+pub fn same_file(candidate: &str, canonical: &Path) -> bool {
+    if Path::new(candidate) == canonical {
+        return true;
+    }
+    let left = display_text(candidate).replace('/', "\\");
+    let right = display_text(&canonical.to_string_lossy()).replace('/', "\\");
+    if cfg!(windows) { left.eq_ignore_ascii_case(&right) } else { left == right }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchMatch {
@@ -276,7 +292,7 @@ fn find_files_budget(
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned(),
-                    path: path.to_string_lossy().into_owned(),
+                    path: display_path(path),
                     relative_path: relative,
                 });
             }
@@ -426,10 +442,13 @@ impl WorkspaceSearcher {
         {
             return;
         }
+        // Buffer paths come from the UI (display spelling) while this walk yields
+        // canonical paths: compare one normalised form so an open document's
+        // unsaved text is always the one searched.
         let buffer = query
             .buffers
             .iter()
-            .find(|buffer| Path::new(&buffer.path) == path);
+            .find(|buffer| same_file(&buffer.path, path));
         let text = match buffer {
             Some(buffer) => buffer.text.clone(),
             None => match crate::files::decode_search_text(&bytes) {
@@ -451,7 +470,7 @@ impl WorkspaceSearcher {
                 *total += 1;
                 batch.push(SearchMatch {
                     search_id: query.search_id.clone(),
-                    path: path.to_string_lossy().into_owned(),
+                    path: display_path(path),
                     relative_path: relative.clone(),
                     line_number: index + 1,
                     column_number: line[..matched.start()].encode_utf16().count() + 1,

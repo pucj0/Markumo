@@ -34,6 +34,7 @@ import type { Encoding, FileOpenEncoding, Preferences } from '../features/files/
 import { WorkspaceController } from '../features/workspace/WorkspaceController'
 import { tauriWorkspace } from '../features/workspace/tauriWorkspace'
 import { relativeFilePath } from '../features/shell/editorSettings'
+import { readablePath } from '../features/shell/pathDisplay'
 import { textClipboard } from '../features/shell/clipboard'
 import { EditorView } from '@codemirror/view'
 import { WindowCloseGuard, type CloseSource } from '../features/shell/WindowCloseGuard'
@@ -1002,7 +1003,8 @@ export function useAppShell() {
   async function copyFullPath() {
     if (activeDoc.value?.path) {
       try {
-        await textClipboard.writeText(activeDoc.value.path)
+        // Clipboard consumers get the readable form, never `\\?\` verbatim.
+        await textClipboard.writeText(readablePath(activeDoc.value.path))
       } catch {
         toast('复制失败')
       }
@@ -1011,7 +1013,7 @@ export function useAppShell() {
 
   async function copyRelativePath() {
     if (activeDoc.value?.path) {
-      const p = relativeFilePath(activeDoc.value.path, workspace.rootPath)
+      const p = relativeFilePath(readablePath(activeDoc.value.path), workspace.rootPath ? readablePath(workspace.rootPath) : null)
       try {
         await textClipboard.writeText(p)
       } catch {

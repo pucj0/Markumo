@@ -215,11 +215,14 @@ fn window_knows(window: &WindowLaunch, key: &PathKey) -> bool {
 pub struct PathKey(String);
 impl PathKey {
     pub fn of(path: &Path) -> Self {
-        let text = path.to_string_lossy();
+        // IPC callers may send either the canonical (`\\?\E:\...`) or the display
+        // (`E:\...`) spelling of the same file. Collapse both to one key so an
+        // ownership/layout lookup never depends on which form was passed in.
+        let text = crate::display::display_text(&path.to_string_lossy());
         if cfg!(windows) {
             PathKey(text.to_lowercase())
         } else {
-            PathKey(text.into_owned())
+            PathKey(text)
         }
     }
 }
@@ -339,18 +342,24 @@ impl LastSession {
             return Err("会话标签或活动标签无效".into());
         }
         if let Some(editor) = &self.editor_layout {
-            validate_editor_layout(editor, &unique)?;
+            // Layout ids are stored in display form, so the comparison set uses
+            // the same spelling as the tab paths written to the session file.
+            let display: std::collections::HashSet<String> = unique
+                .iter()
+                .map(|path| crate::display::display_text(path))
+                .collect();
+            validate_editor_layout(editor, &display)?;
         }
         Ok(())
     }
 }
 fn validate_editor_layout(
     layout: &serde_json::Value,
-    paths: &std::collections::HashSet<&String>,
+    paths: &std::collections::HashSet<String>,
 ) -> Result<(), String> {
     fn node(
         raw: &serde_json::Value,
-        paths: &std::collections::HashSet<&String>,
+        paths: &std::collections::HashSet<String>,
         ids: &mut std::collections::HashSet<String>,
         depth: usize,
     ) -> Result<(), String> {
@@ -385,7 +394,7 @@ fn validate_editor_layout(
                 for tab in tabs {
                     if tab["documentId"]
                         .as_str()
-                        .is_none_or(|path| !paths.iter().any(|p| p.as_str() == path))
+                        .is_none_or(|path| !paths.contains(path))
                         || !tab["pinned"].is_boolean()
                         || tab.as_object().is_none_or(|obj| {
                             obj.keys()
@@ -607,11 +616,11 @@ pub fn capture(
                             for tab in tabs {
                                 let token = tab["documentId"].as_str().ok_or("分栏文件无效")?;
                                 let path = files.session_path(token).map_err(|e| e.message)?;
-                                tab["documentId"] = path.to_string_lossy().to_string().into();
+                                tab["documentId"] = crate::display::display_path(&path).into();
                             }
                             if let Some(token) = node["activeId"].as_str() {
                                 let path = files.session_path(token).map_err(|e| e.message)?;
-                                node["activeId"] = path.to_string_lossy().to_string().into();
+                                node["activeId"] = crate::display::display_path(&path).into();
                             }
                         }
                         _ => return Err("分栏类型无效".into()),
@@ -632,11 +641,9 @@ pub fn capture(
                         let mut mapped = serde_json::Map::new();
                         for (token, mode) in entries {
                             mapped.insert(
-                                files
-                                    .session_path(&token)
-                                    .map_err(|e| e.message)?
-                                    .to_string_lossy()
-                                    .into_owned(),
+                                crate::display::display_path(
+                                    &files.session_path(&token).map_err(|e| e.message)?,
+                                ),
                                 mode,
                             );
                         }

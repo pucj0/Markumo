@@ -253,7 +253,7 @@ function openMenu(event: MouseEvent | KeyboardEvent, doc: EditorDocument) {
     { id: 'tab-close-pane', title: '关闭当前分栏', enabled: isSplit, run: () => emit('close-pane') },
     { id: 'tab-merge-splits', title: '合并全部分栏', enabled: isSplit, run: () => emit('merge-splits') },
 
-    { id: 'tab-copy-path', title: '复制文件完整路径', enabled: !!doc.path, run: () => textClipboard.writeText(doc.path) },
+    { id: 'tab-copy-path', title: '复制文件完整路径', enabled: !!doc.path, run: () => textClipboard.writeText(readablePath(doc.path)) },
     { id: 'tab-copy-relative', title: '复制文件相对路径', enabled: !!doc.path, run: () => {
       textClipboard.writeText(displayFilePath(doc.path,props.rootPath?{rootPath:props.rootPath,name:''}:null))
     }},

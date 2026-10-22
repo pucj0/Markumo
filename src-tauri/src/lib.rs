@@ -1,5 +1,6 @@
 mod commands;
 mod conversion;
+mod display;
 mod detach;
 mod files;
 mod history;

@@ -7,6 +7,7 @@ mod external_tests;
 pub mod images;
 pub mod media;
 
+use crate::display::display_path;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -508,7 +509,7 @@ impl FileService {
         warning
     }
     fn recent(&mut self, path: &Path) -> Option<String> {
-        let display = path.to_string_lossy().into_owned();
+        let display = display_path(path);
         self.preferences
             .recent
             .retain(|entry| entry.path != display);
@@ -578,7 +579,7 @@ impl FileService {
                 return Ok(OpenFile {
                     metadata: FileMetadata {
                         token,
-                        path: path.to_string_lossy().into_owned(),
+                        path: display_path(&path),
                         name: path.file_name().unwrap().to_string_lossy().into_owned(),
                         encoding: "Binary".into(),
                         bom: false,
@@ -615,7 +616,7 @@ impl FileService {
             return Ok(OpenFile {
                 metadata: FileMetadata {
                     token,
-                    path: path.to_string_lossy().into_owned(),
+                    path: display_path(&path),
                     name: path.file_name().unwrap().to_string_lossy().into_owned(),
                     encoding: "Binary".into(),
                     bom: false,
@@ -668,7 +669,7 @@ impl FileService {
         Ok(OpenFile {
             metadata: FileMetadata {
                 token,
-                path: path.to_string_lossy().into_owned(),
+                path: display_path(&path),
                 name: path.file_name().unwrap().to_string_lossy().into_owned(),
                 eol: codec::eol(&text),
                 encoding,
@@ -830,7 +831,7 @@ impl FileService {
         self.grants.get_mut(&token).unwrap().hex = hex;
         Ok(SaveTarget {
             token,
-            path: path.to_string_lossy().into_owned(),
+            path: display_path(&path),
             version,
         })
     }
