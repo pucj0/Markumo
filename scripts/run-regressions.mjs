@@ -41,6 +41,7 @@ const SMOKE_TESTS = [
   'scripts/toc-regression.mjs',
   'scripts/footnote-regression.mjs',
   'scripts/image-editing-regression.mjs',
+  'scripts/outline-reorder-regression.mjs',
   'scripts/slash-commands-regression.mjs',
   'scripts/math-editor-regression.mjs',
   'scripts/typewriter-focus-regression.mjs',

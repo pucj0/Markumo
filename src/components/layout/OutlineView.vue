@@ -19,14 +19,20 @@
         v-for="(item,index) in visibleItems"
         :key="item.id"
         class="outline-item"
-        :class="[`level-${item.level}`, item.kind, { active: item.id === visibleActiveId }]"
+        :class="[`level-${item.level}`, item.kind, { active: item.id === visibleActiveId, 'is-dragging': item.id === draggingId, 'drop-before': item.id === dragOverId && dragOverPos === 'before', 'drop-after': item.id === dragOverId && dragOverPos === 'after' }]"
         :aria-current="item.id === visibleActiveId ? 'location' : undefined"
         role="treeitem"
         :aria-level="item.level"
         :aria-expanded="hasChildren(item) ? filtering || !collapsed.has(item.id) : undefined"
         :tabindex="item.id === focusedId || (!focusedId && index===0) ? 0 : -1"
         :style="{ paddingLeft: `${(item.level - 1) * 12 + 10}px` }"
-        :title="`跳转至第 ${item.lineNumber} 行: ${item.name}`"
+        :title="isMarkdown ? `拖拽调整顺序，或点击跳转至第 ${item.lineNumber} 行: ${item.name}` : `跳转至第 ${item.lineNumber} 行: ${item.name}`"
+        :draggable="isMarkdown"
+        @dragstart="onDragStart($event, item)"
+        @dragover="onDragOver($event, item)"
+        @dragleave="onDragLeave($event, item)"
+        @drop="onDrop($event, item)"
+        @dragend="onDragEnd"
         @click="$emit('select-item', item)"
         @focus="focusedId=item.id"
         @keydown="navigate($event,index)"
@@ -58,6 +64,7 @@
 import type { OutlineItem } from '../../editor/outline/outlineService'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import { useOutlineViewport } from '../../editor/outline/useOutlineViewport'
+import { planOutlineMove } from '../../editor/outline/outlineReorder'
 import { computed,ref,watch,nextTick } from 'vue'
 import Icon from '../common/Icon.vue'
 
@@ -176,6 +183,61 @@ const visibleActiveId = computed(() => {
   return null
 })
 
+const draggingId = ref<string | null>(null)
+const dragOverId = ref<string | null>(null)
+const dragOverPos = ref<'before' | 'after' | null>(null)
+
+function onDragStart(e: DragEvent, item: OutlineItem) {
+  if (!props.isMarkdown) return
+  draggingId.value = item.id
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', item.id)
+  }
+}
+
+function onDragOver(e: DragEvent, item: OutlineItem) {
+  if (!props.isMarkdown || !draggingId.value || draggingId.value === item.id) return
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  dragOverId.value = item.id
+  const target = e.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  const mid = rect.top + rect.height / 2
+  dragOverPos.value = e.clientY < mid ? 'before' : 'after'
+}
+
+function onDragLeave(_e: DragEvent, item: OutlineItem) {
+  if (dragOverId.value === item.id) {
+    dragOverId.value = null
+    dragOverPos.value = null
+  }
+}
+
+function onDragEnd() {
+  draggingId.value = null
+  dragOverId.value = null
+  dragOverPos.value = null
+}
+
+function onDrop(e: DragEvent, targetItem: OutlineItem) {
+  if (!props.isMarkdown || !draggingId.value || !dragOverPos.value || !props.manager || !props.documentId) return
+  e.preventDefault()
+  const sourceId = draggingId.value
+  const position = dragOverPos.value
+  onDragEnd()
+
+  const fullSource = props.manager.getText(props.documentId)
+  if (!fullSource) return
+  const plan = planOutlineMove(fullSource, props.items, sourceId, targetItem.id, position)
+  if (!plan.valid) return
+
+  props.manager.dispatch(props.documentId, {
+    changes: { from: 0, to: fullSource.length, insert: plan.newSource },
+    userEvent: 'input.outline.reorder',
+  })
+}
+
 defineEmits<{
   (e: 'select-item', item: OutlineItem): void
 }>()
@@ -286,5 +348,16 @@ defineEmits<{
   font-size: var(--ui-small-font-size);
   color: var(--muted);
   font-family: var(--font-mono);
+}
+
+.outline-item.drop-before {
+  border-top: 2px solid var(--accent);
+}
+.outline-item.drop-after {
+  border-bottom: 2px solid var(--accent);
+}
+.outline-item.is-dragging {
+  opacity: 0.45;
+  background: var(--hover);
 }
 </style>
