@@ -100,6 +100,7 @@ export class ImageImporter {
       const doc = manager.metadata(id)
       if (!doc?.fileToken || !doc.path || !/\.(md|markdown)$/i.test(doc.name)) throw new Error('图片导入需要先将文档保存为 .md 或 .markdown。')
       const rules = this.rules(id)
+      const references: string[] = []
       for (const source of sources) {
         const native = 'token' in source
         if (!native && source.size > 4 * 1024 * 1024) throw new Error('图片超过 4 MiB。')
@@ -113,14 +114,18 @@ export class ImageImporter {
           result = await this.gateway.import(input)
         }
         if (manager.metadata(id)?.path !== doc.path || manager.metadata(id)?.fileToken !== doc.fileToken) throw new Error(`导入期间文档位置变化，未插入过期路径。图片已保存至：${result.path}`)
-        const current = manager.getState(id), mapped = current?.field(imageImportBookmarks).get(key)
-        if (!mapped) return
         if (manager.isComposing) throw new Error(`请完成输入法输入后重新插入；图片已保存至：${result.path}`)
-        const text = imageMarkdown(result.path,doc.path,result.name,rules) + '\n'
-        manager.dispatch(id, { changes: {from:mapped.from,to:mapped.to,insert:text},
-          selection:{anchor:mapped.from+text.length}, effects:[bookmark.of({key,from:mapped.from+text.length,to:mapped.from+text.length}),refreshMarkdownResources.of(null)],
-          annotations:isolateHistory.of('full'), userEvent:'input.image' })
+        references.push(imageMarkdown(result.path,doc.path,result.name,rules))
       }
+      const current = manager.getState(id), mapped = current?.field(imageImportBookmarks).get(key)
+      if (!mapped || !references.length) return
+      const textBefore = current!.doc.sliceString(0, mapped.from).split('\n').at(-1) || ''
+      const textAfter = current!.doc.sliceString(mapped.to).split('\n')[0]
+      const inline = /\S/.test(textBefore + textAfter)
+      const text = inline ? references.join(' ') : references.join('\n\n') + '\n'
+      manager.dispatch(id, { changes: { from: mapped.from, to: mapped.to, insert: text },
+        selection: { anchor: mapped.from + text.length }, effects: refreshMarkdownResources.of(null),
+        annotations: isolateHistory.of('full'), userEvent: 'input.image' })
     } finally {
       if (manager.getState(id)) manager.dispatch(id, { effects:bookmark.of(key), annotations:Transaction.addToHistory.of(false) })
       await this.gateway.release(tokens())

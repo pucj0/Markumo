@@ -98,6 +98,7 @@ nodes.image = {
     ...nodes.image.attrs,
     width: { default: null },
     align: { default: null },
+    htmlSource: { default: null },
   },
   parseDOM: [
     {

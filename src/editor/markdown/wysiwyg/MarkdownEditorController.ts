@@ -23,6 +23,9 @@ import { FootnoteDefNodeView } from './FootnoteDefNodeView'
 import { renderFrontMatterCard } from './FrontMatterCard'
 import { LiveImageView } from './LiveImageView'
 import { ImagePreview } from './ImagePreview'
+import { positionImageOverlay } from './imageOverlay'
+import { normalizeImageWidth, normalizeImageAlign } from './imageHtml'
+import { markdownImageError } from '../images'
 import { FenceAutocomplete } from './FenceAutocomplete'
 import { LiveSlashController } from '../slash/LiveSlashController'
 import { HtmlBlockView } from './HtmlBlockView'
@@ -72,6 +75,10 @@ export class MarkdownEditorController implements LiveEditor {
   private tableToolbar: LiveTableToolbar
   private imagePreview: ImagePreview
   private properties = document.createElement('div')
+  private propertyObserver?: ResizeObserver
+  private repositionProperties = () => {
+    if (!this.properties.hidden && this.currentAnchorEl?.isConnected) this.positionAnchoredElement(this.properties, this.currentAnchorEl)
+  }
   private searchController: LiveSearchController
   private fenceAutocomplete: FenceAutocomplete
   private slashController: LiveSlashController
@@ -174,6 +181,12 @@ export class MarkdownEditorController implements LiveEditor {
     // Floating Property Popover (anchored to link/image/math)
     this.properties.className = 'md-properties md-anchored-popover'
     this.properties.hidden = true
+    this.properties.onkeydown = event => {
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopPropagation()
+        this.properties.hidden = true; this.currentAnchorEl = null; this.view.focus()
+      }
+    }
 
     const mount = document.createElement('div')
     mount.className = 'md-document'
@@ -187,6 +200,11 @@ export class MarkdownEditorController implements LiveEditor {
     // Input Rules
     const rules = inputRules({
       rules: [
+        new InputRule(/!\[[^\n]*\]\([^\n]*\)$/, (state, match, start, end) => {
+          const parsed = markdownParser.parse(match[0], this.bridge.environment).firstChild
+          if (parsed?.childCount !== 1 || parsed.firstChild?.type !== s.nodes.image) return null
+          return state.tr.replaceWith(start, end, parsed.firstChild).setMeta('isolated', true)
+        }),
         textblockTypeInputRule(/^(#{1,6})\s$/, s.nodes.heading, match => ({ level: match[1].length })),
         textblockTypeInputRule(/^```([^`\s]*)\s$/, s.nodes.code_block, match => ({ params: match[1] })),
         wrappingInputRule(/^\s*>\s$/, s.nodes.blockquote),
@@ -342,6 +360,11 @@ export class MarkdownEditorController implements LiveEditor {
                 this.searchController.close()
                 return true
               }
+              if (this.view.state.selection instanceof NodeSelection && this.view.state.selection.node.type === s.nodes.image) {
+                const { to } = this.view.state.selection
+                this.view.dispatch(this.view.state.tr.setSelection(Selection.near(this.view.state.doc.resolve(to), 1)))
+                return true
+              }
               return false
             },
             ...Object.fromEntries(
@@ -486,7 +509,7 @@ export class MarkdownEditorController implements LiveEditor {
             this.options.resources,
             (_imgEl, _n, pos) => { this.properties.hidden = true; this.openInlineAt(pos, 'image') },
             (imgEl, node, pos) => { this.closeInline(); this.imageProperties(imgEl, node, pos) },
-            (image, current) => this.imagePreview.open(image, current)
+            (image, current) => this.imagePreview.open(image, current, () => this.view.focus())
           )
           this.liveImages.add(imgView)
           const destroy = imgView.destroy.bind(imgView)
@@ -553,6 +576,9 @@ export class MarkdownEditorController implements LiveEditor {
         this.positionAnchoredElement(this.properties, this.currentAnchorEl)
       }
     })
+    this.propertyObserver = new ResizeObserver(this.repositionProperties)
+    this.propertyObserver.observe(this.dom); this.propertyObserver.observe(this.properties)
+    window.addEventListener('resize', this.repositionProperties)
 
     if (this.typewriterEnabled) this.installTypewriterListeners(mount)
 
@@ -1195,8 +1221,15 @@ export class MarkdownEditorController implements LiveEditor {
     }
     if (format === 'image') {
       const at = this.view.state.selection.from
-      this.view.dispatch(this.view.state.tr.replaceSelectionWith(s.nodes.image.create({ src: 'image.png', alt: '图片描述' })).setMeta('isolated', true))
-      this.queueInlineEdit(at, 'image')
+      this.view.dispatch(this.view.state.tr.replaceSelectionWith(s.nodes.image.create({ src: '', alt: '' })).setMeta('isolated', true))
+      // The toolbar restores editor focus after format(). Open the form after
+      // that handoff so the first keystroke belongs to the path input.
+      queueMicrotask(() => {
+        if (this.disposed) return
+        const pos = this.view.state.doc.nodeAt(at)?.type === s.nodes.image ? at : this.view.state.selection.from - 1
+        const node = this.view.state.doc.nodeAt(pos), anchor = this.view.nodeDOM(pos)
+        if (node?.type === s.nodes.image && anchor instanceof HTMLElement) this.imageProperties(anchor, node, pos)
+      })
       return true
     }
     return false
@@ -1248,6 +1281,10 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   private positionAnchoredElement(el: HTMLElement, anchor: HTMLElement, placeAbove = false) {
+    if (el.classList.contains('md-image-properties')) {
+      positionImageOverlay(el, anchor.querySelector('img') ?? anchor, this.dom)
+      return
+    }
     const containerRect = this.dom.getBoundingClientRect()
     const anchorRect = anchor.getBoundingClientRect()
     const elRect = el.getBoundingClientRect()
@@ -1499,6 +1536,7 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   private linkProperties(anchorEl: HTMLElement, href: string) {
+    this.properties.classList.remove('md-image-properties')
     this.propertyTargetToken = null
     this.properties.replaceChildren()
     this.properties.hidden = false
@@ -1563,15 +1601,43 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   private imageProperties(anchorEl: HTMLElement, node: Node, pos: number) {
+    if (this.options.readOnly?.()) return
     const token = this.trackPropertyNode(node, pos)
     this.properties.replaceChildren()
     this.properties.hidden = false
+    this.properties.classList.add('md-image-properties')
     this.currentAnchorEl = anchorEl
 
-    const altInput = this.field('图片替代文字', node.attrs.alt || '')
     const srcInput = this.field('图片路径', node.attrs.src)
+    const altInput = this.field('图片替代文字', node.attrs.alt || '')
+    const titleInput = this.field('图片标题', node.attrs.title || '')
+    const widthInput = this.field('图片宽度', node.attrs.width || '')
+    widthInput.placeholder = '原始大小 / 50% / 320px'
+    const alignment = document.createElement('select')
+    alignment.setAttribute('aria-label', '图片对齐')
+    for (const [value, label] of [['', '默认'], ['left', '左对齐'], ['center', '居中'], ['right', '右对齐']]) {
+      const option = document.createElement('option'); option.value = value; option.textContent = label; alignment.append(option)
+    }
+    alignment.value = node.attrs.align || ''
+    const alignLabel = document.createElement('label'); alignLabel.textContent = '图片对齐'; alignLabel.append(alignment); this.properties.append(alignLabel)
+    const feedback = document.createElement('div'); feedback.className = 'md-image-property-feedback'; feedback.setAttribute('role', 'status'); this.properties.append(feedback)
+    this.propertyButton('重新选择本地图片', () => {
+      const choose = this.options.resources.chooseLocal
+      if (!choose) { feedback.textContent = '当前环境请直接填写图片路径。'; return }
+      void choose().then(path => {
+        if (this.disposed || this.propertyTargetToken !== token || this.properties.hidden) return
+        if (path !== null) srcInput.value = path
+      }).catch(error => { if (!this.disposed && this.propertyTargetToken === token) feedback.textContent = markdownImageError(error).message })
+    })
+    this.propertyButton('放大预览', () => {
+      const image = anchorEl.querySelector('img')
+      if (image?.naturalWidth) this.imagePreview.open(image, () => !!this.currentPropertyNode(token), () => srcInput.focus({ preventScroll: true }))
+      else feedback.textContent = '请先应用有效路径并等待图片加载。'
+    })
 
     this.propertyButton('应用图片', () => {
+      const width = normalizeImageWidth(widthInput.value)
+      if (widthInput.value.trim() && !width) { feedback.textContent = '宽度请输入数字、px、百分比或 auto。'; widthInput.focus(); return }
       const target = this.currentPropertyNode(token)
       if (target) {
         this.view.dispatch(
@@ -1580,6 +1646,9 @@ export class MarkdownEditorController implements LiveEditor {
               ...target.node.attrs,
               src: srcInput.value,
               alt: altInput.value,
+              title: titleInput.value || null,
+              width,
+              align: normalizeImageAlign(alignment.value),
             })
             .setMeta('isolated', true)
         )
@@ -1629,7 +1698,7 @@ export class MarkdownEditorController implements LiveEditor {
     })
 
     this.positionAnchoredElement(this.properties, anchorEl)
-    altInput.focus()
+    srcInput.focus({ preventScroll: true })
   }
 
   private trackPropertyNode(node: Node, pos: number) {
@@ -2233,6 +2302,8 @@ export class MarkdownEditorController implements LiveEditor {
   }
 
   destroy() {
+    this.propertyObserver?.disconnect()
+    window.removeEventListener('resize', this.repositionProperties)
     cancelAnimationFrame(this.typewriterAlignFrame)
     cancelSmoothScroll(this.dom)
     this.typewriterCleanup?.()
@@ -2248,6 +2319,11 @@ export class MarkdownEditorController implements LiveEditor {
     this.dom.removeEventListener('compositionstart', this.onCompositionStart, true)
     this.dom.removeEventListener('pointerdown', this.onCanvasPointerDown)
     this.searchController.destroy()
+    // prosemirror-view 1.42 leaves its temporary hidden NodeSelection guard on
+    // ownerDocument when a selected atom is disposed before selection changes.
+    // The optional adapter is deliberately limited to destroy-time cleanup.
+    const input = (this.view as unknown as { input?: { hideSelectionGuard?: EventListener } }).input
+    if (input?.hideSelectionGuard) this.view.dom.ownerDocument.removeEventListener('selectionchange', input.hideSelectionGuard)
     this.view.destroy()
     this.dom.remove()
     this.codeViews.clear()

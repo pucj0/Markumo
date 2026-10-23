@@ -31,6 +31,7 @@ const tokens = { ...defaultMarkdownParser.tokens,
   math_block:{block:'protected_source',noCloseToken:true,getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({source:tok.content})},
   footnote_reference:{node:'footnote_reference',getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({label:tok.content})},
   html_inline:{node:'html_inline',getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({source:tok.content})},
+  controlled_image:{node:'image',getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>tok.meta},
   html_block:{block:'html_block',noCloseToken:true,getAttrs:(tok:ReturnType<typeof tokenizer.parse>[number])=>({source:tok.content})},
   fence:{block:'code_block',noCloseToken:true,getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({params:tok.info,fence:tok.markup})},
   bullet_list:{...defaultMarkdownParser.tokens.bullet_list,getAttrs:(tok: ReturnType<typeof tokenizer.parse>[number])=>({bullet:tok.markup,tight:true})},
@@ -83,6 +84,14 @@ tokenizer.core.ruler.after('markumo_tasks','markumo_cells', state=>{
     if(token.type==='th_open'||token.type==='td_open')result.push(new state.Token('paragraph_open','p',1))
   }
   state.tokens=result
+})
+// The same strict allow-list applies inside mixed paragraphs, lists and cells.
+tokenizer.core.ruler.after('markumo_cells', 'markumo_inline_images', state => {
+  for (const block of state.tokens) for (const token of block.children ?? []) {
+    if (token.type !== 'html_inline') continue
+    const image = parseControlledImageHtml(token.content)
+    if (image) { token.type = 'controlled_image'; token.meta = { ...image, htmlSource: token.content } }
+  }
 })
 tokenizer.core.ruler.after('markumo_cells', 'markumo_callouts', state => {
   const tokens = state.tokens
@@ -223,6 +232,7 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
           title: controlledImage.title,
           width: controlledImage.width,
           align: controlledImage.align,
+          htmlSource: original.trim(),
         }))
       } else if (fnMatch) {
         const label = fnMatch[1]

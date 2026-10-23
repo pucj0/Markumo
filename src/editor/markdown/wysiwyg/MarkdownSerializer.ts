@@ -1,7 +1,7 @@
 import { MarkdownSerializer, defaultMarkdownSerializer } from 'prosemirror-markdown'
 import type { Mark, Node } from 'prosemirror-model'
 import { markdownSchema } from './MarkdownSchema'
-import { controlledImageHtml } from './imageHtml'
+import { controlledImageHtml, parseControlledImageHtml } from './imageHtml'
 import { tableRow } from '../tableModel'
 
 type LinkKind = 'bare' | 'angle' | 'none'
@@ -98,6 +98,11 @@ export const markdownSerializer = new MarkdownSerializer({ ...defaultMarkdownSer
     state.closeBlock(node)
   },
   image(state, node) {
+    const original = node.attrs.htmlSource && parseControlledImageHtml(node.attrs.htmlSource)
+    if (original && ['src', 'alt', 'title', 'width', 'align'].every(key => (original[key as keyof typeof original] ?? null) === (node.attrs[key] ?? null))) {
+      state.write(node.attrs.htmlSource)
+      return
+    }
     // A sized/aligned image is written as the one allow-listed HTML form this
     // editor can read back. Every attribute is escaped and validated first.
     const controlled = controlledImageHtml({
@@ -106,11 +111,13 @@ export const markdownSerializer = new MarkdownSerializer({ ...defaultMarkdownSer
       title: node.attrs.title || null,
       width: node.attrs.width,
       align: node.attrs.align,
-    })
+    }, !!node.attrs.htmlSource)
     if (controlled) {
       state.write(controlled)
     } else {
-      state.write("![" + state.esc(node.attrs.alt || "") + "](" + node.attrs.src +
+      const src = String(node.attrs.src ?? '')
+      const destination = /[\s<>]/.test(src) ? '<' + src.replace(/</g, '%3C').replace(/>/g, '%3E') + '>' : src.replace(/[()\\]/g, '\\$&')
+      state.write("![" + state.esc(node.attrs.alt || "") + "](" + destination +
                   (node.attrs.title ? ' "' + String(node.attrs.title).replace(/"/g, '\\"') + '"' : "") + ")")
     }
   },

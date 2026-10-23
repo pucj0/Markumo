@@ -19,7 +19,7 @@ export interface ControlledImage {
 const ALLOWED_ATTRIBUTES = new Set(['src', 'alt', 'title', 'width', 'align'])
 const ALIGNMENTS = new Set(['left', 'center', 'right'])
 /** `auto`, a percentage, or an explicit pixel width. Nothing else is persisted. */
-const WIDTH_PATTERN = /^(?:auto|\d{1,4}%|\d{1,5}px)$/
+const WIDTH_PATTERN = /^(?:auto|\d{1,4}%|\d{1,5}(?:px)?)$/
 /** Only a single, self-contained `<img … />` element may be recognised. */
 const IMAGE_PATTERN = /^<img((?:\s+[a-zA-Z][\w-]*\s*=\s*(?:"[^"<>]*"|'[^'<>]*'))*)\s*\/?>$/i
 const ATTRIBUTE_PATTERN = /([a-zA-Z][\w-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
@@ -71,7 +71,7 @@ export function parseControlledImageHtml(source: string): ControlledImage | null
   }
 
   const src = values.get('src')
-  if (!src) return null
+  if (src === undefined) return null
   // A destination must never carry markup-significant characters after unquoting.
   if (/[\0\r\n]/.test(src)) return null
 
@@ -79,18 +79,14 @@ export function parseControlledImageHtml(source: string): ControlledImage | null
   const align = normalizeImageAlign(values.get('align'))
   if (values.has('width') && width === null) return null
   if (values.has('align') && align === null) return null
-  // Recognising the element is only useful when it carries the extra state a
-  // plain Markdown image cannot express; otherwise keep normal Markdown.
-  if (!width && !align) return null
-
   return { src, alt: values.get('alt') ?? '', title: values.get('title') ?? null, width, align }
 }
 
 /** Writes the controlled `<img>` spelling, escaped and validated. */
-export function controlledImageHtml(image: ControlledImage): string | null {
+export function controlledImageHtml(image: ControlledImage, forceHtml = false): string | null {
   const width = normalizeImageWidth(image.width)
   const align = normalizeImageAlign(image.align)
-  if (!width && !align) return null
+  if (!width && !align && !forceHtml) return null
   const attributes = [`src="${escapeHtmlAttribute(image.src)}"`]
   if (image.alt) attributes.push(`alt="${escapeHtmlAttribute(image.alt)}"`)
   if (image.title) attributes.push(`title="${escapeHtmlAttribute(image.title)}"`)

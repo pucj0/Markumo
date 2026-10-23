@@ -1,18 +1,20 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import { NodeSelection } from 'prosemirror-state'
 import type { EditorView, NodeView } from 'prosemirror-view'
-import { imageDestination, type MarkdownResources } from '../images'
+import { mountMarkdownImage, type MarkdownResources } from '../images'
+import { positionImageOverlay } from './imageOverlay'
 
 export class LiveImageView implements NodeView {
-  readonly dom: HTMLElement
-  private img: HTMLImageElement | null = null
-  private placeholder: HTMLElement
-  private objectURL: string | undefined
+  readonly dom = document.createElement('span')
+  private media = document.createElement('span')
+  private toolbar = document.createElement('div')
+  private mounted?: ReturnType<typeof mountMarkdownImage>
   private disposed = false
-  private generation = 0
+  private selected = false
+  private frame = 0
+  private observer?: ResizeObserver
   private resourceIdentity: string
-  private previewButton = document.createElement('button')
-  private toolbar: HTMLElement
+  private get pane() { return this.view.dom.closest<HTMLElement>('.markdown-live')! }
 
   constructor(
     private node: PMNode,
@@ -24,399 +26,182 @@ export class LiveImageView implements NodeView {
     private onPreviewRequest?: (image: HTMLImageElement, current: () => boolean) => void
   ) {
     this.resourceIdentity = resources.identity()
-    this.dom = document.createElement('span')
     this.dom.className = 'md-image-preview md-live-image'
     this.dom.contentEditable = 'false'
-
-    this.placeholder = document.createElement('span')
-    this.placeholder.className = 'md-image-placeholder'
-    this.previewButton.type='button';this.previewButton.className='md-image-open';this.previewButton.textContent='放大预览';this.previewButton.hidden=true
-    this.previewButton.onclick=event=>{event.preventDefault();event.stopPropagation();this.openPreview()}
-
-    this.toolbar = document.createElement('div')
+    this.dom.title = '单击选中图片，双击放大预览，右键编辑属性'
     this.toolbar.className = 'md-image-toolbar'
+    this.toolbar.setAttribute('role', 'toolbar')
+    this.toolbar.setAttribute('aria-label', '图片操作')
     this.toolbar.contentEditable = 'false'
     this.toolbar.hidden = true
+    this.toolbar.onmousedown = event => event.preventDefault()
     this.buildToolbar()
-
-    this.dom.append(this.placeholder, this.toolbar, this.previewButton)
-    this.dom.title='单击选中图片工具栏，双击放大预览'
-    this.dom.ondblclick=event=>{event.preventDefault();event.stopPropagation();this.openPreview()}
-
+    this.dom.append(this.media, this.toolbar)
     this.dom.onmousedown = event => {
-      if (this.toolbar.contains(event.target as globalThis.Node)) return
-      if (event.button !== 0) return
-      const pos = this.getPos()
-      if (pos !== undefined && !this.disposed) {
-        // A browser caret selection after this event can replace our image
-        // NodeSelection, especially when the previously focused math input
-        // collapses on blur. Own the pointer selection and focus together.
-        event.preventDefault()
-        this.view.dispatch(
-          this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos))
-        )
-        this.view.focus()
-        this.selectNode()
-      }
+      if (event.button !== 0 || (event.target as Element).closest('button') || this.toolbar.contains(event.target as globalThis.Node)) return
+      event.preventDefault(); this.selectImage()
     }
-
     this.dom.onclick = event => {
-      if (this.toolbar.contains(event.target as globalThis.Node)) return
-      event.preventDefault()
-      event.stopPropagation()
-      const pos = this.getPos()
-      if (this.disposed || pos === undefined || this.view.state.doc.nodeAt(pos) !== this.node) return
-      this.view.dispatch(
-        this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos))
-      )
-      this.selectNode()
+      if ((event.target as Element).closest('button') || this.toolbar.contains(event.target as globalThis.Node)) return
+      event.preventDefault(); event.stopPropagation(); this.selectImage()
+    }
+    this.dom.ondblclick = event => {
+      if ((event.target as Element).closest('button')) return
+      event.preventDefault(); event.stopPropagation(); this.openPreview()
     }
     this.dom.oncontextmenu = event => {
-      const pos = this.getPos()
-      if (this.disposed || pos === undefined || this.view.state.doc.nodeAt(pos) !== this.node || !this.onPropertiesRequest) return
-      event.preventDefault(); event.stopPropagation()
-      this.onPropertiesRequest(this.dom, this.node, pos)
+      event.preventDefault(); event.stopPropagation(); this.selectImage(); this.properties()
     }
-
-    void this.loadImage()
+    this.loadImage()
     queueMicrotask(() => { if (!this.disposed) this.refreshLayout() })
   }
 
+  private selectImage() {
+    const pos = this.getPos()
+    if (this.disposed || pos === undefined || this.view.state.doc.nodeAt(pos) !== this.node) return
+    const selection = this.view.state.selection
+    if (!(selection instanceof NodeSelection) || selection.from !== pos) {
+      this.view.dispatch(this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos)))
+    }
+    this.view.focus(); this.selectNode()
+  }
+
+  private properties() {
+    const pos = this.getPos()
+    if (!this.disposed && pos !== undefined && this.view.state.doc.nodeAt(pos) === this.node) {
+      (this.onPropertiesRequest ?? this.onEditRequest)(this.dom, this.node, pos)
+    }
+  }
+
   private buildToolbar() {
-    // Alignment buttons: Left, Center, Right
-    const aligns: { id: 'left' | 'center' | 'right'; label: string; icon: string }[] = [
-      { id: 'left', label: '左对齐', icon: '⇤' },
-      { id: 'center', label: '居中', icon: '⇋' },
-      { id: 'right', label: '右对齐', icon: '⇥' },
-    ]
-    for (const a of aligns) {
-      const btn = document.createElement('button')
-      btn.type = 'button'
-      btn.className = `md-img-tool-btn md-img-align-${a.id}`
-      btn.title = a.label
-      btn.textContent = a.icon
-      btn.onclick = (e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        const nextAlign = this.node.attrs.align === a.id ? null : a.id
-        this.applyAttributes(this.node.attrs.width, nextAlign)
-      }
-      this.toolbar.append(btn)
+    const button = (className: string, label: string, text: string, run: () => void) => {
+      const el = document.createElement('button')
+      el.type = 'button'; el.className = `md-img-tool-btn ${className}`
+      el.title = label; el.setAttribute('aria-label', label); el.textContent = text
+      el.onclick = event => { event.preventDefault(); event.stopPropagation(); run() }
+      this.toolbar.append(el)
     }
-
-    const sep1 = document.createElement('span')
-    sep1.className = 'md-img-tool-sep'
-    this.toolbar.append(sep1)
-
-    // Width buttons: 25%, 50%, 75%, 100%, Auto
-    const widths: { id: string | null; label: string }[] = [
-      { id: '25%', label: '25%' },
-      { id: '50%', label: '50%' },
-      { id: '75%', label: '75%' },
-      { id: '100%', label: '100%' },
-      { id: null, label: '原图' },
-    ]
-    for (const w of widths) {
-      const btn = document.createElement('button')
-      btn.type = 'button'
-      btn.className = `md-img-tool-btn md-img-width-${w.id ? w.id.replace('%', '') : 'auto'}`
-      btn.title = `宽度 ${w.label}`
-      btn.textContent = w.label
-      btn.onclick = (e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        this.applyAttributes(w.id, this.node.attrs.align)
-      }
-      this.toolbar.append(btn)
+    for (const [align, label, icon] of [['left', '左对齐', '⇤'], ['center', '居中', '⇋'], ['right', '右对齐', '⇥']]) {
+      button(`md-img-align-${align}`, label, icon, () => this.applyAttributes(this.node.attrs.width, this.node.attrs.align === align ? null : align))
     }
-
-    const sep2 = document.createElement('span')
-    sep2.className = 'md-img-tool-sep'
-    this.toolbar.append(sep2)
-
-    // Preview button
-    const prevBtn = document.createElement('button')
-    prevBtn.type = 'button'
-    prevBtn.className = 'md-img-tool-btn md-img-tool-preview'
-    prevBtn.title = '放大预览'
-    prevBtn.textContent = '🔍'
-    prevBtn.onclick = (e) => {
-      e.preventDefault()
-      e.stopPropagation()
-      this.openPreview()
+    for (const width of ['25%', '50%', '75%', '100%', null]) {
+      button(`md-img-width-${width?.replace('%', '') ?? 'auto'}`, `宽度 ${width ?? '原图'}`, width ?? '原图', () => this.applyAttributes(width, this.node.attrs.align))
     }
-    this.toolbar.append(prevBtn)
-
-    // Edit path button
-    const editBtn = document.createElement('button')
-    editBtn.type = 'button'
-    editBtn.className = 'md-img-tool-btn md-img-tool-edit'
-    editBtn.title = '编辑图片路径'
-    editBtn.textContent = '✏️'
-    editBtn.onclick = (e) => {
-      e.preventDefault()
-      e.stopPropagation()
+    button('md-img-tool-preview', '放大预览', '放大', () => this.openPreview())
+    button('md-img-tool-properties', '图片属性', '属性', () => this.properties())
+    // Keep explicit source editing for users who ask for it.
+    button('md-img-tool-edit', '图片源码', '</>', () => {
       const pos = this.getPos()
       if (pos !== undefined) this.onEditRequest(this.dom, this.node, pos)
-    }
-    this.toolbar.append(editBtn)
-
-    // Delete button
-    const delBtn = document.createElement('button')
-    delBtn.type = 'button'
-    delBtn.className = 'md-img-tool-btn md-img-tool-delete'
-    delBtn.title = '删除图片'
-    delBtn.textContent = '🗑️'
-    delBtn.onclick = (e) => {
-      e.preventDefault()
-      e.stopPropagation()
-      this.deleteImage()
-    }
-    this.toolbar.append(delBtn)
+    })
+    button('md-img-tool-delete', '删除图片', '删除', () => this.deleteImage())
   }
 
   private applyAttributes(width: string | null, align: string | null) {
     const pos = this.getPos()
-    if (pos === undefined || this.disposed) return
-    const tr = this.view.state.tr.setNodeMarkup(pos, undefined, {
-      ...this.node.attrs,
-      width,
-      align,
-    }).setMeta('isolated', true)
-    this.view.dispatch(tr)
-    this.selectNode()
+    if (pos === undefined || this.disposed || !this.view.editable || this.node.attrs.width === width && this.node.attrs.align === align) return
+    const tr = this.view.state.tr.setNodeMarkup(pos, undefined, { ...this.node.attrs, width, align })
+    this.view.dispatch(tr.setSelection(NodeSelection.create(tr.doc, pos)).setMeta('isolated', true))
     this.view.focus()
   }
 
   private deleteImage() {
     const pos = this.getPos()
-    if (pos === undefined || this.disposed) return
-    const doc = this.view.state.doc
-    const $pos = doc.resolve(pos)
-    const parent = $pos.parent
-    const isStandalone = parent.type.name === 'paragraph' && parent.childCount === 1
-    let tr = this.view.state.tr
-    if (isStandalone && (doc.childCount > 1 || $pos.depth > 1)) {
-      tr = tr.delete($pos.before(), $pos.after())
-    } else {
-      tr = tr.delete(pos, pos + this.node.nodeSize)
-    }
-    this.view.dispatch(tr.setMeta('isolated', true).scrollIntoView())
-    this.view.focus()
+    if (pos === undefined || this.disposed || !this.view.editable) return
+    const doc = this.view.state.doc, $pos = doc.resolve(pos)
+    const standalone = $pos.parent.type.name === 'paragraph' && $pos.parent.childCount === 1
+    const tr = standalone && (doc.childCount > 1 || $pos.depth > 1)
+      ? this.view.state.tr.delete($pos.before(), $pos.after())
+      : this.view.state.tr.delete(pos, pos + this.node.nodeSize)
+    this.view.dispatch(tr.setMeta('isolated', true)); this.view.focus()
   }
 
   refreshLayout() {
     const pos = this.getPos()
     if (this.disposed || pos === undefined) return
     const parent = this.view.state.doc.resolve(pos).parent
-    this.dom.classList.toggle('md-image-standalone', parent.type.name === 'paragraph' && parent.childCount === 1 && parent.firstChild?.type.name === 'image')
-
-    const width = this.node.attrs.width
-    const align = this.node.attrs.align
-    if (width) {
-      const w = String(width).endsWith('%') || String(width).endsWith('px') ? width : `${width}px`
-      this.dom.style.width = w
-      this.dom.style.maxWidth = '100%'
-    } else {
-      this.dom.style.width = ''
-      this.dom.style.maxWidth = ''
-    }
-
-    if (align === 'center') {
-      this.dom.style.display = 'block'
-      this.dom.style.margin = '0 auto'
-      this.dom.style.textAlign = 'center'
-    } else if (align === 'right') {
-      this.dom.style.display = 'block'
-      this.dom.style.margin = '0 0 0 auto'
-      this.dom.style.textAlign = 'right'
-    } else if (align === 'left') {
-      this.dom.style.display = 'block'
-      this.dom.style.margin = '0 auto 0 0'
-      this.dom.style.textAlign = 'left'
-    } else {
-      this.dom.style.display = ''
-      this.dom.style.margin = ''
-      this.dom.style.textAlign = ''
-    }
+    const standalone = parent.type.name === 'paragraph' && parent.childCount === 1
+    this.dom.classList.toggle('md-image-standalone', standalone)
+    const width = this.node.attrs.width === 'auto' ? null : this.node.attrs.width, align = this.node.attrs.align
+    this.dom.style.width = width ? /(?:%|px)$/.test(String(width)) ? width : `${width}px` : ''
+    this.dom.classList.toggle('md-image-sized', !!width)
+    // Inline alignment must never split a mixed text paragraph into blocks.
+    this.dom.style.display = standalone && align ? 'block' : ''
+    this.dom.style.margin = standalone && align ? align === 'center' ? '0 auto' : align === 'right' ? '0 0 0 auto' : '0 auto 0 0' : ''
+    this.dom.style.textAlign = standalone ? align ?? '' : ''
+    this.dom.dataset.imageAlign = standalone ? align ?? '' : ''
+    this.schedulePosition()
   }
 
-  private openPreview(){
-    if(!this.img?.naturalWidth || this.disposed)return
-    const expected=this.node
-    this.onPreviewRequest?.(this.img,()=>{if(this.disposed)return false;const pos=this.getPos();return pos!==undefined&&this.view.state.doc.nodeAt(pos)===expected})
+  private schedulePosition = () => {
+    if (!this.selected || this.disposed || this.frame) return
+    this.frame = requestAnimationFrame(() => {
+      this.frame = 0
+      if (this.selected && !this.disposed) {
+        this.toolbar.hidden = !this.view.hasFocus()
+        if (!this.toolbar.hidden) positionImageOverlay(this.toolbar, this.media.querySelector('img') ?? this.media, this.pane)
+      }
+    })
   }
 
-  async loadImage() {
-    this.previewButton.hidden=true
-    const current = ++this.generation
-    const source = this.node.attrs.src || ''
-    const alt = this.node.attrs.alt || ''
-    const destination = imageDestination(source)
+  private openPreview() {
+    const image = this.media.querySelector('img'), expected = this.node
+    if (!image?.naturalWidth || this.disposed) return
+    this.onPreviewRequest?.(image, () => !this.disposed && this.getPos() !== undefined && this.view.state.doc.nodeAt(this.getPos()!) === expected)
+  }
 
-    if (this.objectURL) {
-      URL.revokeObjectURL(this.objectURL)
-      this.objectURL = undefined
-    }
-
-    if (this.img) {
-      this.img.remove()
-      this.img = null
-    }
-
-    if (!source || (source === 'image.png' && alt === '图片描述')) {
-      this.placeholder.textContent = '🖼️ (空图片路径)'
-      this.placeholder.hidden = false
-      return
-    }
-
-    this.placeholder.textContent = '图片加载中…'
-    this.placeholder.hidden = false
-
-    try {
-      let src: string
-
-      if (destination.kind === 'blocked') {
-        this.placeholder.textContent = '🚫 路径未获允许'
-        return
-      }
-
-      if (destination.kind === 'remote') {
-        if (!this.resources.allowedRemote.has(destination.path)) {
-          this.placeholder.textContent = `🌐 点击加载网络图片 (${new URL(destination.path).hostname})`
-          this.placeholder.onclick = e => {
-            e.stopPropagation()
-            this.resources.allowedRemote.add(destination.path)
-            void this.loadImage()
-          }
-          return
-        }
-        src = destination.path
-      } else {
-        const bytes = await this.resources.loadLocal(destination.path)
-        if (this.disposed || current !== this.generation) return
-        const type =
-          bytes[0] === 0x89
-            ? 'image/png'
-            : bytes[0] === 0xff
-            ? 'image/jpeg'
-            : bytes[0] === 0x47
-            ? 'image/gif'
-            : 'image/webp'
-        this.objectURL = URL.createObjectURL(new Blob([bytes], { type }))
-        src = this.objectURL
-      }
-
-      if (this.disposed || current !== this.generation) return
-
-      const img = document.createElement('img')
-      img.alt = alt
-      img.referrerPolicy = 'no-referrer'
-      img.decoding = 'async'
-      if (destination.kind === 'remote') img.crossOrigin = 'anonymous'
-
-      img.onload = () => {
-        if (this.disposed || current !== this.generation) return
-        this.dom.classList.remove('is-broken-image')
-        this.placeholder.hidden = true
-        this.previewButton.hidden = !this.onPreviewRequest
-      }
-
-      img.onerror = () => {
-        if (this.disposed || current !== this.generation) return
-        this.placeholder.textContent = '⚠️ 图片加载失败'
-        this.placeholder.hidden = false
-        if (this.img) this.img.remove()
-      }
-
-      this.img = img
-      this.dom.prepend(img)
-      img.src = src
-    } catch (error) {
-      if (this.disposed || current !== this.generation) return
-      const isScope =
-        typeof error === 'object' && error && 'code' in error && error.code === 'image_scope'
-      if (isScope && this.resources.authorizeLocal) {
-        this.placeholder.textContent = '🔒 点击授权访问此图片…'
-        this.placeholder.onclick = async e => {
-          e.stopPropagation()
-          try {
-            if (await this.resources.authorizeLocal!(destination.path)) {
-              void this.loadImage()
-            }
-          } catch (err) {
-            this.placeholder.textContent = `授权失败: ${String(err)}`
-          }
-        }
-      } else {
-        this.dom.classList.add('is-broken-image')
-        this.placeholder.className = 'md-image-placeholder broken-image-tag'
-        this.placeholder.innerHTML = `<svg class="broken-image-svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15l-5-5L5 21"/><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><line x1="2" y1="2" x2="22" y2="22"/></svg><span class="broken-image-text">${alt || source || '图片失效'}</span>`
-        this.placeholder.title = `图片无法显示: ${String(error)}`
-        this.placeholder.onclick = (e) => {
-          e.stopPropagation()
-          const pos = this.getPos()
-          if (pos !== undefined) this.onEditRequest(this.dom, this.node, pos)
-        }
-      }
-    }
+  loadImage() {
+    this.mounted?.destroy()
+    this.mounted = mountMarkdownImage(this.media, this.node.attrs.src ?? '', this.node.attrs.alt ?? '', this.resources,
+      () => this.properties(), () => {
+        this.dom.classList.toggle('is-broken-image', this.media.classList.contains('is-broken-image'))
+        this.schedulePosition()
+      }, { live: true })
   }
 
   refreshResource() {
-    const current = this.resources.identity()
-    if (current !== this.resourceIdentity) {
-      this.resourceIdentity = current
-      void this.loadImage()
-    }
+    const identity = this.resources.identity()
+    if (identity !== this.resourceIdentity) { this.resourceIdentity = identity; this.loadImage() }
   }
 
   update(node: PMNode): boolean {
     if (node.type !== this.node.type) return false
-    const changed = node.attrs.src !== this.node.attrs.src
+    const reload = node.attrs.src !== this.node.attrs.src || node.attrs.alt !== this.node.attrs.alt
     this.node = node
-    if (this.img) {
-      this.img.alt = node.attrs.alt || ''
-    }
-    if (changed) {
-      void this.loadImage()
-    }
-    this.refreshLayout()
-    return true
+    if (reload) this.loadImage()
+    this.refreshLayout(); return true
   }
 
   selectNode() {
-    this.dom.classList.add('md-image-selected')
-    this.toolbar.hidden = false
+    if (this.disposed) return
+    this.dom.classList.add('md-image-selected'); this.toolbar.hidden = false
+    if (!this.selected) {
+      this.selected = true
+      window.addEventListener('resize', this.schedulePosition)
+      document.addEventListener('scroll', this.schedulePosition, true)
+      document.addEventListener('focusin', this.schedulePosition)
+      document.addEventListener('focusout', this.schedulePosition)
+      this.observer = new ResizeObserver(this.schedulePosition)
+      this.observer.observe(this.pane); this.observer.observe(this.media); this.observer.observe(this.toolbar)
+    }
+    this.schedulePosition()
   }
 
   deselectNode() {
-    this.dom.classList.remove('md-image-selected')
-    this.toolbar.hidden = true
+    this.selected = false
+    this.dom.classList.remove('md-image-selected'); this.toolbar.hidden = true
+    window.removeEventListener('resize', this.schedulePosition)
+    document.removeEventListener('scroll', this.schedulePosition, true)
+    document.removeEventListener('focusin', this.schedulePosition)
+    document.removeEventListener('focusout', this.schedulePosition)
+    this.observer?.disconnect(); this.observer = undefined
+    cancelAnimationFrame(this.frame); this.frame = 0
   }
 
-  stopEvent(_event: Event) {
-    return true
-  }
-
-  ignoreMutation() {
-    // This atom has no contentDOM: image loading, selection and layout only
-    // mutate its presentation. Re-parsing those mutations calls update(),
-    // which writes image attributes/styles again and can loop indefinitely.
-    // Document edits go through explicit transactions in the toolbar handlers.
-    return true
-  }
-
+  stopEvent(event: Event) { return !(event instanceof KeyboardEvent) }
+  ignoreMutation() { return true }
   destroy() {
-    this.dom.onclick=null;this.dom.ondblclick=null;this.dom.oncontextmenu=null
-    this.disposed = true
-    this.generation++
-    if (this.objectURL) {
-      URL.revokeObjectURL(this.objectURL)
-      this.objectURL = undefined
-    }
-    if (this.img) {
-      this.img.onload = null
-      this.img.onerror = null
-    }
+    this.deselectNode(); this.disposed = true; this.mounted?.destroy()
+    this.dom.onclick = this.dom.ondblclick = this.dom.oncontextmenu = this.dom.onmousedown = null
   }
 }

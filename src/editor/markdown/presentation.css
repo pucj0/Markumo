@@ -300,10 +300,10 @@ body.light :is(.markdown-live, .split-preview-pane) {
 }
 
 .md-image-toolbar {
-  position: absolute;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
+  position: fixed;
+  top: 0;
+  left: 0;
+  transform: none;
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -315,6 +315,10 @@ body.light :is(.markdown-live, .split-preview-pane) {
   z-index: 50;
   user-select: none;
   white-space: nowrap;
+  flex-wrap: wrap;
+  box-sizing: border-box;
+  overflow: auto;
+  line-height: 1.4;
 }
 
 .md-img-tool-btn {

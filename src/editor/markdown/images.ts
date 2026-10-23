@@ -5,6 +5,7 @@ import { safeMarkdownURL } from './links'
 export interface MarkdownResources {
   loadLocal(path: string): Promise<Uint8Array<ArrayBuffer>>
   authorizeLocal?(path: string): Promise<boolean>
+  chooseLocal?(): Promise<string | null>
   allowedRemote: Set<string>
   identity(): string
 }
@@ -18,6 +19,19 @@ export function createMarkdownResources(token: () => string | undefined,identity
   return {
     allowedRemote: new Set(),
     identity,
+    async chooseLocal() {
+      const grant = token()
+      if (!isTauri() || !grant) throw new Error('请先保存 Markdown 文档，再选择本地图片。')
+      const expected = identity()
+      const inputs = await invoke<{ token: string; name: string }[]>('choose_markdown_images')
+      try {
+        if (!inputs.length || identity() !== expected) return null
+        const result = await invoke<{ path: string }>('import_markdown_image', { input: {
+          token: grant, sourceToken: inputs[0].token, name: inputs[0].name, directory: null,
+        } })
+        return identity() === expected ? result.path.replace(/\\/g, '/').split('/').map((part, index) => index === 0 && /^[a-z]:$/i.test(part) ? part : encodeURIComponent(part)).join('/') : null
+      } finally { await invoke('release_image_inputs', { tokens: inputs.map(input => input.token) }) }
+    },
     async authorizeLocal(path) {
       const grant=token()
       if(!isTauri()||!grant)return false
@@ -43,6 +57,18 @@ export function createMarkdownResources(token: () => string | undefined,identity
   }
 }
 export type ImageDestination = { kind: 'remote'; path: string } | { kind: 'local'; path: string } | { kind: 'blocked'; path: string }
+/** Rust IPC errors are plain {code,message} objects, not JavaScript Errors. */
+export function markdownImageError(error: unknown): { message: string; authorize: boolean } {
+  const record = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown } : null
+  const code = typeof record?.code === 'string' ? record.code : ''
+  const detail = (typeof record?.message === 'string' ? record.message : typeof error === 'string' ? error : '')
+    .replace(/\[object Object\]/g, '').trim()
+  if (code === 'image_scope') return { message: '文件未授权：请授权访问或重新选择图片。', authorize: true }
+  if (code === 'image_size') return { message: '图片尺寸或文件大小超出安全预算。', authorize: false }
+  if (code === 'image_format') return { message: '图片格式不支持或文件已损坏。支持 PNG、JPEG、GIF、WebP。', authorize: false }
+  if (/not.?found|不存在|找不到|os error 2|os error 3|cannot find/i.test(detail)) return { message: '文件不存在：请修改路径或重新选择图片。', authorize: false }
+  return { message: detail ? `图片加载失败：${detail}` : '图片加载失败，请重试或重新选择图片。', authorize: false }
+}
 let retainedBytes=0,retainedPixels=0
 export function imageDestination(source: string): ImageDestination {
   const raw = source.replace(/^<|>$/g, '').replace(/\\([\\()<> ])/g, '$1')
@@ -57,7 +83,7 @@ export function imageDestination(source: string): ImageDestination {
 }
 
 /** Safe DOM only. No src is assigned to a remote image until explicit consent. */
-export function mountMarkdownImage(host: HTMLElement, source: string, alt: string, resources: MarkdownResources, edit: () => void, measure: () => void = () => {}) {
+export function mountMarkdownImage(host: HTMLElement, source: string, alt: string, resources: MarkdownResources, edit: () => void, measure: () => void = () => {}, options: { live?: boolean } = {}) {
   const destination = imageDestination(source)
   host.replaceChildren()
   let disposed = false, objectURL: string | undefined, timer: ReturnType<typeof setTimeout> | undefined, generation = 0, heldBytes=0,heldPixels=0, needsAuthorization=false
@@ -65,18 +91,19 @@ export function mountMarkdownImage(host: HTMLElement, source: string, alt: strin
     if(objectURL)URL.revokeObjectURL(objectURL);objectURL=undefined
     retainedBytes-=heldBytes;retainedPixels-=heldPixels;heldBytes=heldPixels=0
   }
-  host.classList.add('md-image-preview'); host.title = `${alt}\n${source}`
+  host.className = options.live ? 'md-image-media' : 'md-image-preview'; host.title = `${alt}\n${source}`
   const status = document.createElement('span'); status.className = 'md-image-status'
-  const path = document.createElement('button'); path.type = 'button'; path.className = 'md-image-path'; path.textContent = source || '(空图片路径)'; path.title = '编辑图片路径'; path.onclick = edit
+  const path = document.createElement('button'); path.type = 'button'; path.className = 'md-image-path'; path.textContent = source || '选择或填写图片路径'; path.title = '编辑图片路径'; path.onclick = event => { event.stopPropagation(); edit() }
   const action = document.createElement('button'); action.type = 'button'; action.className = 'md-image-action'
   host.append(status, path, action)
   const failure = (reason: string) => {
     host.classList.add('is-broken-image')
     host.title = `${alt ? alt + ' · ' : ''}${source}\n（${reason}）`
-    status.innerHTML = `<span class="broken-image-tag" role="button" tabindex="0" title="${reason}"><svg class="broken-image-svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15l-5-5L5 21"/><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><line x1="2" y1="2" x2="22" y2="22"/></svg><span class="broken-image-text">${alt || source || '图片失效'}</span><span class="broken-image-sr" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0">${reason}</span></span>`
-    const tag = status.querySelector('.broken-image-tag')
-    if (tag) tag.addEventListener('click', edit)
-    path.hidden = true
+    const tag = document.createElement('button'); tag.type = 'button'; tag.className = 'broken-image-tag'
+    tag.textContent = alt ? `${alt} · ${reason}` : reason
+    tag.title = '修改图片属性'; tag.onclick = event => { event.stopPropagation(); edit() }
+    status.replaceChildren(tag)
+    path.hidden = options.live === true
     action.hidden = destination.kind === 'blocked'
     action.textContent = '重试'
     action.className = 'md-image-action broken-retry-btn'
@@ -87,13 +114,14 @@ export function mountMarkdownImage(host: HTMLElement, source: string, alt: strin
     if (timer) clearTimeout(timer)
     host.querySelector('img')?.remove()
     host.classList.remove('is-broken-image')
+    needsAuthorization = false
     path.hidden = false
     action.className = 'md-image-action'
     release()
     status.textContent = '图片加载中…'; action.hidden = true
     try {
       let src: string
-      if (destination.kind === 'blocked') { failure('只允许授权本地路径或经确认的 HTTPS 图片'); return }
+      if (destination.kind === 'blocked') { failure(source.trim() ? '路径无效：只允许本地路径或经确认的 HTTPS 图片。' : '路径为空：点击填写或选择图片。'); return }
       if (destination.kind === 'remote') src = destination.path
       else {
         const bytes = await resources.loadLocal(destination.path)
@@ -106,31 +134,33 @@ export function mountMarkdownImage(host: HTMLElement, source: string, alt: strin
       if (disposed || current !== generation) return
       const image = document.createElement('img'); image.alt = alt; image.referrerPolicy = 'no-referrer'; image.decoding = 'async'
       if (destination.kind === 'remote') image.crossOrigin = 'anonymous'
-      image.onclick = edit
+      if (!options.live) image.onclick = edit
       image.onload = () => {
         if (disposed || current !== generation) return
         if (timer) clearTimeout(timer)
         const pixels=image.naturalWidth*image.naturalHeight
         if (image.naturalWidth > 16384 || image.naturalHeight > 16384 || pixels > 16_000_000 || retainedPixels+pixels>32_000_000) { image.remove();release();failure('图片尺寸或当前预览总像素超过预算');return }
         heldPixels=pixels;retainedPixels+=pixels
-        status.textContent = ''; measure()
+        status.textContent = ''; path.hidden = !!options.live; action.hidden = true; measure()
       }
       image.onerror = () => { if (!disposed && current === generation) { if (timer) clearTimeout(timer); image.remove();release();failure('加载失败或远程服务器未允许匿名跨域访问') } }
       timer = setTimeout(() => { if (!disposed && current === generation) { generation++; image.remove();release();failure('加载超时') } }, 15000)
       host.prepend(image); image.src = src; measure()
     } catch (error) {
       if (!disposed && current === generation) {
-        release();failure(typeof error === 'object' && error && 'message' in error ? String(error.message) : String(error))
-        needsAuthorization=destination.kind==='local'&&!!resources.authorizeLocal&&typeof error==='object'&&!!error&&'code' in error&&error.code==='image_scope'
+        const failureInfo = markdownImageError(error)
+        release();failure(failureInfo.message)
+        needsAuthorization=destination.kind==='local'&&!!resources.authorizeLocal&&failureInfo.authorize
         if(needsAuthorization)action.textContent='授权此本地图片…'
       }
     }
   }
-  action.onclick = async () => {
+  action.onclick = async event => {
+    event.stopPropagation()
     if(needsAuthorization){
       action.disabled=true
       try{if(!await resources.authorizeLocal?.(destination.path))return;needsAuthorization=false}
-      catch(error){failure(error instanceof Error?error.message:String(error));return}
+      catch(error){if(!disposed)failure(markdownImageError(error).message);return}
       finally{action.disabled=false}
       if(disposed)return
     }
