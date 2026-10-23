@@ -125,6 +125,7 @@ try{
   await setup([]);await preview().waitFor();await select('B');await page.waitForFunction(()=>document.querySelector('.history-preview-pre')?.textContent==='body B')
   await page.evaluate(()=>H.recordGate=H.defer());await page.locator('.history-action-btn.restore').click();await page.getByRole('button',{name:'确认恢复',exact:true}).click()
   await page.waitForFunction(()=>H.calls.some(call=>call.command==='history_record'))
+  assert.equal(await page.locator('.history-clean-btn').isDisabled(),true,'clear must not replace an in-flight restore confirmation/request')
   await page.evaluate(()=>{H.manager.dispatch(H.a,{changes:{from:0,to:7,insert:'EDITED DURING RESTORE'},userEvent:'input.test'});H.recordGate.resolve()})
   await page.waitForFunction(()=>document.querySelector('[role=alert]')?.textContent.includes('发生变化'))
   assert.equal(await page.evaluate(()=>H.manager.getText(H.a)),'EDITED DURING RESTORE');assert.equal(await page.evaluate(()=>H.restored),0)

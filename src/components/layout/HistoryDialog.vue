@@ -14,7 +14,7 @@
         <div class="history-sidebar">
           <div class="history-sidebar-header">
             <span>保存记录 ({{ versions.length }})</span>
-            <button v-if="versions.length" class="history-clean-btn" title="清理该文件的所有历史版本" @click="clearAll">全部清理</button>
+            <button v-if="versions.length" class="history-clean-btn" :disabled="restoring" title="清理该文件的所有历史版本" @click="clearAll">全部清理</button>
           </div>
           <div v-if="!versions.length" class="history-empty">
             <p>暂无历史保存版本</p>
@@ -274,7 +274,7 @@ async function deleteSelected() {
 }
 
 async function clearAll() {
-  if (!props.filePath) return
+  if (!props.filePath || restoring.value) return
   const path=props.filePath,documentId=props.documentId
   const request=++restoreRequest
   const ok = await askConfirmation('确定清空该文件的所有历史版本记录吗？此操作不可撤销。','确认清空')
