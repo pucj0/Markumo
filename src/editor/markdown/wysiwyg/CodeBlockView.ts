@@ -13,7 +13,7 @@ import type { EditorView, NodeView } from 'prosemirror-view'
 import { parseFenceInfo, loadLanguage } from '../../languages'
 import { textClipboard } from '../../../features/shell/clipboard'
 import type { MarkdownTypography } from './contracts'
-import { LanguageSupport } from '@codemirror/language'
+import { LanguageSupport, indentUnit } from '@codemirror/language'
 import { syntaxSpans } from '../../core/syntaxSpans'
 import { staticCodeLines } from '../staticCode'
 
@@ -65,6 +65,9 @@ export class CodeBlockView implements NodeView {
   private caret = new Compartment()
   private brackets = new Compartment()
   private editable = new Compartment()
+  private indentation = new Compartment()
+  private indentSize = 2
+  private useTabs = false
   private updating = false
   private dead = false
   private generation = 0
@@ -310,6 +313,7 @@ export class CodeBlockView implements NodeView {
           this.editable.of([CMState.readOnly.of(!this.outer.editable), CMView.editable.of(this.outer.editable)]),
           this.caret.of([smoothCaret(this.caretAnim), this.caretAnim === 'off' ? [] : drawSelection()]),
           this.language.of([]),
+          this.indentation.of([CMState.tabSize.of(this.indentSize), indentUnit.of(this.useTabs ? '\t' : ' '.repeat(this.indentSize))]),
           this.numbers.of(this.settings.codeLineNumbers ? lineNumbers() : []),
           this.wrap.of(this.settings.codeWrap ? CMView.lineWrapping : []),
           markumoSyntax,
@@ -678,6 +682,13 @@ export class CodeBlockView implements NodeView {
       })
     }
     if (this.placeholder) this.renderPlaceholder()
+  }
+
+  indent(size: number, tabs: boolean) {
+    this.indentSize = size
+    this.useTabs = tabs
+    this.dom.style.tabSize = String(size)
+    this.cmInstance?.dispatch({ effects: this.indentation.reconfigure([CMState.tabSize.of(size), indentUnit.of(tabs ? '\t' : ' '.repeat(size))]) })
   }
 
   bracketMode(mode: BracketMode) {

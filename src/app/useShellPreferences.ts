@@ -51,7 +51,7 @@ export function useShellPreferences(host: ShellPreferencesHost) {
   const defaultMdMode = ref<MarkdownMode>('live')
   const liveToolbar = ref(true)
   const fontFamily = ref<EditorSettings['fontFamily']>('system')
-  const indentSize = ref(4)
+  const indentSize = ref(2)
   const useTabs = ref(false)
 
   const autoCheckUpdates = ref(true)

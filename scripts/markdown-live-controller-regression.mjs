@@ -84,6 +84,56 @@ try {
   await page.waitForFunction(() => window.f)
 
   if (!profile) {
+    await test('embedded Markdown editors follow indentation defaults, saved settings, live changes and remounts', async () => {
+      const before = '```text\nvalue\n```\n\n<div>HTML</div>\n'
+      await reset(before)
+      const code = pane => page.locator(`[data-pane="${pane}"] .md-code-block .cm-content`)
+      const selectStart = async pane => {
+        await code(pane).waitFor()
+        await page.evaluate(pane => {
+          const cm = window.f.CMView.findFromDOM(document.querySelector(`[data-pane="${pane}"] .md-code-block .cm-editor`))
+          cm.dispatch({ selection: { anchor: 0 } }); cm.focus()
+        }, pane)
+      }
+      const checkTab = async (pane, prefix) => {
+        await selectStart(pane)
+        await page.keyboard.press('Tab'); await ready()
+        assert.equal(await page.evaluate(pane => window.f.CMView.findFromDOM(document.querySelector(`[data-pane="${pane}"] .md-code-block .cm-editor`)).state.doc.toString(), pane), prefix + 'value')
+        assert((await source()).includes('\n' + prefix + 'value\n'))
+        await page.keyboard.press('Shift+Tab'); await ready()
+        assert.equal(await source(), before)
+      }
+      await checkTab('main', '  ')
+      await page.evaluate(() => {
+        const f = window.f
+        f.manager.setMarkdownMode(f.id, 'source', 'main')
+        f.manager.setIndent(4, false)
+        f.manager.setMarkdownMode(f.id, 'live', 'main')
+      }); await ready()
+      await checkTab('main', '    ')
+      await page.evaluate(() => window.f.split()); await ready()
+      for (const [size, tabs] of [[2, false], [8, false], [4, true]]) {
+        const depth = await page.evaluate(() => window.f.history().undo)
+        await page.evaluate(([size, tabs]) => window.f.manager.setIndent(size, tabs), [size, tabs])
+        assert.equal(await page.evaluate(() => window.f.history().undo), depth, 'Changing indentation must not add an undo event')
+        for (const pane of await page.evaluate(() => window.f.panes)) {
+          await checkTab(pane, tabs ? '\t' : ' '.repeat(size))
+          assert.equal(await page.evaluate(pane => window.f.CMView.findFromDOM(document.querySelector(`[data-pane="${pane}"] .md-code-block .cm-editor`)).state.tabSize, pane), size)
+        }
+      }
+      await page.evaluate(() => window.f.manager.setIndent(4, false))
+      await page.locator('[data-pane="main"] .md-html-edit-trigger').click()
+      const html = page.locator('[data-pane="main"] .md-html-source-editor .cm-content')
+      await html.waitFor()
+      await page.evaluate(() => {
+        const cm = window.f.CMView.findFromDOM(document.querySelector('[data-pane="main"] .md-html-source-editor .cm-editor'))
+        cm.dispatch({ selection: { anchor: 0 } }); cm.focus()
+      })
+      await page.keyboard.press('Tab'); await ready()
+      assert((await source()).includes('    <div>HTML</div>'))
+      await page.keyboard.press('Shift+Tab'); await ready()
+      assert.equal(await source(), before)
+    })
     await test('terminal components expose one clickable paragraph without changing clean source; typing, undo/redo and mode switches stay canonical', async () => {
       for (const text of ['```js\nlast code line\n```', '```mermaid\ngraph TD\nA-->B\n```',
         '| A | B |\n| --- | --- |\n| one | two |', '$$\nx^2\n$$', '---', '![pixel](./assets/pixel.png)', '<div>HTML block</div>']) {

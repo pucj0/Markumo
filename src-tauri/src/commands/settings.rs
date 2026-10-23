@@ -114,7 +114,7 @@ impl Default for EditorSettings {
             bracket_mode: "matching".into(),
             show_outline: false,
             outline_width: 240,
-            indent_size: 4,
+            indent_size: 2,
             use_tabs: false,
             default_md_mode: "live".into(),
             live_toolbar: true,

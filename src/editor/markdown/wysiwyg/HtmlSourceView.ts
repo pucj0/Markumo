@@ -2,6 +2,7 @@ import { EditorState as CMState, EditorSelection, Compartment } from '@codemirro
 import { EditorView as CMView, keymap } from '@codemirror/view'
 import { defaultKeymap, indentWithTab } from '@codemirror/commands'
 import { html, htmlLanguage } from '@codemirror/lang-html'
+import { indentUnit } from '@codemirror/language'
 import { Selection } from 'prosemirror-state'
 import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorView, NodeView } from 'prosemirror-view'
@@ -34,6 +35,9 @@ export class HtmlSourceView implements NodeView {
   private dead=false
   private generation=0
   private brackets=new Compartment()
+  private indentation=new Compartment()
+  private indentSize=2
+  private useTabs=false
   private bracketPreference:BracketMode='matching'
   constructor(private node:PMNode,private view:EditorView,readonly getPos:()=>number|undefined,
     private inline:boolean,private resources:MarkdownResources|undefined,private editing:HtmlEditing) {
@@ -64,6 +68,10 @@ export class HtmlSourceView implements NodeView {
     this.render()
   }
   get composing(){return !!this.cm?.compositionStarted}
+  indent(size:number,tabs:boolean){
+    this.indentSize=size;this.useTabs=tabs
+    this.cm?.dispatch({effects:this.indentation.reconfigure([CMState.tabSize.of(size),indentUnit.of(tabs?'\t':' '.repeat(size))])})
+  }
   bracketMode(mode:BracketMode){
     this.bracketPreference=mode
     this.cm?.dispatch({effects:this.brackets.reconfigure(bracketHighlight(mode))})
@@ -99,6 +107,7 @@ export class HtmlSourceView implements NodeView {
     this.dom.classList.add('md-html-editing')
     this.cm=new CMView({parent:this.editorHost,state:CMState.create({doc:source,selection:EditorSelection.cursor(Math.max(0,Math.min(source.length,offset??source.length))),extensions:[
       html(),markumoSyntax,this.brackets.of(bracketHighlight(this.bracketPreference)),CMView.lineWrapping,
+      this.indentation.of([CMState.tabSize.of(this.indentSize),indentUnit.of(this.useTabs?'\t':' '.repeat(this.indentSize))]),
       CMView.editorAttributes.of({style:'height:auto;min-height:0;width:100%'}),
       CMView.contentAttributes.of({'aria-label':'HTML 局部源码'}),
       keymap.of([

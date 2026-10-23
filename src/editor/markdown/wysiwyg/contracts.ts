@@ -38,6 +38,7 @@ export interface LiveEditor {
   insertToolbar(command:MarkdownToolbarCommand):boolean
   insertTable(rows:number,columns:number):boolean
   typography(settings:MarkdownTypography):void
+  indent(size:number,tabs:boolean):void
   caretAnimation(mode:CaretAnimation):void
   bracketMode(mode:BracketMode):void
   clipboardSettings(settings:MarkdownClipboardSettings):void
@@ -55,6 +56,8 @@ export interface LiveOptions {
   shortcutLabel?(id:string):string|undefined
   caretAnimation?:CaretAnimation
   bracketMode?:BracketMode
+  indentSize?:number
+  useTabs?:boolean
   typewriterMode?: boolean
   isPaneActive?(): boolean
   source:string; anchor:number; head:number; resources:MarkdownResources; typography:MarkdownTypography; clipboard?:MarkdownClipboardSettings

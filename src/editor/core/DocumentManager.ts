@@ -80,7 +80,7 @@ export class DocumentManager {
   private wordWrap = false
   private theme: Theme = 'dark'
   private defaultMarkdownMode: MarkdownMode = 'live'
-  private indentSize = 4
+  private indentSize = 2
   private useTabs = false
   private applying = false
   private fileModes: Record<string, MarkdownMode> = {}
@@ -733,6 +733,7 @@ export class DocumentManager {
         const editor=new MarkdownEditorController(parent,{
           shortcutLabel:id=>this.shortcutLabels[id],
           source,anchor:saved.selection.main.anchor,head:saved.selection.main.head,resources:record.state.facet(markdownResources),typography:this.markdownTypography,clipboard:this.markdownClipboard,caretAnimation:this.caretAnimation,bracketMode:this.bracketMode,
+          indentSize:this.indentSize,useTabs:this.useTabs,
           typewriterMode:this.typewriterMode,isPaneActive:()=>this.activePane===resolved,
           publish:(expected,patch,update,isolated)=>{
             if(this.records.get(record.meta.id)!==record||record.state.doc.toString()!==expected||record.state.readOnly)return false
@@ -1055,6 +1056,7 @@ export class DocumentManager {
     if (!Number.isInteger(size) || size < 1 || size > 8) return
     this.indentSize = size; this.useTabs = tabs
     for (const record of this.records.values()) this.effects(record, [record.indent.reconfigure([EditorState.tabSize.of(size), indentUnit.of(tabs ? '\t' : ' '.repeat(size))])])
+    for (const live of this.liveViews.values()) live.editor.indent(size, tabs)
   }
 
   private get focusedCodeView() {

@@ -91,6 +91,7 @@ async function text(){return page.evaluate(()=>window.s.manager.getState(window.
 try{
  await page.goto(`http://127.0.0.1:${port}/test-results/settings-keybindings/index.html`);await page.waitForFunction(()=>window.s?.manager&&window.f)
  await test('catalog defaults, presets, every command has an actual shell entry',async()=>{
+   assert.equal(await page.evaluate(()=>window.f.defaultSettings().indentSize),2)
    const result=await page.evaluate(()=>{const f=window.f;return {missing:f.allCommands.filter(c=>!window.s.commandRegistry.get(c.id)).map(c=>c.id),presets:['markumo','fleet','typora'].map(id=>({id,errors:f.validatePresetConflicts(f.getPresetBindings(id)),validation:f.validateShortcuts(f.getPresetBindings(id))})),count:Object.keys(f.defaultSettings().shortcuts).length,catalog:f.allCommands.length}})
    assert.deepEqual(result.missing,[]);assert.equal(result.count,result.catalog);for(const preset of result.presets){assert.deepEqual(preset.errors,[]);assert.equal(preset.validation,null)}
  })
