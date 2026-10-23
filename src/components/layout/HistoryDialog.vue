@@ -76,6 +76,12 @@
       </div>
     </div>
   </div>
+  <div v-if="confirmationVisible" class="history-confirm-overlay" @click="answerConfirmation(false)" @keydown.stop="confirmationKeydown">
+    <section ref="confirmationRef" class="history-confirm" role="dialog" aria-modal="true" aria-label="历史版本操作确认" @click.stop>
+      <p>{{ confirmationMessage }}</p>
+      <div class="history-confirm-actions"><button @click="answerConfirmation(false)">取消</button><button @click="answerConfirmation(true)">{{ confirmationAction }}</button></div>
+    </section>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -92,6 +98,7 @@ import {
 } from '../../features/history/historyService'
 import type { DocumentManager } from '../../editor/core/DocumentManager'
 import { sameFilePath } from '../../features/files/pathKey'
+import { useModal } from '../../features/shell/useModal'
 
 const props = defineProps<{
   open: boolean
@@ -111,6 +118,13 @@ const bodyError = ref('')
 const selectedId = ref<string | null>(null)
 const restoring = ref(false)
 let listRequest = 0, bodyRequest = 0, restoreRequest = 0
+const {visible:confirmationVisible,dialogRef:confirmationRef,open:openConfirmation,close:closeConfirmation,handleKeydown:modalKeydown}=useModal()
+void confirmationRef
+const confirmationMessage=ref(''),confirmationAction=ref('')
+let resolveConfirmation:((answer:boolean)=>void)|null=null
+function answerConfirmation(answer:boolean){const pending=resolveConfirmation;resolveConfirmation=null;closeConfirmation();pending?.(answer)}
+function askConfirmation(message:string,action:string):Promise<boolean>{answerConfirmation(false);confirmationMessage.value=message;confirmationAction.value=action;openConfirmation();return new Promise(resolve=>resolveConfirmation=resolve)}
+function confirmationKeydown(event:KeyboardEvent){if(event.isComposing)return;if(event.key==='Escape'){event.preventDefault();answerConfirmation(false)}else modalKeydown(event)}
 const viewMode = ref<'preview' | 'diff'>('preview')
 const diffLines = ref<DiffLine[]>([])
 
@@ -125,7 +139,7 @@ const selectedBody = computed(() => {
   return props.open && body && entry && body.path===props.filePath && body.documentId===props.documentId && body.id===entry.id && body.hash===entry.hash ? body.body : null
 })
 const hashBody = async (body:string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(body)))].map(byte=>byte.toString(16).padStart(2,'0')).join('')
-function invalidateBody() { bodyRequest++;restoreRequest++;loaded.value=null;loadingBody.value=false;restoring.value=false;diffLines.value=[] }
+function invalidateBody() { bodyRequest++;restoreRequest++;answerConfirmation(false);loaded.value=null;loadingBody.value=false;restoring.value=false;diffLines.value=[] }
 function matches(path:string,id:typeof props.documentId) {return props.open && props.filePath===path && props.documentId===id}
 
 async function loadVersions() {
@@ -216,9 +230,6 @@ async function restoreSelected() {
   const warning = doc.dirty
     ? '当前文档有未保存的修改，恢复后这些修改会被历史版本替换（可用撤销找回）。'
     : '当前文档已保存，恢复后内容会变为该历史版本。'
-  const ok = confirm(`${warning}\n\n确定恢复为 ${formatTime(selectedSnapshot.value?.createdAt ?? Date.now())} 的版本吗？`)
-  if (!ok) return
-
   const request=++restoreRequest
   const current=()=>request===restoreRequest&&matches(path,documentId)&&selectedId.value===entry.id&&loaded.value===body&&props.manager===manager
   restoring.value=true
@@ -226,6 +237,11 @@ async function restoreSelected() {
   // Protection point first: the current text is recorded as a version so even a
   // failed restore can never cost the user their document.
   try {
+    // Tauri replaces window.confirm with an async native API. Keep confirmation
+    // inside the app and bind the entire wait to this exact restore request.
+    const ok=await askConfirmation(`${warning}\n\n确定恢复为 ${formatTime(entry.createdAt)} 的版本吗？`,'确认恢复')
+    if(!ok||!current())return
+    if(manager.getState(documentId)?.doc!==original)throw Error('当前文档在确认期间发生变化，已取消恢复并保留新修改')
     const protectedVersion=await recordVersion(path, currentText, 'manual', '恢复前保护点')
     if(!protectedVersion)throw Error('历史存储不可用')
     if(!current())return
@@ -259,9 +275,10 @@ async function deleteSelected() {
 
 async function clearAll() {
   if (!props.filePath) return
-  const ok = confirm('确定清空该文件的所有历史版本记录吗？此操作不可撤销。')
-  if (!ok) return
   const path=props.filePath,documentId=props.documentId
+  const request=++restoreRequest
+  const ok = await askConfirmation('确定清空该文件的所有历史版本记录吗？此操作不可撤销。','确认清空')
+  if (!ok||request!==restoreRequest||!matches(path,documentId)) return
   listRequest++;invalidateBody();selectedId.value=null
   try {await clearVersions(path);if(matches(path,documentId))versions.value=[]}
   catch(error){if(matches(path,documentId))bodyError.value=`清理历史版本失败：${String(error)}`}
@@ -270,6 +287,9 @@ onBeforeUnmount(()=>{listRequest++;invalidateBody()})
 </script>
 
 <style scoped>
+.history-confirm-overlay{position:fixed;inset:0;z-index:1100;display:grid;place-items:center;background:rgba(0,0,0,.4);padding:16px}
+.history-confirm{width:min(460px,100%);padding:22px;background:var(--paper);color:var(--ink);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow)}
+.history-confirm p{white-space:pre-wrap;line-height:1.6;overflow-wrap:anywhere}.history-confirm-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}.history-confirm-actions button{padding:8px 14px;border-radius:5px;background:var(--soft);color:var(--bright)}
 .history-dialog-backdrop {
   position: fixed;
   inset: 0;
