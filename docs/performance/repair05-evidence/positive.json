@@ -1,0 +1,12 @@
+[
+  {
+    "file": "test-results/native-export-repair03.docx",
+    "valid": true,
+    "errors": []
+  },
+  {
+    "file": "test-results/docx-worker/complex.docx",
+    "valid": true,
+    "errors": []
+  }
+]

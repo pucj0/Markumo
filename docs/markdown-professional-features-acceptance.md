@@ -1,134 +1,164 @@
-# Markumo Markdown 专业编辑能力增强工程 · 综合验收报告
+# Markumo Markdown 功能 · Repair 05 综合验收
 
-> 本报告只记录有证据支撑的结论。状态分为四类：
->
-> - **已实现且验证**：有代码，且有自动化测试或可复现命令作为证据。
-> - **部分实现**：核心路径可用，但存在明确列出的缺口。
-> - **尚未验证**：代码存在，但没有在本仓库环境中执行过对应验证（例如需要 Word/LibreOffice 的场景）。
-> - **已知限制**：按设计不支持，或受外部条件限制。
->
-> 本次审查基线为 `38a69c9`，复核于 HEAD `fe51ae4` 之后的修复提交。结论以当前实际代码为准，不以本文件历史陈述为准。
+审查日期：2026-10-23。此次范围仅为 Repair 01～04 后的 5 项 P0、DOCX 性能与验收、Quality Gate 失败修复。工作始终在 main；保留既有裸 URL 等提交，没有修改版本号、推送或发布。当前功能源码基线为 `1c2662c`；验收脚本补充至 `f4c4c7e`。最终提交以本报告所在 Git 提交为准。
 
-## 一、状态总览
+证据归档见 [repair05-evidence/manifest.json](performance/repair05-evidence/manifest.json)，每份记录包含原路径、大小和 SHA-256。历史修复前测试通过只读 Git 对象覆盖加载旧源码，未切换分支或建立工作树。初始失败保留，最终通过结果单独记录；旧的局部通过日志不代表全量结果。
 
-| 编号 | 功能 | 级别 | 当前状态 | 主要证据 |
-| --- | --- | --- | --- | --- |
-| P0-1 | Callout 原生结构化编辑 | P0 | 已实现且验证 | `scripts/callout-regression.mjs`（6 项，含源码往返、类型切换、撤销） |
-| P0-2 | TOC 原生动态目录 | P0 | 已实现且验证 | `scripts/toc-regression.mjs`（6 项）＋本轮 `tocIndex.ts` 有界缓存 |
-| P0-3 | 脚注定义原生编辑与双向导航 | P0 | 已实现且验证 | `scripts/footnote-regression.mjs`（6 项）＋`scripts/repair01-regression.mjs` 第 8–10 项 |
-| P0-4 | 图片编辑与属性持久化 | P0 | 已实现且验证 | `scripts/repair01-regression.mjs` 第 5–7 项（20 种宽高/对齐往返、重开、模式切换） |
-| P0-5 | 文档内容注入防护 | P0 | 已实现且验证 | `scripts/repair01-regression.mjs` 第 1–4 项 |
-| P0-6 | 历史版本本地持久化 | P0 | 部分实现 | Rust 13 项单测 + `scripts/repair02-regression.mjs`（8 项）；**未做**真实桌面端跨进程重开验证 |
-| P0-7 | 原生 DOCX 导出 | P0 | 部分实现 | `scripts/repair03-regression.mjs`（12 项结构校验）；**未做** Word/LibreOffice 实际打开验证 |
-| P1-8 | 大纲整节拖动源码保真 | P1 | 已实现且验证 | `scripts/repair04-outline-regression.mjs`（11 项，逐字节比对） |
-| P1-9 | Front Matter 解析与安全更新 | P1 | 部分实现 | `scripts/frontmatter-regression.mjs`（4 项）；复杂 YAML 明确降级为源码编辑 |
-| P1-10 | 裸 URL 增量编辑 | P1 | 已实现且验证 | `scripts/autolink-regression.mjs`（14 项） |
+## 验收结论
 
-## 二、本轮修复内容（按提交）
+| 项目 | 结果与证据边界 |
+| --- | --- |
+| P0-1 TOC 缓存 | 修复；真实 Parser、跨文档、同长度/同前缀、位置移动、双 TOC、点击跳转、Undo、选区命中缓存验证 |
+| P0-2 大纲换行 | 修复；完整源码严格比较，LF/CRLF、有/无末尾换行、首末章移动；实际 OutlineView 拖放及双 Pane 单步 Undo/Redo |
+| P0-3 保存归档 | 修复；Rust 归档与写盘顺序、故障与并发测试；真实 Tauri 保存、归档失败、重启与 Crash Recovery 验证 |
+| P0-4 历史迁移 | 修复；混合成功/失败、页面重启重试、内容去重、非法字段和无淘汰配额验证 |
+| P0-5 版本切换 | 修复；请求身份、内容哈希、恢复期间编辑、删除/关闭/切文件、确认取消；真实桌面端面板恢复验证 |
+| DOCX | 按需 Worker、真实取消、资源回收、多图/行内图/表格图与复杂列表；官方 SDK 严格验证通过，保留以下限制 |
+| Browser Smoke | 本机 48/48 套件通过，0 失败、0 跳过；远程旧提交仍为失败，不能将本地结果当作远程绿灯 |
+| 全量回归 | 60/60 套件通过，0 失败、0 跳过，456.44s；最终代码含全部 Smoke 套件及新增 Markdown 专项 |
+| 稳定性复跑 | 4 个套件 × 3 轮 = 12/12，通过且无跳过；日志为 CI 故障修复后的原始三轮结果，后续历史/复制补充由最终全量覆盖 |
+| 类型 / 构建 | `pnpm typecheck`、`pnpm build` 通过；构建仍有既有大 chunk 与 Node 模块外置提示 |
+| Rust | `cargo test --locked --manifest-path src-tauri/Cargo.toml`：197 passed / 0 failed / 1 ignored（现有需公网访问的 HTTPS 图片测试） |
 
-### Repair 01 · `fix(markdown): 修复文档内容注入、脚注导航与图片属性持久化`
+环境：Windows x64；Node 24.13.0；Playwright Chromium 156.0.8078.4；真实 Tauri Release 的 WebView2 为 155.0.4283.62。系统 TEMP 写入受限，Rust 与原生验收显式使用工作区内可写临时目录。另运行真实 Pandoc 导出/导入图片往返测试 1/1，通过且无 UNVERIFIED 降级。没有通过增加测试超时解决本轮失败。
 
-**注入风险（原为真实 XSS）**
+## P0-1：按不可变文档身份缓存 TOC
 
-- `FrontMatterCard.ts` 曾把 YAML 的 `status` / `created` 直接拼进 `innerHTML`；`FootnoteDefNodeView.ts` 曾把脚注 label 拼进 `innerHTML`。恶意文档可执行脚本。现全部改为 `createElement` + `textContent`。
-- 新增 `safeDom.ts`：`setStaticIcon` 只接受标签与属性白名单（拒绝 `script/iframe/object/foreignObject/use/a`、`on*`、未知属性），Callout / TOC / Front Matter 的固定 SVG 统一走该入口，**用户文本与固定模板彻底分离**。
-- `MarkdownSerializer.ts` 的受控 `<img>` 改用 `escapeHtmlAttribute` 转义，`width`/`align` 走白名单（`auto | N% | Npx` / `left|center|right`）。修复前 `src="x" onerror="alert(1)"` 可直接逃逸出属性。
+**修复前证据**：[repair05-toc-before.txt](performance/repair05-evidence/repair05-toc-before.txt)。两个文档标题等长且前 16 字相同，第二份文档拿到第一份文档的标题列表。旧签名也漏掉前置正文导致的位置变化。
 
-**图片属性持久化闭环**
+**根因与修复**：原缓存把共享 heading NodeType 当文档身份，并用有损摘要判断更新。现为 `WeakMap<PMNode, Map<NodeType, readonly TocHeading[]>>`。不可变文档变更后自然失效，关闭文档及旧修订可被 GC；纯选区变化保持文档对象身份，不重新扫描。同一文档的多个 TOC 共用冻结的数组，不向正文派发事务。
 
-- 新增 `imageHtml.ts`：`parseControlledImageHtml` 只识别本编辑器写出的那一种 `<img>`，仅允许 `src/alt/title/width/align`；任何额外属性（含事件属性、`style`）继续作为受保护源码。
-- `MarkdownParser` 据此将其重新解析为**可编辑 image 节点**。修复前，调整尺寸后保存重开会变成不可编辑的原始 HTML，工具栏消失、属性丢失。
+**文件**：`src/editor/markdown/wysiwyg/tocIndex.ts`、`TocNodeView.ts`、`scripts/toc-regression.mjs`。
 
-**脚注双向导航**
+**修复后**：TOC 7 组回归通过，含 1000 次同文档缓存访问仅扫描一次、实际标题跳转、正文与 Undo 历史不受目录刷新影响。提交 `33a84b3`。
 
-- 引用点击原先在 `protected_source` 文本里搜索，现统一走 `MarkdownEditorController.footnoteDefinitionPosition` 的节点映射；缺失定义给出明确提示，不虚构定义、不写入正文、不产生撤销步骤。
+## P0-2：保留移动章节的分隔符和文件结尾
 
-### Repair 02 · `fix(history): 用受控 Rust 持久化替换 localStorage 历史版本`
+**修复前证据**：[repair05-outline-before.txt](performance/repair05-evidence/repair05-outline-before.txt)。无末尾换行的 `# A\n正文A\n\n# B\n正文B`，B 移到 A 前会生成 `正文B# A`。
 
-- 新增 `src-tauri/src/history.rs`：独立 `history` 目录（与 Crash Recovery 分离）、SHA-256 内容寻址去重、索引只存元数据、原子写入（临时文件 + fsync + rename）。
-- 配额：单快照 8 MiB、单文件 40 版、总量 192 MiB；超限按最旧优先清理并通过 `warnings` 回报，写失败向上抛出，不静默吞掉。
-- 安全：文件键是路径摘要且**从不参与 I/O**；对象名与版本 id 校验字符集，无任意路径读写。索引损坏则另存备份并重建。
-- 前端 `historyService` 改为 IPC 客户端：列表只返回元数据、正文按需读取、失败即报错；`recordVersion` 区分 `disk`（保存前磁盘版本）/`saved`（刚写入）/`manual`（手动）。
-- `FileController` 在写入前记录 `getBaselineText()` 的磁盘版本，保存成功后再记录新版本——两者语义不再混为一谈。
-- `HistoryDialog` 重写为按需加载、来源标签、恢复前创建「恢复前保护点」、失败即中止；并接入文件菜单「历史版本…」（**此前该面板没有任何入口，属死代码**）。
-- 旧 `localStorage` 历史一次性迁移，迁移成功才删除旧键。
-- Diff 改为先裁剪公共前后缀、再在窗口内做 LCS，超大文档降级为块级差异。
+**根因与修复**：EOF 章节没有可随章节一起移动的后置换行。现将章节正文、边界分隔符和全文件结尾换行分别处理；末章移动借用前置分隔符，保留原始 EOF 状态。计划只包含两个不重叠的删除/插入区间，OutlineView 单事务应用。
 
-### Repair 03 · `fix(export): 补全原生 DOCX 导出结构与可验证性`
+**文件**：`src/editor/outline/outlineReorder.ts`、`scripts/repair04-outline-regression.mjs`、`scripts/outline-reorder-regression.mjs`。
 
-- 真正的 Word 列表：`word/numbering.xml`（abstractNum/num + 九级 lvl），段落带 `w:numPr`/`w:ilvl`。
-- 真正的超链接：为绝对 HTTP(S)/mailto 目标生成 External relationship + `w:hyperlink r:id`；相对目标降级为文本并警告，不产生坏关系。
-- 图片：签名识别 png/jpeg/gif/bmp → `word/media` + relationship + `w:drawing`；受 64 MiB 媒体预算与 120 张上限约束，超限降级为替代文字并警告。
-- 标题写 `outlineLvl` 与 bookmark；`[toc]` 生成可跳转标题列表；Callout 输出主题色边栏提示块；脚注以文末编号列表导出；KaTeX/Mermaid 以源码/等宽降级——以上均产生显式 warning。
-- 取消（AbortSignal）、64 MiB 文档上限、失败不落半成品。
-- 返回 `{ bytes, warnings, stats }`，导出路径逐条提示警告；保留 Pandoc 通道。
+**修复后**：真实 Markumo Parser 的 source range；12 组保真检查（其中 EOF 矩阵覆盖双方向 LF/CRLF），实际 OutlineView 在 Live/Source/Split、有/无结尾换行的 6 组拖放、双 Pane、一次 Undo/Redo。严格比较完整输出及原始结构，不只检查 includes。提交 `c323529`。
 
-### Repair 04 · 大纲保真、YAML 安全、TOC 性能、CI 与验收
+## P0-3：归档完成之后才能覆盖磁盘
 
-- `outlineReorder.planOutlineMove` 返回**最小 delete/insert 变更**（不再整篇替换），保留 LF/CRLF、尾部换行状态、Front Matter、代码围栏；无末尾换行文件不新增换行；跨层/自身移动拒绝；`OutlineView` 单事务应用并恢复选区。
-- `frontMatterParser` 重写为「只往返它能精确表达的子集」：识别锚点、别名、自定义标签、块标量、流式集合、制表符、重复键；命中即 `editable: false`，卡片只显示原文与「编辑源码」入口，**不再静默重排 YAML**。字段更新只替换值区间，保留注释、顺序、引号风格与 CRLF。
-- `tocIndex.ts`：按文档标题结构签名的共享有界缓存（最多 4 条），TOC 节点复用同一次扫描；`TocNodeView` 增加渲染签名，相同标题列表不再重建 DOM。
-- `run-regressions.mjs` 的 `FULL_REGRESSION_TESTS` 补齐此前**只进 SMOKE、未进全量**的 15 个套件（八项功能 + 拖放/独立窗口/裸 URL + 四个 Repair 套件）。
+**修复前证据**：[repair05-save-before.txt](performance/repair05-evidence/repair05-save-before.txt)。故意挂起旧版历史写入时，原 FileController 已调用磁盘保存并清除 dirty 状态。
 
-## 三、质量门禁与测试结果（本机实测）
+**根因与修复**：`void recordVersion().catch()` 未等待持久化，错误被吞。真实 Tauri 保存现在在同一原生保存操作中按以下顺序执行：校验授权和磁盘版本 → 读取真实磁盘旧正文并持久化归档 → 再次版本保护下写盘并校验 → 记录已经成功写入的新正文。多窗口共用文件操作锁及历史锁；旧版归档失败即阻止覆盖。写盘失败保留编辑正文；写盘已成功但新版历史失败则明确提示“正文已保存，但本次新版本未能写入历史”。
 
-| 项目 | 命令 | 结果 |
-| --- | --- | --- |
-| 类型检查 | `pnpm typecheck` | 通过 |
-| 生产构建 | `pnpm build` | 通过（`built in ~20s`） |
-| Rust 单元测试 | `cargo test --manifest-path src-tauri/Cargo.toml history` | 13 passed / 0 failed |
-| Rust 全量 | `cargo test`（172 项基线） | 通过（需将 `TEMP` 指向可写目录，见下） |
-| 裸 URL | `node scripts/autolink-regression.mjs` | 14/14 |
-| Repair 01 | `node scripts/repair01-regression.mjs` | 10/10 |
-| Repair 02 | `node scripts/repair02-regression.mjs` | 8/8 |
-| Repair 03 | `node scripts/repair03-regression.mjs` | 12/12 |
-| Repair 04（大纲） | `node scripts/repair04-outline-regression.mjs` | 11/11 |
-| Callout | `node scripts/callout-regression.mjs` | 6/6 |
-| TOC | `node scripts/toc-regression.mjs` | 6/6 |
-| 脚注 | `node scripts/footnote-regression.mjs` | 6/6 |
-| Front Matter | `node scripts/frontmatter-regression.mjs` | 4/4 |
-| DOCX（旧套件） | `node scripts/docx-regression.mjs` | 4/4 |
-| Split 预览 | `node scripts/split-preview-regression.mjs` | 4 组全通过 |
-| Live 控制器 | `node scripts/markdown-live-controller-regression.mjs` | 21/21 |
+非事务网关同样等待前后归档，保存 guard 覆盖整个异步生命周期；自动保存错误去重，归档期间关闭/身份变化会阻止迟到写入。保留原文件编码用于旧磁盘解码，Windows namespace/display 路径使用同一文件键，并兼容读取旧索引。
 
-**CI 门禁核对**
+**验收中追加发现**：外部比较读取会改变 grant 的 Hex/编码状态，导致归档解码或后续保存方式改变。现比较读取还原授权状态；真实重开、成功保存才更新编码。
 
-- `.github/workflows/quality.yml` 的 `Browser Smoke` 作业执行 `pnpm test:smoke`（带 `set -o pipefail`），**未设置 `continue-on-error`**：任一冒烟用例失败会使该 job 失败，因此是阻塞门禁。
-- 同一作业另有 `--repeat=3` 的稳定性复跑（split / toolbar / 虚拟化 / 数学）。
-- 全量回归此前**缺少**八项功能的套件，本轮已在 `FULL_REGRESSION_TESTS` 补齐。
+**文件**：`src/features/files/{FileController.ts,contracts.ts,tauriFiles.ts}`、`src-tauri/src/commands/files.rs`、`src-tauri/src/files/{mod.rs,history_save_tests.rs,external_tests.rs}`、`src-tauri/src/history.rs`、`scripts/history-regression.mjs`。
 
-**关于测试超时**
+**修复后**：6 组前端真实控制器加延迟 IPC/磁盘故障测试；Rust 保存旧/新版、旧版归档失败、磁盘中断、原始编码、双窗口 writer 竞争；真实 Release 端到端见后文。提交 `efa6fe6`、`9ba8405`、`91a3cfb`（此组回滚需同时考虑三项依赖）。
 
-`markdown-live-toolbar-regression.mjs` 中的 `timeout: 30000` / `60000` 属该文件既有实现（提交 `995c954`、`f288f6d`），不是本轮引入，且该文件当前有他人未提交改动，本轮未改动。核对结论：
+## P0-4：迁移失败保留来源，下次继续
 
-- `settingsReady` 的 30s 是**应用外壳整体水合的启动预算**（CI 冷启动需预构建 Vite 依赖），属性能预算。
-- `liveReady` 的 60s 出现在「切换编辑模式」之后，确实是宽松值；但由于断言本身必须在预算内成立，初始化失败或懒激活死锁仍会使作业失败，**不构成对功能缺陷的掩盖**。
-- 建议后续单独提交把 `liveReady` 收紧到 15s，并附一次实测；本轮不做，以免与他人未提交改动冲突。
+**修复前证据**：[repair05-migration-before.txt](performance/repair05-evidence/repair05-migration-before.txt)。旧键仍含失败记录，全局标记却已为 done。
 
-## 四、尚未验证与已知限制
+**根因与修复**：旧全局标记掩盖部分失败。现在剩余旧键为权威待迁移队列；逐条校验字段与大小；全部应迁移记录被接受且来源没被其他窗口更改后才删除该来源。仅无剩余来源且无失败时写 done。失败、非法格式、超配额均保留原始来源并通知。
 
-**尚未验证（需外部环境）**
+原生 `history_import` 使用 SHA-256 幂等去重，配额预检禁止迁移过程淘汰已成功导入的版本，避免重启重复导入又互相淘汰。
 
-1. **DOCX 在 Word / LibreOffice 中实际打开**：本机未安装 Office 或 LibreOffice，未执行真实打开、分页与目录 F9 更新验证。已完成的是解包级结构校验（OOXML 良构、Relationships、numbering、media、drawing、表格、书签、正文完整性）。Pandoc 高级导出通道未在本轮回归中执行。
-2. **历史版本的跨进程重开**：Rust 侧有 13 项单测覆盖存储语义，前端有 mock IPC 的契约测试；但未在真实 Tauri 桌面进程中执行「保存 → 关闭 → 重开 → 查看历史」的端到端流程。
-3. **WebView2 下的 IME 组合过程**：裸 URL 自动链接在组合期跳过由 `this.composing` 保护，但未做录屏级验证。
+**文件**：`src/features/history/historyService.ts`、`src-tauri/src/history.rs`、`src-tauri/src/commands/history.rs`、`src-tauri/src/lib.rs`、`scripts/repair02-regression.mjs`。
 
-**已知限制**
+**修复后**：Repair 02 共 10 组；混合成功/瞬时失败/非法记录、已有错误 done 标记、实际页面 reload 后重试、成功版本 ID 不变；Rust 验证严格配额与幂等。提交 `ddb4073`。
 
-1. **Front Matter**：不引入 YAML 库。锚点、别名、标签、块标量、流式集合、制表符缩进、重复键一律判定为不可可视化编辑，回退到源码编辑。这是刻意的保守选择：宁可少改，也不静默重写用户 YAML。
-2. **DOCX**：TOC 无页码（需 Word 分页）；脚注以文末编号列表表示，不是 Word 原生脚注（原生 `footnotes.xml` 与正文引用编号的对应尚未实现）；KaTeX/Mermaid 以源码导出；相对路径图片不嵌入。以上都会在导出时逐条提示。
-3. **历史版本**：`MAX_WINDOWS` 之外的多窗口并发由单一存储锁串行化；超大文档（> 8 MiB）不记录历史版本，只提示。
-4. **裸 URL**：无分隔符紧邻中文时，linkify（与 GFM、右侧预览一致）把中文并入 IRI，`href` 做百分号编码；保证 `decodeURI(href)` 等于显示文本、源码保持裸 URL、三种模式一致。
-5. **大纲拖动**：只支持同一父级内的移动语义校验（跨层移动被拒绝），不支持跨文件拖动。
+## P0-5：预览、恢复与确认均绑定同一请求身份
 
-## 五、复现方式
+**修复前证据**：[repair05-dialog-before.txt](performance/repair05-evidence/repair05-dialog-before.txt)。慢 A 晚于快 B 返回，选中 B 时预览却被 A 覆盖。
 
-```bash
+**根因与修复**：正文与 selectedId 分离，异步返回没有身份保护。现在加载结果绑定 filePath、documentId、versionId、SHA-256 和请求序号。新选择先清空旧正文；关闭、切文件、删除、卸载递增序号。恢复前保护当前编辑，再次读取目标原生版本并验证哈希、文档身份与不可变当前正文；发生新修改即取消。
+
+**真实 Tauri 追加发现**：[repair05-native-confirm-before.json](performance/repair05-evidence/repair05-native-confirm-before.json)。Tauri dialog 插件将 `window.confirm` 替换为 Promise；旧面板却把 Promise 当 true，未等确认就恢复，同时抛出 dialog ACL 错误。现恢复和清空均用应用内异步确认框，默认焦点为取消；确认等待也绑定请求序号，切文件/关闭会废弃，且确认前后都会检查当前编辑身份。没有扩大原生对话框权限。
+
+**文件**：`src/components/layout/HistoryDialog.vue`、`scripts/history-dialog-regression.mjs`。
+
+**修复后**：11 组真实组件测试：慢 A/快 B、快 A/慢 B、同 ID 切文件、删除加载中版本、读取失败/哈希不匹配、关闭、恢复期间编辑/目标被删除，以及确认取消/等待时切换文件/关闭/清空。真实 Tauri 面板恢复无 pageerror。提交 `d9d25df`、`52e9d91`、`2ce5d2f`；恢复进行中还禁止清空操作替换恢复请求。
+
+## DOCX：按需 Worker、取消和严格 OOXML
+
+**修复前证据**：[repair05-ooxml-before.txt](performance/repair05-evidence/repair05-ooxml-before.txt)。官方 Open XML SDK 拒绝旧产物：表格缺少 `w:tblGrid`。先前“解包有某些节点”不足以证明 schema 合法。
+
+`ExportController` 按需导入客户端，每次导出创建一个独立 Worker。Markdown 解析、XML、ZIP/CRC 在 Worker 中完成；取消直接 terminate，可打断同步 CPU 生成和等图阶段。结束、失败、取消均移除监听并回收 Worker，迟到图片结果被丢弃。App 提供生成进度和取消；进入写盘阶段后按钮禁用，避免把已提交的输出误报为取消。原生 DOCX 使用带授权 header 的二进制 IPC，避免在 UI 线程把大文件展开成 JSON 数组。
+
+修复行内/多图/表格图预处理，图片失败保留 alt 并警告；修复表格 grid、非 1 起始有序列表、嵌套列表及以代码块开头的列表项；无法表示的 HTML 保留源码并警告。Markdown 正文不作导出副作用修改。
+
+**验证**：4 组真实浏览器 Worker 测试；2 个复杂产物由 Microsoft Open XML SDK 3.3.0 的 Office2016 validator 检查，0 schema 错误；移除 grid 的负向对照必须被同一 validator 拒绝。对应 [positive.json](performance/repair05-evidence/positive.json)、[negative.json](performance/repair05-evidence/negative.json)。这是 schema 验证，不等同于 Word/LibreOffice 排版视觉验收。
+
+性能样本见 [performance.json](performance/repair05-evidence/performance.json)：重复 10000 段的直接 Worker 压测产物 25,196,474 字节，耗时 1159.3ms，主线程 115 次心跳，最大间隔 11.2ms，结束活跃 Worker 为 0。该压测绕过控制器写盘，**不代表支持原生导出 25MB 文件**；正式输出仍受 16 MiB 上限保护。CPU 取消和迟到图片取消均为 0 正式输出写入。真实 WebView2 打包 Worker 取消约 34ms（见原生结果 JSON）。
+
+**文件**：`src/features/document-conversion/{ExportController.ts,nativeDocxExport.ts,docxWorkerClient.ts,nativeDocxWorker.ts}`、`src/{App.vue,app/useAppShell.ts}`、`src-tauri/src/{commands/conversion.rs,lib.rs}`、`scripts/{docx-worker-regression.mjs,repair03-regression.mjs,validate-docx.mjs,openxml-validator/}`、Quality Gate。提交 `a8f5089`。
+
+## 真实 Tauri 保存历史与重启
+
+执行 `node scripts/repair05-native-build.mjs`，再执行 `node scripts/repair05-native-regression.mjs`。构建独立 identifier、全新 profile 和 fixture，Release 打包使用真实 Rust、CSP、生产组件。仅测试构建注入实际 useAppShell、invoke 和 Worker client 的引用；没有替换历史 IPC、文件系统或编辑器。原生构建清单记录 289 个源码文件及二进制 SHA-256，证据采集脚本已核对其与最终源码一致。
+
+[原生结果](performance/repair05-evidence/native-results.json) 共 7 组通过：真实文件保存旧/新版归档与并发 guard；Windows 两种路径身份；双 Pane 历史面板恢复及一次 Undo/Redo；故意把专用 history 目录临时置为不可用后阻止覆盖且保留 dirty 正文；生产 CSP Worker 及 raw IPC 授权拒绝；强制进程结束并重新启动后历史 ID/正文哈希不变；真实恢复 debounce 产生的 Crash Recovery 快照跨进程保留。历史恢复本身不自动覆写磁盘。
+
+原生构建清单 HEAD 为 `e98c680`，生产源码与 `1c2662c` 一致；后续提交只补测试和报告，不更改其生产源码。没有接触用户应用配置或真实文档。
+
+## CI 失败的真实原因与门禁
+
+最新已运行远程提交是 `a8f50899fc58bfc74e50acec44b9102bab981098`，[Quality Gate #37](https://github.com/yuanmahome/Markumo/actions/runs/39879455305)：Frontend 成功、Browser Smoke 失败、Rust 失败。日志摘要见 [repair05-remote-ci.json](performance/repair05-evidence/repair05-remote-ci.json)。后续修复未由本任务推送，远程没有对应绿灯。
+
+| 实际失败 | 修复 |
+| --- | --- |
+| 原始 #35 Split 超时 | 图片 NodeView 内部呈现 mutation 被反复解析；ignoreMutation 阻断反馈循环（`b9dfa95`） |
+| #37 窄屏占位高度 530.5→702 | 占位 pre-wrap 与 CM break-spaces 的空格折行不同；统一 CSS，增加 Consolas/Courier New/monospace × 宽窄屏 × 折行/行号矩阵 |
+| #37 图片工具栏在数学编辑退出后消失 | 浏览器默认 mousedown caret 替换 NodeSelection；统一阻止默认选区并 focus，实际点击测试通过 |
+| #37 两个 Vite 服务共享缓存 | 包装器覆写了隔离规则；按服务端口隔离，并保留明确指定的 cacheDir |
+| #37 保存测试未等新归档步骤 | 测试改为等待实际磁盘网关到达后注入失败，不假定同步调用 |
+| #37 DOCX 测试仍等 Pandoc API | 真实控制器现在生成 Worker 二进制；测试验证 raw bytes、header 授权和 lease 释放 |
+| #36 历史测试实例化已删除 HistoryService | 换成真实 FileController/DocumentManager 与可控历史传输测试 |
+| #37 Rust 比较读改写 grant | 比较操作还原 Hex/编码状态，避免改变保存语义 |
+| #36/#37 Linux symlink 测试失败 | canonicalize 消除链接证据后才检查；现对原始输入路径检查，再返回规范路径；Windows 增加指向工作区内部的 junction 对照 |
+| 本机首次全量的裸 URL 富文本复制丢链接 | Clipboard 使用了不启用 linkify 的 Markdown HTML renderer；现与 Live/preview 一样识别裸 URL，原有严格链接断言通过 |
+| 本机首次全量的 Source 大纲滚动未生效 | 初始滚动快照的异步恢复覆盖了测试滚动；测试等待实际 CM requestMeasure 完成，不增加超时，并保留现场诊断 |
+| 复跑时宽度测试的选区偶发没有进入编辑状态 | 原 selectText 只改浏览器 Range，会与 PM 的 focus/scroll 选区观察竞争；改用真实 Home/Shift+End 键盘选择，额外连续 3 轮通过，不放宽超时 |
+| 本机首次全量有旧图片/YAML 入口 | 更新为现有工具栏与 Front Matter「编辑源码」，保留原有源码保真与撤销断言 |
+
+CI 修复提交：`9b66ba8`、`79ca42d`、`aaf81d8`、`1c2662c`、`e98c680`、`f4c4c7e`；编码修复归入 P0-3。没有改用 force click、跳过用例或增大超时。Browser Smoke 未设置 continue-on-error，pipefail 保留非零退出码；48 套件任一失败/跳过都使工作流失败，随后 4 个稳定性套件各跑 3 轮，每轮均计入断言，不是失败后重试取绿。全量为 Smoke 超集。Word 官方 SDK 验证和畸形负向对照也进入阻塞 job。仓库分支保护是否将该 job 列为 required 未单独验证；这里的“阻塞”指工作流不能带失败继续成功。
+
+## 保留的限制
+
+- DOCX 脚注仍为文末编号列表，**不是 Word 原生脚注**；Mermaid 为源码，**不是图表图片**；数学为 LaTeX 降级；TOC 是静态可跳转标题列表，未计算页码。导出会明确警告。
+- 已授权的受支持本地图片可以嵌入；远程、无法读取、格式不支持或超预算的图片保留替代文字并警告。图片数量/媒体和正式输出有配额；正式输出上限 16 MiB。
+- 未在 Word/LibreOffice 中执行打开、分页、视觉排版验证。原生 Word 文件选择框到成功正式写盘未自动化；浏览器控制器取消为 0 写入，真实打包 Worker/CSP/取消与原生授权拒绝已验，原生二进制提交由 Rust 测试覆盖。
+- 历史单快照 8 MiB、单文件 40 版、总量 192 MiB。保存前旧正文不能归档时会明确阻止覆盖，不能描述为“已备份”；新正文写盘成功但其历史失败会明确警告。迁移超配额保留旧来源，不淘汰成功记录。
+- Front Matter 继续仅安全更新可精确往返的子集；复杂 YAML 回退源码。大纲不扩展跨文件/跨层语义。
+- 本机全量与真实 Windows E2E 不等同于 Linux 远程 CI 重跑通过；未推送、不发布，最终远程结论待用户推送这些修复后产生新 run。
+
+## 重跑命令与提交分组
+
+```text
 pnpm typecheck
 pnpm build
-node scripts/run-regressions.mjs --smoke          # 冒烟（CI 门禁同款）
-node scripts/run-regressions.mjs --full           # 全量（含本节新增 15 个套件）
-cargo test --manifest-path src-tauri/Cargo.toml    # Windows 若遇 TEMP 权限问题，先将 TEMP/TMP 指向可写目录
+pnpm test:smoke
+pnpm test:regression
+node scripts/run-regressions.mjs scripts/split-preview-regression.mjs scripts/markdown-live-toolbar-regression.mjs scripts/code-block-virtualization-regression.mjs scripts/math-editor-regression.mjs --repeat=3
+node scripts/validate-docx.mjs
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+node scripts/repair05-native-build.mjs
+node scripts/repair05-native-regression.mjs
+node scripts/repair05-collect-evidence.mjs
 ```
 
-浏览器套件默认使用系统 Edge/Chromium；CI 使用 Playwright 自带 Chromium。
+Windows 原生命令只使用隔离验收 profile；系统 TEMP 不可写时先设置到专用可写目录。DOCX validator 需 .NET 8 SDK（或可构建 net8 的兼容 SDK 与运行时），NuGet locked restore；浏览器需安装匹配 Playwright Chromium。验收产物不包含用户正文，未提交可执行程序或 WebView profile。
+
+| 回滚组 | Commit SHA |
+| --- | --- |
+| P0-1 TOC | `33a84b3` |
+| P0-2 大纲 | `c323529` |
+| P0-3 保存归档、路径与编码 | `efa6fe6` / `9ba8405` / `91a3cfb` |
+| P0-4 迁移 | `ddb4073` |
+| P0-5 请求与确认身份 | `d9d25df` / `52e9d91` / `2ce5d2f` |
+| P1 DOCX | `a8f5089` |
+| CI 及旧全量入口 | `9b66ba8` / `79ca42d` / `aaf81d8` / `1c2662c` / `e98c680` / `f4c4c7e` |
+| 原生验收脚本 | `a425dd6` |
+
+按组保留独立提交，未重写其他任务的提交历史；跨组依赖按 Git 逆序评估回滚。
