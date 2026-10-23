@@ -12,7 +12,9 @@ import type { MarkdownClipboardSettings } from './contracts'
 import { textClipboard, writeRichClipboard } from '../../../features/shell/clipboard'
 
 export type LiveClipboardOperation = 'copy' | 'cut' | 'paste' | 'select-all' | 'markdown' | 'html' | 'simplified' | 'paste-plain'
-const renderer = new MarkdownIt({ html: false })
+// The serializer deliberately preserves auto-links as bare Markdown URLs.
+// Re-rendering clipboard HTML must recognize those links just like Live/preview.
+const renderer = new MarkdownIt({ html: false, linkify: true })
 
 /** The logical source line, never a soft-wrapped screen row. */
 function lineSelection(state: EditorState): Selection {
