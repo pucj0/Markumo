@@ -14,15 +14,22 @@ export interface ControlledImage {
   title: string | null
   width: string | null
   align: 'left' | 'center' | 'right' | null
+  zoom?: number | null
 }
 
-const ALLOWED_ATTRIBUTES = new Set(['src', 'alt', 'title', 'width', 'align'])
+const ALLOWED_ATTRIBUTES = new Set(['src', 'alt', 'title', 'width', 'align', 'style'])
 const ALIGNMENTS = new Set(['left', 'center', 'right'])
 /** `auto`, a percentage, or an explicit pixel width. Nothing else is persisted. */
 const WIDTH_PATTERN = /^(?:auto|\d{1,4}%|\d{1,5}(?:px)?)$/
 /** Only a single, self-contained `<img … />` element may be recognised. */
 const IMAGE_PATTERN = /^<img((?:\s+[a-zA-Z][\w-]*\s*=\s*(?:"[^"<>]*"|'[^'<>]*'))*)\s*\/?>$/i
 const ATTRIBUTE_PATTERN = /([a-zA-Z][\w-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+
+/** Percentage of the natural (or explicitly sized) image, as used by Typora. */
+export function normalizeImageZoom(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 1 || value > 1000) return null
+  return Math.round(value * 100) / 100
+}
 
 export function normalizeImageWidth(value: unknown): string | null {
   if (value === null || value === undefined || value === '') return null
@@ -79,18 +86,26 @@ export function parseControlledImageHtml(source: string): ControlledImage | null
   const align = normalizeImageAlign(values.get('align'))
   if (values.has('width') && width === null) return null
   if (values.has('align') && align === null) return null
-  return { src, alt: values.get('alt') ?? '', title: values.get('title') ?? null, width, align }
+  let zoom: number | null = null
+  if (values.has('style')) {
+    const match = /^\s*zoom\s*:\s*(\d+(?:\.\d{1,2})?)%\s*;?\s*$/i.exec(values.get('style')!)
+    zoom = match ? normalizeImageZoom(Number(match[1])) : null
+    if (zoom === null) return null
+  }
+  return { src, alt: values.get('alt') ?? '', title: values.get('title') ?? null, width, align, ...(zoom === null ? {} : { zoom }) }
 }
 
 /** Writes the controlled `<img>` spelling, escaped and validated. */
 export function controlledImageHtml(image: ControlledImage, forceHtml = false): string | null {
   const width = normalizeImageWidth(image.width)
   const align = normalizeImageAlign(image.align)
-  if (!width && !align && !forceHtml) return null
+  const zoom = normalizeImageZoom(image.zoom)
+  if (!width && !align && zoom === null && !forceHtml) return null
   const attributes = [`src="${escapeHtmlAttribute(image.src)}"`]
   if (image.alt) attributes.push(`alt="${escapeHtmlAttribute(image.alt)}"`)
   if (image.title) attributes.push(`title="${escapeHtmlAttribute(image.title)}"`)
   if (width) attributes.push(`width="${escapeHtmlAttribute(width)}"`)
   if (align) attributes.push(`align="${escapeHtmlAttribute(align)}"`)
+  if (zoom !== null) attributes.push(`style="zoom:${zoom}%;"`)
   return `<img ${attributes.join(' ')} />`
 }

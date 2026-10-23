@@ -89,7 +89,34 @@ body.light .markdown-live { --text: #333; --bright: #333; --muted: #777; --line:
 .markdown-live .md-raw-code { font-family: var(--font-mono); background: var(--md-code-bg); }
 .markdown-live .md-raw-link { color: var(--md-link-color); text-decoration: underline; }
 .markdown-live .md-raw-delimiter, .markdown-live .md-raw-destination { color: var(--muted); opacity: .65; font-weight: normal; font-style: normal; text-decoration: none; }
-.markdown-live .md-source-image { display: block; font: .9em/1.65 var(--font-mono); margin-bottom: .5em; }
+.markdown-live .md-source-image {
+  position: fixed;
+  z-index: 30;
+  display: block;
+  width: max-content;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 13px/1.65 var(--font-mono);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  user-select: text;
+  cursor: text;
+}
+.markdown-live .md-source-image .md-inline-source-input {
+  display: block;
+  min-width: 1ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
 .markdown-live .md-local-source-invalid { outline: 1px solid var(--pink); }
 .markdown-live .md-inline-source-warning { display: block; font: var(--ui-small-font-size)/1.5 var(--font-sans); color: var(--pink); padding: 3px 5px; }
 

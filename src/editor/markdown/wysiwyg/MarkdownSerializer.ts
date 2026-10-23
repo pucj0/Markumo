@@ -99,7 +99,7 @@ export const markdownSerializer = new MarkdownSerializer({ ...defaultMarkdownSer
   },
   image(state, node) {
     const original = node.attrs.htmlSource && parseControlledImageHtml(node.attrs.htmlSource)
-    if (original && ['src', 'alt', 'title', 'width', 'align'].every(key => (original[key as keyof typeof original] ?? null) === (node.attrs[key] ?? null))) {
+    if (original && ['src', 'alt', 'title', 'width', 'align', 'zoom'].every(key => (original[key as keyof typeof original] ?? null) === (node.attrs[key] ?? null))) {
       state.write(node.attrs.htmlSource)
       return
     }
@@ -111,6 +111,7 @@ export const markdownSerializer = new MarkdownSerializer({ ...defaultMarkdownSer
       title: node.attrs.title || null,
       width: node.attrs.width,
       align: node.attrs.align,
+      zoom: node.attrs.zoom,
     }, !!node.attrs.htmlSource)
     if (controlled) {
       state.write(controlled)

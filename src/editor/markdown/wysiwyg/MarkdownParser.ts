@@ -232,6 +232,7 @@ export function parseMarkdown(source:string, referenceEnvironment:Record<string,
           title: controlledImage.title,
           width: controlledImage.width,
           align: controlledImage.align,
+          zoom: controlledImage.zoom ?? null,
           htmlSource: original.trim(),
         }))
       } else if (fnMatch) {

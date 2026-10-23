@@ -4,6 +4,8 @@ import { Decoration, DecorationSet } from 'prosemirror-view'
 import { parser } from '@lezer/markdown'
 import { markdownSyntaxExtensions } from '../semantics'
 import { markdownParser } from './MarkdownParser'
+import { parseControlledImageHtml } from './imageHtml'
+import { positionImageOverlay } from './imageOverlay'
 import type { MarkdownSourceBridge, SourcePatch } from './MarkdownSourceBridge'
 
 const syntax = parser.configure(markdownSyntaxExtensions)
@@ -12,6 +14,8 @@ export function parseInlineSource(raw: string, inherited: readonly Mark[] = [], 
   if (raw.length > 8192) return null
   if (!raw) return Fragment.empty
   try {
+    const image = parseControlledImageHtml(raw)
+    if (image) return Fragment.from(markdownParser.schema.nodes.image.create({ ...image, htmlSource: raw }, null, inherited))
     const doc = markdownParser.parse(raw, {...environment,references:{...environment.references as object}})
     if (doc.childCount !== 1 || doc.firstChild?.type.name !== 'paragraph') return null
     const nodes: PMNode[] = []
@@ -28,6 +32,15 @@ export function inlineSourceRange(bridge: MarkdownSourceBridge, doc: PMNode, fro
   const expected = doc.slice(from, to).content
   const inherited = expected.firstChild?.marks.filter(mark => mark.type.name !== kind) || []
   if (kind === 'image') {
+    const matches = (raw: string) => {
+      const content = parseInlineSource(raw, inherited, bridge.environment)
+      if (content?.eq(expected)) return true
+      // Attribute edits may have rewritten HTML while the atom still retains
+      // its previous spelling. Compare image semantics without that spelling.
+      const image = content?.firstChild, target = expected.firstChild
+      return !!(parseControlledImageHtml(raw) && content?.childCount === 1 && expected.childCount === 1 && image && target &&
+        image.type.create({ ...image.attrs, htmlSource: target.attrs.htmlSource }, image.content, image.marks).eq(target))
+    }
     // Source syntax and PM atoms share document order, including duplicate
     // images and images nested in lists, quotes and table cells.
     let base = 0
@@ -43,10 +56,11 @@ export function inlineSourceRange(bridge: MarkdownSourceBridge, doc: PMNode, fro
       })
       let index = 0, result: {raw:string;sourceFrom:number;sourceTo:number;inherited:readonly Mark[];blockId:string} | null = null
       syntax.parse(block.raw).iterate({ enter(node) {
-        if (node.name !== 'Image') return
+        const candidate = block.raw.slice(node.from, node.to)
+        if (node.name !== 'Image' && !(['HTMLTag', 'HTMLBlock'].includes(node.name) && parseControlledImageHtml(candidate))) return
         if (index++ === target) {
           const raw = block.raw.slice(node.from,node.to)
-          if (parseInlineSource(raw,inherited,bridge.environment)?.eq(expected)) result = {
+          if (matches(raw)) result = {
             raw,sourceFrom:block.from+node.from,sourceTo:block.from+node.to,inherited,blockId:block.id,
           }
         }
@@ -88,6 +102,7 @@ export class InlineSourceView {
   private pointerDown=false
   private blurPending=false
   private blurTimer:ReturnType<typeof setTimeout>|undefined
+  private overlayCleanup?: () => void
   private onPointerDown=()=>{this.pointerDown=true}
   private onPointerUp=()=>{
     this.pointerDown=false
@@ -170,13 +185,27 @@ export class InlineSourceView {
         event.preventDefault(); history(event.key.toLowerCase() === 'y' || event.shiftKey); return
       }
       if (modifier && ['a','f','r'].includes(event.key.toLowerCase())) {
+        if (this.kind === 'image' && event.key.toLowerCase() === 'a') {
+          event.preventDefault(); this.select(0, this.draft.length); return
+        }
         command(event.key.toLowerCase() === 'a' ? 'select-all' : event.key.toLowerCase() === 'f' ? 'find' : 'replace')
         return
       }
       if (modifier && (['b','i','`'].includes(event.key.toLowerCase()) || (event.shiftKey && event.key.toLowerCase() === 'x'))) {
         command(event.key.toLowerCase() === 'b' ? 'bold' : event.key.toLowerCase() === 'i' ? 'italic' : event.key === '`' ? 'inline-code' : 'strike'); return
       }
-      if (event.key === 'Enter') { command(event.shiftKey ? 'hard-break' : 'enter'); return }
+      if (event.key === 'Enter') {
+        if (this.kind === 'image') {
+          event.preventDefault()
+          const selection = this.selection()
+          if (!selection) return
+          const start = Math.min(selection.anchor, selection.head), end = Math.max(selection.anchor, selection.head)
+          this.draft = this.draft.slice(0, start) + '\n' + this.draft.slice(end)
+          this.input.textContent = this.draft
+          this.select(start + 1, start + 1); accept()
+        } else command(event.shiftKey ? 'hard-break' : 'enter')
+        return
+      }
       if (event.key === 'Escape') {
         event.preventDefault()
         if (this.pending) { this.draft = this.accepted; this.paint() }
@@ -245,11 +274,33 @@ export class InlineSourceView {
     }
     this.input.replaceChildren(fragment)
   }
-  focus(offset = 0) {
+  focus(offset?: number, selectAll = false) {
     this.input.focus({preventScroll:true})
-    if (this.kind === 'image') {
-      this.select(this.draft.length, this.draft.length)
-    } else this.select(offset, offset)
+    if (selectAll) this.select(0, this.draft.length)
+    else if (this.kind === 'image' && offset === undefined) {
+      const alt = /^!\[([^\]]*)\]/.exec(this.draft)
+      const at = alt ? 2 : this.draft.length
+      this.select(at, alt ? at + alt[1].length : at)
+    } else this.select(offset ?? 0, offset ?? 0)
+  }
+  attachImageOverlay(pane: HTMLElement, anchor: () => HTMLElement | null) {
+    const reposition = () => {
+      const image = anchor()
+      if (!this.dead && image && this.dom.isConnected) positionImageOverlay(this.dom, image, pane)
+    }
+    const observer = new ResizeObserver(reposition)
+    observer.observe(pane)
+    observer.observe(this.dom)
+    const image = anchor()
+    if (image) observer.observe(image)
+    window.addEventListener('resize', reposition)
+    document.addEventListener('scroll', reposition, true)
+    this.overlayCleanup = () => {
+      observer.disconnect()
+      window.removeEventListener('resize', reposition)
+      document.removeEventListener('scroll', reposition, true)
+    }
+    queueMicrotask(reposition)
   }
   decorations(doc: PMNode) {
     if (this.dead || this.to > doc.content.size) return DecorationSet.empty
@@ -277,6 +328,7 @@ export class InlineSourceView {
   destroy() {
     if (this.dead) return
     this.dead=true
+    this.overlayCleanup?.()
     if(this.blurTimer)clearTimeout(this.blurTimer)
     document.removeEventListener('pointerdown',this.onPointerDown,true)
     document.removeEventListener('pointerup',this.onPointerUp,true)

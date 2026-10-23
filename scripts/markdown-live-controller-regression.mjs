@@ -122,7 +122,7 @@ try {
         }
       }
       await page.evaluate(() => window.f.manager.setIndent(4, false))
-      await page.locator('[data-pane="main"] .md-html-edit-trigger').click()
+      await page.locator('[data-pane="main"] .md-html-preview').click()
       const html = page.locator('[data-pane="main"] .md-html-source-editor .cm-content')
       await html.waitFor()
       await page.evaluate(() => {

@@ -512,8 +512,9 @@ export class MarkdownEditorController implements LiveEditor {
             view,
             getPos,
             this.options.resources,
-            (image, current) => this.imagePreview.open(image, current, () => this.view.focus()),
+            (pos, selectAll) => this.openInlineAt(pos, 'image', selectAll),
             commit => this.pickImageFile(commit),
+            (pos, attrs) => this.updateImageAt(pos, attrs),
           )
           this.liveImages.add(imgView)
           const destroy = imgView.destroy.bind(imgView)
@@ -1239,8 +1240,7 @@ export class MarkdownEditorController implements LiveEditor {
       queueMicrotask(() => {
         if (this.disposed) return
         const pos = this.view.state.doc.nodeAt(at)?.type === s.nodes.image ? at : this.view.state.selection.from - 1
-        const node = this.view.state.doc.nodeAt(pos), anchor = this.view.nodeDOM(pos)
-        if (node?.type === s.nodes.image && anchor instanceof HTMLElement) this.imageProperties(anchor, node, pos)
+        if (this.view.state.doc.nodeAt(pos)?.type === s.nodes.image) this.openInlineAt(pos, 'image')
       })
       return true
     }
@@ -1468,8 +1468,12 @@ export class MarkdownEditorController implements LiveEditor {
     })
   }
 
-  private openInlineAt(pos: number, kind: string) {
+  private openInlineAt(pos: number, kind: string, selectAll = false) {
     this.pendingInline = null
+    if (kind === 'image' && this.inlineSource?.kind === kind && this.inlineSource.from === pos) {
+      this.inlineSource.focus(undefined, selectAll)
+      return
+    }
     if (this.options.readOnly?.() || this.composing) return
     if (this.inlineSource) { if (this.inlineSource.pending) return; this.closeInline() }
     const doc = this.view.state.doc, $pos = doc.resolve(pos)
@@ -1520,10 +1524,14 @@ export class MarkdownEditorController implements LiveEditor {
           else this.format(command)
         }
       })
+    if (kind === 'image') editor.attachImageOverlay(this.view.dom.closest<HTMLElement>('.markdown-live') ?? this.view.dom, () => {
+      const anchor = this.view.nodeDOM(editor.from)
+      return anchor instanceof HTMLElement ? anchor.querySelector<HTMLElement>('.md-image-media') ?? anchor : null
+    })
     this.inlineSource = editor; this.dismissedInline = null
     this.focusEpoch++
     this.view.updateState(this.view.state)
-    editor.focus(Math.max(0, Math.min(range.raw.length, this.bridge.sourcePosition(pos) - range.sourceFrom)))
+    editor.focus(kind === 'image' ? undefined : Math.max(0, Math.min(range.raw.length, this.bridge.sourcePosition(pos) - range.sourceFrom)), selectAll)
     if (kind === 'image') this.options.selected(range.sourceTo, range.sourceTo)
   }
 
@@ -1625,12 +1633,19 @@ export class MarkdownEditorController implements LiveEditor {
 
   /** Sets one image attribute at `pos` as a single undoable edit. */
   private updateImageAt(pos: number, attrs: Record<string, unknown>) {
-    if (this.options.readOnly?.()) return
+    if (this.options.readOnly?.() || this.composing) return
     const node = this.view.state.doc.nodeAt(pos)
     if (node?.type !== s.nodes.image) return
-    const tr = this.view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...attrs })
+    this.closeInline(false)
+    const next = { ...node.attrs, ...attrs }
+    // Percentage sizing uses HTML, including 100%, while keeping the picture
+    // editable through the same complete source surface.
+    if (attrs.htmlSource !== null && ('zoom' in attrs || next.htmlSource || next.width || next.align)) {
+      next.htmlSource = controlledImageHtml({ src: String(next.src ?? ''), alt: String(next.alt ?? ''), title: next.title ?? null, width: next.width ?? null, align: normalizeImageAlign(next.align), zoom: next.zoom }, true)
+    }
+    const tr = this.view.state.tr.setNodeMarkup(pos, undefined, next)
     this.view.dispatch(tr.setSelection(NodeSelection.create(tr.doc, pos)).setMeta('isolated', true))
-    this.view.focus()
+    queueMicrotask(() => { if (!this.disposed && this.view.state.doc.nodeAt(pos)?.type === s.nodes.image) this.openInlineAt(pos, 'image') })
   }
 
   private deleteImageAt(pos: number) {
@@ -2306,13 +2321,10 @@ export class MarkdownEditorController implements LiveEditor {
         // visible in the document until the user asks for it.
         entries.push('separator',
           // Typora keeps resizing here instead of a floating control on the image.
-          { label: '缩放图片', disabled: !editable, children: [
-            [null, '原始大小'], ['25%', '25%'], ['33%', '33%'], ['50%', '50%'],
-            ['67%', '67%'], ['80%', '80%'], ['100%', '100%'], ['150%', '150%'], ['200%', '200%'],
-          ].map(([width, label]) => ({
-            label: String(label),
-            checked: (node.attrs.width ?? null) === width,
-            run: () => this.updateImageAt(pos, { width }),
+          { label: '缩放图片', disabled: !editable, children: [25, 33, 50, 67, 80, 100, 150, 200].map(zoom => ({
+            label: `${zoom}%`,
+            checked: Number(node.attrs.zoom ?? 100) === zoom,
+            run: () => this.updateImageAt(pos, { zoom }),
           })) },
           { label: '图片对齐', disabled: !editable, children: [
             ['left', '左对齐'], ['center', '居中'], ['right', '右对齐'], [null, '默认'],
@@ -2322,8 +2334,8 @@ export class MarkdownEditorController implements LiveEditor {
             run: () => this.updateImageAt(pos, { align }),
           })) },
           { label: '转换图片语法', disabled: !editable, children: [
-            { label: 'Markdown ![](src)', checked: !node.attrs.htmlSource, run: () => this.updateImageAt(pos, { htmlSource: null }) },
-            { label: 'HTML <img>', checked: !!node.attrs.htmlSource, run: () => this.updateImageAt(pos, { htmlSource: controlledImageHtml({ src: node.attrs.src, alt: node.attrs.alt, title: node.attrs.title, width: node.attrs.width, align: node.attrs.align }) }) },
+            { label: 'Markdown ![](src)', checked: !node.attrs.htmlSource && !node.attrs.width && !node.attrs.align && !node.attrs.zoom, run: () => this.updateImageAt(pos, { htmlSource: null, width: null, align: null, zoom: null }) },
+            { label: 'HTML <img>', checked: !!node.attrs.htmlSource || !!node.attrs.width || !!node.attrs.align || !!node.attrs.zoom, run: () => this.updateImageAt(pos, { htmlSource: controlledImageHtml({ src: node.attrs.src, alt: node.attrs.alt, title: node.attrs.title, width: node.attrs.width, align: node.attrs.align, zoom: node.attrs.zoom }, true) }) },
           ] },
           { label: '放大预览', disabled: !node.attrs.src, run: () => this.previewImageAt(pos) },
           { label: '复制图片路径', disabled: !node.attrs.src, run: () => { void navigator.clipboard?.writeText(String(node.attrs.src)) } },

@@ -99,6 +99,7 @@ nodes.image = {
     width: { default: null },
     align: { default: null },
     htmlSource: { default: null },
+    zoom: { default: null },
   },
   parseDOM: [
     {

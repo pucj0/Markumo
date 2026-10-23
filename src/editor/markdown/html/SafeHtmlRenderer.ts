@@ -43,7 +43,8 @@ export function sanitizeCssStyle(rawStyle: string): string {
     const prop = decl.slice(0, colonIdx).trim().toLowerCase()
     const val = decl.slice(colonIdx + 1).trim()
 
-    if (!SAFE_CSS_PROPERTIES.has(prop)) continue
+    if (!SAFE_CSS_PROPERTIES.has(prop) && prop !== 'zoom') continue
+    if (prop === 'zoom' && (!/^\d+(?:\.\d{1,2})?%$/.test(val) || Number(val.slice(0, -1)) < 1 || Number(val.slice(0, -1)) > 1000)) continue
 
     const lowerVal = val.toLowerCase()
     if (
