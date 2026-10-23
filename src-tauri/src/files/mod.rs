@@ -741,7 +741,14 @@ impl FileService {
         if self.check_external(token)? != expected {
             return fail("conflict", "磁盘版本再次变化，请刷新后重试。");
         }
-        let file = self.read_selected(path, Some(encoding), Some(token))?;
+        // A comparison read is observational: its requested encoding must not
+        // change the live buffer's save format or the disk-history decoder.
+        let grant = self.grants.get(token).unwrap();
+        let original = (grant.hex, grant.encoding.clone());
+        let result = self.read_selected(path, Some(encoding), Some(token));
+        let grant = self.grants.get_mut(token).unwrap();
+        (grant.hex, grant.encoding) = original;
+        let file = result?;
         if file.metadata.version != expected || self.check_external(token)? != expected {
             return fail("conflict", "读取期间文件发生变化，请刷新后重试。");
         }

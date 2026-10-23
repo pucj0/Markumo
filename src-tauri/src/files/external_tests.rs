@@ -166,6 +166,7 @@ fn external_utf16_bom_hex_and_size_limits_are_preserved() {
     assert_eq!(external.text,"中文😀\r\nnext");assert_eq!(external.metadata.encoding,"UTF-16LE");assert!(external.metadata.bom);
     let hex=s.read_external(token,&opened.metadata.version,"Hex").unwrap();assert_eq!(hex.metadata.encoding,"Hex");
     assert!(!s.grants.get(token).unwrap().hex, "comparison cannot change writable byte semantics");
+    assert_eq!(s.grants.get(token).unwrap().encoding.as_deref(), Some("UTF-16LE"));
     fs::File::options().write(true).open(&path).unwrap().set_len(MAX_BYTES+1).unwrap();
     assert_eq!(s.check_external(token).unwrap_err().code,"size");
 }
