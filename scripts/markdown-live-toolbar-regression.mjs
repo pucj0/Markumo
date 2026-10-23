@@ -553,7 +553,10 @@ try {
   await test('continuous width inputs coalesce once per frame, flush the last value and persist without replacing the editor', async () => {
     const id = await newDoc(Array.from({ length: 90 }, (_, i) => `Paragraph ${i} target text.`).join('\n\n') + '\n')
     await page.locator('.md-prose p').nth(20).click()
-    await page.locator('.md-prose p').nth(20).selectText()
+    // Use the editing surface's actual keyboard selection. selectText() writes
+    // only the browser Range and can race PM's focus/scroll selection observer.
+    await page.keyboard.press('Home')
+    await page.keyboard.press('Shift+End')
     await page.waitForFunction(() => !window.appTest.setup.manager.getState(window.appTest.setup.manager.activeId).selection.main.empty)
     const selection = await activeSelection()
     await page.evaluate(() => { document.querySelector('.markdown-live').scrollTop = 500 })
