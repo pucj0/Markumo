@@ -40,7 +40,12 @@ try {
       expectedVersion: calls[0].args[2], currentText: m.getText(id), dirty: m.metadata(id).dirty,
       version: m.metadata(id).lastDiskVersion, active: m.activeId === other, saving: files.saving.size }
     m.select(id); const before = m.getText(id), depth = f.undoDepth(m.getState(id))
-    const failed = files.save(id); calls[1].reject(Error('injected disk conflict'))
+    const failed = files.save(id)
+    // Saving now awaits the pre-save history step before reaching the disk
+    // gateway. Synchronize with that call instead of assuming synchronous IPC.
+    const deadline = Date.now()+2000
+    while(calls.length<2) { if(Date.now()>deadline)throw Error('disk save was not reached');await new Promise(r=>setTimeout(r,0)) }
+    calls[1].reject(Error('injected disk conflict'))
     const failure = { saved: await failed, text: m.getText(id), depth: f.undoDepth(m.getState(id)), dirty: m.metadata(id).dirty }
     m.command('undo'); const undone = m.getText(id)
     const cancelDetail = await files.saveDetailed(id, true)

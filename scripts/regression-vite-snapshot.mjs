@@ -52,7 +52,7 @@ export async function createServer(options={}){
  config.optimizeDeps.include=[...new Set([...dependencies,...(options.optimizeDeps?.include??[])])].sort()
  config.optimizeDeps.entries=[]
  const fixturePlugins=(options.plugins??[]).flat().filter(Boolean).map(plugin=>plugin.name??'fixture').join('-').replace(/[^\w-]/g,'-')||'standard'
- config.cacheDir=path.resolve('node_modules/.vite-regressions',ref||'working-tree',fixturePlugins)
+ config.cacheDir=options.cacheDir??path.resolve('node_modules/.vite-regressions',ref||'working-tree',`${fixturePlugins}-${options.server?.port??1420}`)
  const server=await vite.createServer(config)
  const optimizer=server.environments.client.depsOptimizer
  if(optimizer){await optimizer.init();await optimizer.scanProcessing;optimizer.run();await Promise.all(Object.values(optimizer.metadata.discovered).map(info=>info.processing))}

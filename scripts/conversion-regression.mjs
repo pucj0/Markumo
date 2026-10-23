@@ -18,7 +18,13 @@ window.isTauri = true;
 mockWindows('main');
 const calls = [], notifications = [];
 let sequence = 0, cancelSave = false, cancelOpen = false, failSave = false;
-mockIPC((command, args) => {
+const transport=(command, args, options) => {
+  if(command==='save_docx_bytes') {
+    if(!(args instanceof Uint8Array)||args[0]!==80||args[1]!==75)throw Error('invalid raw Word payload');
+    calls.push({command,args:{token:options.headers['x-markumo-conversion-token'],byteLength:args.length}});
+    if(failSave)throw Error('injected native write failure');
+    return;
+  }
   calls.push({ command, args });
   if (command === 'detect_pandoc') return { available: true, version: 'fake-ui-contract' };
   if (command === 'export_save_dialog') return cancelSave ? null : { token: 'write-' + (++sequence), path: 'E:/exports/' + args.defaultName };
@@ -31,7 +37,9 @@ mockIPC((command, args) => {
     return;
   }
   throw new Error('Unexpected IPC: ' + command);
-});
+};
+mockIPC(()=>{});
+window.__TAURI_INTERNALS__.invoke=transport;
 const manager = new DocumentManager([]);
 manager.openFile({ kind: 'text', token: 'document-capability', path: 'E:/documents/notes.md', name: 'notes.md', text: '# Title\\n\\ntext\\n\\n|a|b|\\n|-|-|\\n|one|two|', version: 'v1', encoding: 'UTF-8', bom: false, eol: 'LF', readOnly: false });
 const exporter = new ExportController(manager, message => notifications.push(message));
@@ -59,13 +67,13 @@ try {
       return { path, calls: f.calls, notifications: f.notifications, last: f.loadLastExport(), frames: document.querySelectorAll('iframe').length }
     }, format)
     assert.match(result.path, /notes\.(html|png|pdf|docx)$/)
-    const command = format.startsWith('html') || format === 'png' ? 'save_binary_file' : format === 'pdf' ? 'print_to_pdf' : 'pandoc_export_docx'
+    const command = format.startsWith('html') || format === 'png' ? 'save_binary_file' : format === 'pdf' ? 'print_to_pdf' : 'save_docx_bytes'
     const write = result.calls.find(call => call.command === command)
     const selected = result.calls.find(call => call.command === 'export_save_dialog')
     assert(write?.args.token.startsWith('write-'))
     assert.equal(selected.args.defaultName, result.path.split('/').pop())
     assert(!['path', 'outputDocxPath', 'outputPdfPath', 'resourceDir'].some(key => key in write.args))
-    if (format === 'docx') assert.equal(write.args.documentToken, 'document-capability')
+    if (format === 'docx') assert(write.args.byteLength>0)
     if (format === 'pdf') { assert.match(write.args.htmlContent, /@page/); assert.equal(write.args.options.paperSize, 'A4') }
     assert(result.calls.some(call => call.command === 'release_conversion_lease' && call.args.token === write.args.token))
     assert(!JSON.stringify(result.last).includes('write-'))

@@ -628,7 +628,9 @@ body.light .file-icon-gray { color: #6c7c92; }
 }
 .markdown-live .md-code-placeholder.has-numbers > code.md-code-flat::before { content: attr(data-line-numbers); white-space: pre; line-height: calc(var(--md-code-font-size) * var(--md-code-line-height)); }
 .markdown-live .md-code-block .md-code-placeholder.is-wrapped {
-  white-space: pre-wrap;
+  /* Match CodeMirror lineWrapping, including spaces at wrap boundaries. */
+  white-space: break-spaces;
+  word-break: break-word;
   overflow-wrap: anywhere;
 }
 

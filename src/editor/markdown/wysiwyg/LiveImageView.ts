@@ -45,11 +45,17 @@ export class LiveImageView implements NodeView {
 
     this.dom.onmousedown = event => {
       if (this.toolbar.contains(event.target as globalThis.Node)) return
+      if (event.button !== 0) return
       const pos = this.getPos()
       if (pos !== undefined && !this.disposed) {
+        // A browser caret selection after this event can replace our image
+        // NodeSelection, especially when the previously focused math input
+        // collapses on blur. Own the pointer selection and focus together.
+        event.preventDefault()
         this.view.dispatch(
           this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos))
         )
+        this.view.focus()
         this.selectNode()
       }
     }

@@ -183,7 +183,8 @@ try {
   // leave a stale min-height from the previous live view.
   const geometry=[]
   await page.evaluate(()=>document.body.classList.add('light'))
-  for(const width of [1280,600]) {
+  for(const font of ['Consolas','Courier New','monospace']) for(const width of [1280,600]) {
+    await page.evaluate(font=>document.documentElement.style.setProperty('--font-mono',font),font)
     await page.setViewportSize({width,height:850})
     const text='Visual paragraph.\n\n```js\n'+Array.from({length:8},(_,i)=>`const longLine${i} = "${'word '.repeat(30)}";`).join('\n')+'\n```\n'
     await page.evaluate(text=>window.f.reset(text,true),text)
@@ -201,7 +202,7 @@ try {
         const after=code.cmContainer.getBoundingClientRect().height
         return {before,after}
       },{wrap,numbers})
-      geometry.push({width,wrap,numbers,...sizes})
+      geometry.push({font,width,wrap,numbers,...sizes})
       assert.ok(Math.abs(sizes.before-sizes.after)<=2,`Placeholder/live height parity: ${JSON.stringify(geometry.at(-1))}`)
     }
     await page.evaluate(()=>{const c=[...window.f.live().codeViews][0];c.inViewport=false;c.detachEditor()})
