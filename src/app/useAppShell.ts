@@ -1390,6 +1390,7 @@ export function useAppShell() {
     unsubscribeWorkspace()
     unsubscribe()
     manager.dispose()
+    exportController.dispose()
   })
 
   // --- Return Exact Interface for App.vue ---
@@ -1457,6 +1458,8 @@ export function useAppShell() {
     mainActiveId,
     activeDoc,
     activeDocId,
+    exportProgress: exportController.progress,
+    cancelExport: () => exportController.cancelExport(),
     paletteActions: commands.paletteActions,
     menuGroups: commands.menuGroups,
     commandRegistry: commands.commandRegistry,

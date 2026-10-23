@@ -212,6 +212,10 @@
   />
   <UpdatePanel v-if="updatePanelOpen" :state="updateStatus" @close="updatePanelOpen=false" @check="updateManager.checkForUpdates()" @download="updateManager.downloadUpdate()" @install="updateManager.installUpdate()" @release="openUpdateRelease" @link="openUpdateLink" />
   <UpdateConfirm ref="updateConfirmRef" />
+  <div v-if="exportProgress" class="docx-export-progress" role="status" aria-label="Word 导出进度">
+    <span>{{ exportProgress.phase === 'generating' ? '正在生成 Word 文档…' : '正在写入 Word 文件…' }}</span>
+    <button type="button" :disabled="exportProgress.phase === 'writing'" @click="cancelExport">取消导出</button>
+  </div>
   <div v-if="updateInstalling" class="update-install-overlay" role="status">{{ updateStatus.phase==='preparing' ? '正在保存文档和工作现场…' : '正在安装更新，请稍候…' }}</div>
 </template>
 
@@ -235,7 +239,7 @@ import { computed, nextTick, provide, ref } from 'vue'
 import { workspaceNavigationKey } from './features/workspace/navigation'
 import { useAppShell } from './app/useAppShell'
 const { autoCheckUpdates,autoDownloadUpdates,updateStatus,updatePanelOpen,updateConfirmRef,updateManager,openUpdatePanel,openUpdateRelease,openUpdateLink,caretAnimation,outlineWidth,markdownClipboard,markdownTypography,appMode, sidebarVisible, sidebarWidth, sidebarPanel, focusMode, theme, uiFontSize, fontSize, fontFamily, indentSize, useTabs, shortcuts, updateShortcuts, updateKeymap, keymapPreset, wordWrap, showOutline, typewriterMode, defaultMdMode, liveToolbar, externalFileMonitoring, autoReloadExternal, autoSave, autoSaveDelay, treeClickMode, autoFollowActiveFile, smartExpand, compactFolders, syntaxStyle, bracketMode, imageRules,currentDocumentImageRules,updateDocumentImageRules,
-  paletteRef, settingsRef, discardRef, toastRef, historyOpen, historyPath, historyDocumentId, historyContent, manager, files, workspace, openedDocuments, activeDoc, activeDocId, paletteActions, menuGroups,commandRegistry,executeCommand,
+  paletteRef, settingsRef, discardRef, toastRef, historyOpen, historyPath, historyDocumentId, historyContent, manager, files, workspace, openedDocuments, activeDoc, activeDocId, exportProgress, cancelExport, paletteActions, menuGroups,commandRegistry,executeCommand,
   setMode, toggleSidebar, handleSelectPanel, leftSidebarOccupied, effectiveOutlinePosition, outlineVisible, toggleTheme, toggleFocus, openSettings, openPalette, handleSelectDoc,
   createNewDoc, closeDocById, cancelPendingClose, discardPending, savePending, setLanguage,
   reopenEncoding, convertEncoding, saveAsEncoding,
@@ -339,4 +343,7 @@ const activeRoot = computed(() => appMode.value === 'workspace' && activeDoc.val
   overflow: hidden;
   background: var(--editor);
 }
+.docx-export-progress { position:fixed;right:20px;bottom:36px;z-index:2000;display:flex;gap:16px;align-items:center;padding:12px 16px;background:var(--paper);color:var(--ink);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow); }
+.docx-export-progress button { cursor:pointer;padding:4px 10px;border:1px solid var(--line);border-radius:4px;color:var(--ink);background:var(--hover); }
+.docx-export-progress button:disabled { cursor:default;opacity:.55; }
 </style>

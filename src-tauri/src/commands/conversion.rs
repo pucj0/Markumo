@@ -185,6 +185,26 @@ pub async fn save_binary_file(
         .await
         .map_err(|e| e.to_string())?
 }
+
+/// Raw bytes avoid a large JSON number array on the WebView main thread. The
+/// same window-bound, single-operation DOCX lease still controls the commit.
+#[tauri::command]
+pub async fn save_docx_bytes(
+    window: WebviewWindow,
+    store: State<'_, ConversionStore>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<(), String> {
+    let token = request.headers().get("x-markumo-conversion-token")
+        .and_then(|value| value.to_str().ok()).ok_or("缺少 Word 导出授权")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("Word 导出需要原始二进制请求".into()) };
+    if bytes.len() > conversion::MAX_OUTPUT || !bytes.starts_with(b"PK\x03\x04") {
+        return Err("Word 输出格式无效或超过 16 MiB，未写入文件".into());
+    }
+    let op = store.begin(window.label(), &[(token, Purpose::Docx)])?;
+    let bytes = bytes.clone();
+    tauri::async_runtime::spawn_blocking(move || conversion::save_binary(&op, &bytes))
+        .await.map_err(|error| error.to_string())?
+}
 #[tauri::command]
 pub async fn read_conversion_html(
     window: WebviewWindow,

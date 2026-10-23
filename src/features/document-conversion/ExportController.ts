@@ -7,9 +7,16 @@ import { loadConversionSettings, saveLastExport, loadLastExport } from './conver
 import { renderMarkdownForExport, extractDocumentTitle } from './ExportRenderer'
 import { buildCompleteHtml } from './ExportStyles'
 import { exportAppearance } from './ExportAppearance'
-import { exportMarkdownToNativeDocx } from './nativeDocxExport'
+import { shallowRef } from 'vue'
 
 export class ExportController {
+  readonly progress = shallowRef<{phase:'generating'|'writing'}|null>(null)
+  private activeExport: AbortController | null = null
+  cancelExport(): boolean {
+    if (!this.activeExport || this.progress.value?.phase !== 'generating') return false
+    this.activeExport.abort(); return true
+  }
+  dispose() { this.cancelExport() }
   constructor(
     private manager: DocumentManager,
     private notify: (message: string) => void
@@ -27,6 +34,7 @@ export class ExportController {
   }
 
   async exportDocument(format: ExportFormat, customSettings?: Partial<ConversionSettings>): Promise<string | null> {
+    if(this.activeExport){this.notify('已有 Word 导出进行中，请完成或取消后重试。');return null}
     if (!this.canExportActive()) {
       this.notify('当前活动文件不是 Markdown 文档，无法导出。')
       return null
@@ -43,6 +51,8 @@ export class ExportController {
     const defaultFilename = `${rawName}.${ext}`
 
     let target: ConversionSelection | null = null
+    const cancellation = format === 'docx' ? new AbortController() : null
+    if(cancellation)this.activeExport=cancellation
 
     try {
       if (isTauri()) {
@@ -66,7 +76,8 @@ export class ExportController {
       } else if (format === 'pdf') {
         await this.exportPdf(textSnapshot, docTitle, target, settings, doc.fileToken)
       } else if (format === 'docx') {
-        await this.exportDocx(textSnapshot, docTitle, doc.path, target, doc.fileToken)
+        this.progress.value={phase:'generating'}
+        await this.exportDocx(textSnapshot, docTitle, doc.path, target, doc.fileToken, cancellation!.signal)
       } else if (format === 'png') {
         await this.exportPng(textSnapshot, target, settings, doc.fileToken)
       }
@@ -82,10 +93,12 @@ export class ExportController {
       this.notify(`已成功导出 ${displayTarget}`)
       return targetPath
     } catch (error) {
+      if(cancellation?.signal.aborted){this.notify('Word 导出已取消，未写入输出文件。');return null}
       const msg = error instanceof Error ? error.message : String(error)
       this.notify(`导出失败：${msg}`)
       throw error
     } finally {
+      if(this.activeExport===cancellation){this.activeExport=null;this.progress.value=null}
       await releaseConversion(target)
     }
   }
@@ -160,13 +173,16 @@ export class ExportController {
     title: string,
     docPath?: string,
     target?: ConversionSelection,
-    documentToken?: string
+    documentToken?: string,
+    signal?: AbortSignal
   ): Promise<void> {
     if (!target) throw new Error('未指定导出路径')
     // Pandoc stays available as the advanced path, but the native writer runs
     // first because it needs no external tool and reports its own warnings.
     const resources = createMarkdownResources(() => documentToken)
-    const result = await exportMarkdownToNativeDocx(markdown, {
+    const { generateDocx } = await import('./docxWorkerClient')
+    const result = await generateDocx(markdown, {
+      signal,
       title,
       resolveImage: async source => {
         if (!source || /^(?:https?:)?\/\//i.test(source)) return null
@@ -180,12 +196,13 @@ export class ExportController {
     })
     for (const warning of result.warnings) this.notify(warning.message)
     const bytes = result.bytes
+    if(signal?.aborted)throw new DOMException('导出已取消','AbortError')
+    if(bytes.byteLength > 16*1024*1024)throw new Error('Word 输出超过 16 MiB 安全上限，未写入文件；请拆分文档后导出。')
+    // Cancellation is available through generation. Once this atomic commit
+    // starts, the UI reports "writing" and never claims it was cancelled.
+    this.progress.value={phase:'writing'}
     if (isTauri()) {
-      await invoke('save_binary_file', {
-        token: target.token,
-        format: 'docx',
-        bytes: Array.from(bytes),
-      })
+      await invoke('save_docx_bytes', bytes, { headers: {'x-markumo-conversion-token':target.token} })
     } else {
       this.downloadBlob(new Blob([bytes as unknown as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }), target.path)
     }

@@ -58,6 +58,11 @@ jobs:
         run: |
           set -o pipefail
           node scripts/run-regressions.mjs scripts/split-preview-regression.mjs scripts/markdown-live-toolbar-regression.mjs scripts/code-block-virtualization-regression.mjs scripts/math-editor-regression.mjs --repeat=3 2>&1 | tee test-results/browser-stability.log
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Validate generated Word packages and reject malformed schema control
+        run: node scripts/validate-docx.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

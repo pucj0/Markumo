@@ -10,7 +10,7 @@ import { createServer } from 'vite'
 const server = await createServer({
   server: { host: '127.0.0.1', port: 1467, strictPort: true, hmr: false, watch: null }
 })
-const { exportMarkdownToNativeDocx } = await server.ssrLoadModule('./src/features/document-conversion/nativeDocxExport.ts')
+const { exportMarkdownToNativeDocx, createZipArchive } = await server.ssrLoadModule('./src/features/document-conversion/nativeDocxExport.ts')
 
 /** Minimal store-only ZIP reader: enough to inspect our own package. */
 function unzip(bytes) {
@@ -240,6 +240,14 @@ try {
     assert.ok(big.warnings.some(warning => warning.kind === 'image'))
     assert.equal(big.stats.images, 0)
     assert.ok(!unzip(big.bytes).has('word/media/image1.png'))
+  })
+  await test('13. schema validator negative control removes the required table grid from an otherwise real package',async()=>{
+    const entries=unzip(result.bytes),files={}
+    for(const [name,entry] of entries)files[name]=entry.bytes
+    const document=text(entries.get('word/document.xml'))
+    assert(document.includes('<w:tblGrid>'))
+    files['word/document.xml']=document.replace(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/,'')
+    fs.writeFileSync('test-results/native-export-invalid-schema.docx',createZipArchive(files))
   })
 } finally {
   await server.close()

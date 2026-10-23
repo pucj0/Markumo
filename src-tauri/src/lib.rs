@@ -330,7 +330,7 @@ pub fn run() {
             commands::conversion::import_open_dialog,
             commands::conversion::release_conversion_lease,
             commands::conversion::read_conversion_html,
-            commands::conversion::save_binary_file,
+            commands::conversion::save_binary_file, commands::conversion::save_docx_bytes,
             commands::conversion::pandoc_export_docx,
             commands::conversion::pandoc_import_docx,
             commands::conversion::print_to_pdf,
