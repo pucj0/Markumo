@@ -92,7 +92,9 @@ pub fn allowed_path(
         .filter(|root| canonical.starts_with(root))
         .max_by_key(|root| root.components().count())
         .ok_or("文件不在授权工作区")?;
-    let valid = validate_under_root(root, &canonical).map_err(|e| e.to_string())?;
+    // Validate the supplied spelling before following links. Canonicalization
+    // above selects the root, but erases the evidence of a symlink/reparse point.
+    let valid = validate_under_root(root, path).map_err(|e| e.to_string())?;
     if !in_directory(&valid, query) || IgnoreRuleSet::new(root, false).is_ignored(&valid, false) {
         return Err("文件在搜索范围之外或被忽略".into());
     }
@@ -830,7 +832,17 @@ mod tests {
             .output()
             .unwrap();
         assert!(status.status.success());
-        assert!(allowed_path(&[root], &link.join("a.txt"), &query("foo")).is_err());
+        assert!(allowed_path(std::slice::from_ref(&root), &link.join("a.txt"), &query("foo")).is_err());
+        // A link back inside the root must also be rejected, even though its
+        // canonical destination is authorized. No admin/symlink privilege needed.
+        let inside = root.join("inside");
+        std::fs::create_dir(&inside).unwrap();
+        std::fs::write(inside.join("a.txt"), "foo").unwrap();
+        let inside_link = root.join("inside-link");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"]).arg(&inside_link).arg(&inside).output().unwrap();
+        assert!(status.status.success());
+        assert!(allowed_path(&[root], &inside_link.join("a.txt"), &query("foo")).is_err());
     }
 
     #[cfg(unix)]
