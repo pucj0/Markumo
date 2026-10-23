@@ -187,7 +187,10 @@ try {
   })
   const activeHeading=async title=>{
     for(const side of ['.outline-sidebar','.left-outline']){
-      await page.waitForFunction(({side,title})=>document.querySelector(side+' [aria-current="location"] .outline-label')?.textContent===title,{side,title})
+      await page.waitForFunction(({side,title})=>document.querySelector(side+' [aria-current="location"] .outline-label')?.textContent===title,{side,title}).catch(async error=>{
+        const diagnostics=await page.evaluate(()=>{const m=window.f.manager,v=m.activeEditorView;return{pane:m.activePane,position:m.outlineViewportPosition(),selection:v?.state.selection.main.head,viewport:v?.viewport,scroll:v&&{top:v.scrollDOM.scrollTop,height:v.scrollDOM.clientHeight,documentTop:v.documentTop},items:window.f.items().map(i=>({name:i.name,from:i.from})),active:[...document.querySelectorAll('[aria-current="location"] .outline-label')].map(n=>n.textContent)}})
+        fs.writeFileSync(`${output}/failure.json`,JSON.stringify({side,title,diagnostics},null,2));console.error('Outline viewport failure',JSON.stringify(diagnostics));throw error
+      })
       assert.equal(await page.locator(side+' [aria-current="location"] .outline-label').evaluate(el=>getComputedStyle(el).fontWeight),'700')
     }
   }
@@ -208,6 +211,9 @@ try {
   await test('Source scrolling tracks the visible heading independently of the caret, including the final section',async()=>{
     await page.evaluate(()=>window.f.manager.setMarkdownMode('md','source','main'))
     await page.locator('.cm-content').waitFor()
+    // Mode entry restores its measured CM scroll snapshot asynchronously. Wait
+    // for that initial measure before issuing a separate manual scroll.
+    await page.evaluate(()=>new Promise(resolve=>window.f.manager.activeEditorView.requestMeasure({read:()=>null,write:()=>queueMicrotask(resolve)})))
     const before=await page.evaluate(()=>window.f.manager.activeEditorView.state.selection.main.head)
     await page.evaluate(()=>{
       const v=window.f.manager.activeEditorView,item=window.f.items()[5]
