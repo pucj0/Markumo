@@ -24,7 +24,7 @@ import { renderFrontMatterCard } from './FrontMatterCard'
 import { LiveImageView } from './LiveImageView'
 import { ImagePreview } from './ImagePreview'
 import { positionImageOverlay } from './imageOverlay'
-import { normalizeImageWidth, normalizeImageAlign } from './imageHtml'
+import { controlledImageHtml, normalizeImageWidth, normalizeImageAlign } from './imageHtml'
 import { markdownImageError } from '../images'
 import { FenceAutocomplete } from './FenceAutocomplete'
 import { LiveSlashController } from '../slash/LiveSlashController'
@@ -83,6 +83,8 @@ export class MarkdownEditorController implements LiveEditor {
   private fenceAutocomplete: FenceAutocomplete
   private slashController: LiveSlashController
   private codeViews = new Set<CodeBlockView>()
+  private indentSize: number
+  private useTabs: boolean
   private liveImages = new Set<LiveImageView>()
   private htmlViews = new Set<HtmlSourceView>()
   private extensionViews = new Set<() => void>()
@@ -153,6 +155,8 @@ export class MarkdownEditorController implements LiveEditor {
 
   constructor(parent: HTMLElement, private options: LiveOptions, sharedBridge?: MarkdownSourceBridge) {
     this.settings = options.typography
+    this.indentSize = options.indentSize ?? 2
+    this.useTabs = options.useTabs ?? false
     this.caretMode = options.caretAnimation ?? 'smooth'
     this.brackets = options.bracketMode ?? 'matching'
     this.copySettings = { ...defaultMarkdownClipboard(), ...options.clipboard }
@@ -481,6 +485,7 @@ export class MarkdownEditorController implements LiveEditor {
             this.caretMode,
             this.brackets
           )
+          code.indent(this.indentSize, this.useTabs)
           this.codeViews.add(code)
           const destroy = code.destroy.bind(code)
           code.destroy = () => {
@@ -507,9 +512,8 @@ export class MarkdownEditorController implements LiveEditor {
             view,
             getPos,
             this.options.resources,
-            (_imgEl, _n, pos) => { this.properties.hidden = true; this.openInlineAt(pos, 'image') },
-            (imgEl, node, pos) => { this.closeInline(); this.imageProperties(imgEl, node, pos) },
-            (image, current) => this.imagePreview.open(image, current, () => this.view.focus())
+            (image, current) => this.imagePreview.open(image, current, () => this.view.focus()),
+            commit => this.pickImageFile(commit),
           )
           this.liveImages.add(imgView)
           const destroy = imgView.destroy.bind(imgView)
@@ -1010,6 +1014,13 @@ export class MarkdownEditorController implements LiveEditor {
     }
   }
 
+  indent(size: number, tabs: boolean) {
+    this.indentSize = size
+    this.useTabs = tabs
+    for (const code of this.codeViews) code.indent(size, tabs)
+    for (const html of this.htmlViews) html.indent(size, tabs)
+  }
+
   bracketMode(mode: BracketMode) {
     this.brackets = mode
     for (const code of this.codeViews) code.bracketMode(mode)
@@ -1100,6 +1111,7 @@ export class MarkdownEditorController implements LiveEditor {
       settled:()=>{if(!this.disposed&&this.pendingSource!==null&&!this.composing){const source=this.pendingSource;this.pendingSource=null;this.sync(source)}},
     })
     html.bracketMode(this.brackets)
+    html.indent(this.indentSize, this.useTabs)
     this.htmlViews.add(html)
     const destroy=html.destroy.bind(html)
     html.destroy=()=>{this.htmlViews.delete(html);destroy()}
@@ -1598,6 +1610,47 @@ export class MarkdownEditorController implements LiveEditor {
 
     this.positionAnchoredElement(this.properties, anchorEl)
     urlInput.focus()
+  }
+
+  private pickImageFile(commit: (src: string | null) => void) {
+    const choose = this.options.resources.chooseLocal
+    if (!choose) {
+      notice('当前环境请直接填写图片路径。')
+      return
+    }
+    void choose()
+      .then(path => { if (!this.disposed) commit(path) })
+      .catch(error => { if (!this.disposed) notice(markdownImageError(error).message) })
+  }
+
+  /** Sets one image attribute at `pos` as a single undoable edit. */
+  private updateImageAt(pos: number, attrs: Record<string, unknown>) {
+    if (this.options.readOnly?.()) return
+    const node = this.view.state.doc.nodeAt(pos)
+    if (node?.type !== s.nodes.image) return
+    const tr = this.view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...attrs })
+    this.view.dispatch(tr.setSelection(NodeSelection.create(tr.doc, pos)).setMeta('isolated', true))
+    this.view.focus()
+  }
+
+  private deleteImageAt(pos: number) {
+    if (this.options.readOnly?.()) return
+    const doc = this.view.state.doc, $pos = doc.resolve(pos), node = doc.nodeAt(pos)
+    if (!node || node.type !== s.nodes.image) return
+    const standalone = $pos.parent.type.name === 'paragraph' && $pos.parent.childCount === 1
+    const tr = standalone && (doc.childCount > 1 || $pos.depth > 1)
+      ? this.view.state.tr.delete($pos.before(), $pos.after())
+      : this.view.state.tr.delete(pos, pos + node.nodeSize)
+    this.view.dispatch(tr.setMeta('isolated', true))
+    this.view.focus()
+  }
+
+  private previewImageAt(pos: number) {
+    const dom = this.view.nodeDOM(pos)
+    if (!(dom instanceof HTMLElement)) return
+    const image = dom.querySelector('img')
+    if (!image?.naturalWidth) { notice('请先填写有效图片路径并等待加载。'); return }
+    this.imagePreview.open(image, () => this.view.state.doc.nodeAt(pos) !== undefined, () => this.view.focus())
   }
 
   private imageProperties(anchorEl: HTMLElement, node: Node, pos: number) {
@@ -2246,10 +2299,43 @@ export class MarkdownEditorController implements LiveEditor {
       ] },
     ]
     const image = target.closest('.md-live-image'), link = target.closest('a')
-    if (image) entries.push('separator', { label: '图像属性…', disabled: !editable, run: () => {
+    if (image) {
       const pos = this.view.posAtDOM(image, 0), node = this.view.state.doc.nodeAt(pos)
-      if (node?.type === s.nodes.image) { this.closeInline(); this.imageProperties(image as HTMLElement, node, pos) }
-    } })
+      if (node?.type === s.nodes.image) {
+        // Secondary image actions live here so nothing but the picture itself is
+        // visible in the document until the user asks for it.
+        entries.push('separator',
+          // Typora keeps resizing here instead of a floating control on the image.
+          { label: '缩放图片', disabled: !editable, children: [
+            [null, '原始大小'], ['25%', '25%'], ['33%', '33%'], ['50%', '50%'],
+            ['67%', '67%'], ['80%', '80%'], ['100%', '100%'], ['150%', '150%'], ['200%', '200%'],
+          ].map(([width, label]) => ({
+            label: String(label),
+            checked: (node.attrs.width ?? null) === width,
+            run: () => this.updateImageAt(pos, { width }),
+          })) },
+          { label: '图片对齐', disabled: !editable, children: [
+            ['left', '左对齐'], ['center', '居中'], ['right', '右对齐'], [null, '默认'],
+          ].map(([align, label]) => ({
+            label: String(label),
+            checked: (node.attrs.align ?? null) === align,
+            run: () => this.updateImageAt(pos, { align }),
+          })) },
+          { label: '转换图片语法', disabled: !editable, children: [
+            { label: 'Markdown ![](src)', checked: !node.attrs.htmlSource, run: () => this.updateImageAt(pos, { htmlSource: null }) },
+            { label: 'HTML <img>', checked: !!node.attrs.htmlSource, run: () => this.updateImageAt(pos, { htmlSource: controlledImageHtml({ src: node.attrs.src, alt: node.attrs.alt, title: node.attrs.title, width: node.attrs.width, align: node.attrs.align }) }) },
+          ] },
+          { label: '放大预览', disabled: !node.attrs.src, run: () => this.previewImageAt(pos) },
+          { label: '复制图片路径', disabled: !node.attrs.src, run: () => { void navigator.clipboard?.writeText(String(node.attrs.src)) } },
+          { label: '删除图片', disabled: !editable, run: () => this.deleteImageAt(pos) },
+          'separator',
+          { label: '图像属性…', disabled: !editable, run: () => {
+            this.closeInline(); this.imageProperties(image as HTMLElement, node, pos)
+          } },
+        )
+        return entries
+      }
+    }
     if (link) entries.push({ label: '链接属性…', disabled: !editable, run: () => { this.closeInline(); this.linkProperties(link as HTMLElement, link.getAttribute('data-href') || '') } })
     return entries
   }

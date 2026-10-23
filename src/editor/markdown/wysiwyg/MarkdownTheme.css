@@ -830,7 +830,7 @@ body.light .file-icon-gray { color: #6c7c92; }
 .markdown-live .md-image-preview .md-image-toolbar button { white-space: nowrap; }
 
 .markdown-live .md-image-preview.md-image-selected img {
-  outline: 2px solid var(--accent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
   outline-offset: 2px;
 }
 .markdown-live .md-image-properties { position: fixed; z-index: 60; overflow: auto; width: 420px; box-sizing: border-box; }
